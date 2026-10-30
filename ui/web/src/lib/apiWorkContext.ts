@@ -114,6 +114,47 @@ export interface WorkContextDetail {
   facts: WorkFact[];
   relations: WorkRelation[];
   events: WorkEvent[];
+  todos: WorkTodo[];
+}
+
+// WorkTodo is a first-class plan item: unlike the free-text checkpoint lists it
+// carries status, an owner and a due time, and is edited in place under a version.
+export type WorkTodoStatus = "todo" | "doing" | "done" | "blocked";
+export interface WorkTodo {
+  id: string;
+  context_id: string;
+  text: string;
+  status: WorkTodoStatus;
+  owner: string;
+  due_at: string;
+  source: string;
+  position: number;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+export interface WorkTodoInput {
+  text: string;
+  status?: WorkTodoStatus;
+  owner?: string;
+  due_at?: string;
+  source?: string;
+}
+export interface WorkTodoPatch {
+  text?: string;
+  status?: WorkTodoStatus;
+  owner?: string;
+  due_at?: string;
+  position?: number;
+  if_version: number;
+}
+
+// WorkFocus is what a viewer should notice: the plan items plus the events
+// recorded since the stream was last seen (LastSeenAt empty means never).
+export interface WorkFocus {
+  last_seen_at: string;
+  changes: WorkEvent[];
+  todos: WorkTodo[];
 }
 
 export interface WorkContextBrief {
@@ -151,6 +192,9 @@ export interface CheckpointInput {
 }
 
 export interface WorkResourceInput {
+  // id is optional: set it to update an existing (possibly shared) resource in
+  // place instead of creating a duplicate.
+  id?: string;
   title: string;
   kind: string;
   locator: string;
@@ -374,6 +418,52 @@ export function createWorkDelegation(token: string | null, contextId: string, in
 export function organizeWorkContext(token: string | null, contextId: string) {
   return request<{ queued: boolean; session_id?: string }>(
     `/v1/work-contexts/${encodeURIComponent(contextId)}/organize`,
+    { method: "POST" },
+    token,
+  );
+}
+
+// --- plan items (todos) ---
+
+export function listWorkTodos(token: string | null, contextId: string) {
+  return request<WorkTodo[]>(`/v1/work-contexts/${encodeURIComponent(contextId)}/todos`, { method: "GET" }, token);
+}
+
+export function createWorkTodo(token: string | null, contextId: string, input: WorkTodoInput) {
+  return request<WorkTodo>(
+    `/v1/work-contexts/${encodeURIComponent(contextId)}/todos`,
+    { method: "POST", body: JSON.stringify(input) },
+    token,
+  );
+}
+
+export function patchWorkTodo(token: string | null, contextId: string, todoId: string, patch: WorkTodoPatch) {
+  return request<WorkTodo>(
+    `/v1/work-contexts/${encodeURIComponent(contextId)}/todos/${encodeURIComponent(todoId)}`,
+    { method: "PATCH", body: JSON.stringify(patch) },
+    token,
+  );
+}
+
+export function deleteWorkTodo(token: string | null, contextId: string, todoId: string) {
+  return request<{ deleted: boolean }>(
+    `/v1/work-contexts/${encodeURIComponent(contextId)}/todos/${encodeURIComponent(todoId)}`,
+    { method: "DELETE" },
+    token,
+  );
+}
+
+// --- focus / seen ---
+
+// getWorkFocus returns the plan items and what changed since the stream was last
+// seen. It is read-only: the watermark is only advanced by markWorkContextSeen.
+export function getWorkFocus(token: string | null, contextId: string) {
+  return request<WorkFocus>(`/v1/work-contexts/${encodeURIComponent(contextId)}/focus`, { method: "GET" }, token);
+}
+
+export function markWorkContextSeen(token: string | null, contextId: string) {
+  return request<{ previous_last_seen_at: string }>(
+    `/v1/work-contexts/${encodeURIComponent(contextId)}/seen`,
     { method: "POST" },
     token,
   );

@@ -20,6 +20,7 @@ type Link = { id: string; session_id: string; topic: string; created_at: string 
 type Card = { id: string; project_id: string; title: string; status: string; urgency: string; version: number; checklist: { text: string; done: boolean }[]; created_at: string };
 type Event = { id: string; context_id: string; kind: string; title: string; source: string; created_at: string };
 type Delegation = { id: string; request_id: string; card_id: string; project_id: string; title: string; pack: string; state: string; created_at: string };
+type Todo = { id: string; context_id: string; text: string; status: string; owner: string; due_at: string; source: string; position: number; version: number; created_at: string; updated_at: string };
 // The owning stream travels alongside the API shape so the mock can scope a delegation to
 // one context, mirroring the real store's context_id column.
 type StoredDelegation = Delegation & { ctx: string };
@@ -28,6 +29,7 @@ const delegationCtx = (delegation: Delegation) => (delegation as StoredDelegatio
 type Store = {
   contexts: Ctx[]; resources: Res[]; relations: Rel[]; facts: Fact[]; sessions: Record<string, Link[]>;
   delegations: StoredDelegation[]; cards: Record<string, Card>; events: Record<string, Event[]>;
+  todos: Todo[]; seen: Record<string, string>;
   checkpointHistory: Record<string, unknown[]>;
   writes: string[];
   failNextPatch: boolean;
@@ -48,7 +50,7 @@ function baseContext(overrides: Partial<Ctx> & { id: string; title: string }): C
 }
 
 function newStore(seed: Partial<Store> = {}): Store {
-  return { contexts: [], resources: [], relations: [], facts: [], sessions: {}, delegations: [], cards: {}, events: {}, checkpointHistory: {}, writes: [], failNextPatch: false, ...seed };
+  return { contexts: [], resources: [], relations: [], facts: [], sessions: {}, delegations: [], cards: {}, events: {}, todos: [], seen: {}, checkpointHistory: {}, writes: [], failNextPatch: false, ...seed };
 }
 
 function checkpoint(body: Record<string, unknown>, revision: number) {
@@ -86,6 +88,7 @@ function handleWorkContext(store: Store) {
       facts: store.facts.filter((fact) => fact.context_id === context.id),
       relations: store.relations.filter((relation) => relation.from_id === context.id || relation.to_id === context.id),
       events: store.events[context.id] ?? [],
+      todos: store.todos.filter((todo) => todo.context_id === context.id),
     });
 
     if (method !== "GET") store.writes.push(`${method} ${path}`);
@@ -146,6 +149,43 @@ function handleWorkContext(store: Store) {
       }
       if (sub === "/brief" && method === "GET") {
         return json({ context: ctx, events: store.events[ctx.id] ?? [], facts: store.facts.filter((fact) => fact.context_id === ctx.id), delegations: store.delegations, production_verified: false });
+      }
+      // Plan items: first-class rows edited in place, plus the focus view (plan +
+      // what changed since the stream was last seen) and the explicit mark-seen.
+      if (sub === "/todos" && method === "GET") return json(store.todos.filter((todo) => todo.context_id === ctx.id));
+      if (sub === "/todos" && method === "POST") {
+        const input = body();
+        const todo: Todo = { id: `todo-${store.todos.length + 1}`, context_id: ctx.id, text: String(input.text ?? ""), status: String(input.status ?? "todo"), owner: String(input.owner ?? ""), due_at: String(input.due_at ?? ""), source: "desktop", position: store.todos.length + 1, version: 1, created_at: NOW, updated_at: NOW };
+        store.todos.push(todo);
+        store.events[ctx.id] = [{ id: `e-${Date.now()}`, context_id: ctx.id, kind: "todo_created", title: `新增计划：${todo.text}`, source: "desktop", created_at: NOW }, ...(store.events[ctx.id] ?? [])];
+        return json(todo, 201);
+      }
+      const todoMatch = sub.match(/^\/todos\/([^/]+)$/);
+      if (todoMatch && method === "PATCH") {
+        const todo = store.todos.find((item) => item.id === decodeURIComponent(todoMatch[1]!));
+        if (!todo) return json({ error: "work context: not found" }, 404);
+        const input = body();
+        if (Number(input.if_version) !== todo.version) return json({ error: "work context: version conflict; reload before saving" }, 409);
+        if (typeof input.text === "string") todo.text = input.text;
+        if (typeof input.status === "string") todo.status = input.status;
+        if (typeof input.owner === "string") todo.owner = input.owner;
+        if (typeof input.due_at === "string") todo.due_at = input.due_at;
+        todo.version += 1;
+        todo.updated_at = NOW;
+        store.events[ctx.id] = [{ id: `e-${Date.now()}`, context_id: ctx.id, kind: "todo_updated", title: `更新计划：${todo.text}`, source: "desktop", created_at: NOW }, ...(store.events[ctx.id] ?? [])];
+        return json(todo);
+      }
+      if (todoMatch && method === "DELETE") {
+        store.todos = store.todos.filter((item) => item.id !== decodeURIComponent(todoMatch[1]!));
+        return json({ deleted: true });
+      }
+      if (sub === "/focus" && method === "GET") {
+        return json({ last_seen_at: store.seen[ctx.id] ?? "", changes: store.events[ctx.id] ?? [], todos: store.todos.filter((todo) => todo.context_id === ctx.id) });
+      }
+      if (sub === "/seen" && method === "POST") {
+        const previous = store.seen[ctx.id] ?? "";
+        store.seen[ctx.id] = NOW;
+        return json({ previous_last_seen_at: previous });
       }
       if (sub === "/resources" && method === "POST") {
         const input = body();
@@ -372,6 +412,36 @@ test("saves checkpoints, resources, relations and sessions as real server writes
   await page.getByRole("button", { name: rx("打开对话") }).first().click();
   await expect(page).toHaveURL(/\/chat\/web\/wc-topic-1/);
   await expect(page).toHaveURL(/workspace_dir=%2Fsrv%2Fapp/);
+});
+
+test("keeps plan items in place and marks the stream seen", async ({ page }, info) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  const store = await install(page, seededStore());
+  await page.goto("/work-desktop?context=ctx-1&tab=plan");
+  await expect(page.getByText("还没有计划项；你和 Agent 都可以添加。", { exact: true })).toBeVisible();
+
+  // Adding a plan item is a real write, not a client-side list.
+  await page.getByRole("textbox", { name: "计划内容", exact: true }).fill("跑一轮固定参数评测");
+  await page.getByRole("button", { name: rx("添加计划") }).click();
+  await expect(page.getByText("跑一轮固定参数评测", { exact: true })).toBeVisible();
+  expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/todos");
+
+  // Editing the item text happens in place (click the value, type, Enter).
+  await page.getByRole("button", { name: /^计划内容/ }).click();
+  const editor = page.getByRole("textbox", { name: "计划内容: 跑一轮固定参数评测", exact: true });
+  await editor.fill("跑两轮固定参数评测");
+  await editor.press("Enter");
+  await expect(page.getByText("跑两轮固定参数评测", { exact: true })).toBeVisible();
+  expect(store.writes.some((entry) => entry.startsWith("PATCH /v1/work-contexts/ctx-1/todos/"))).toBe(true);
+  await page.screenshot({ path: `../../.godex/tmp/work-desktop-plan-${info.project.name}.png`, fullPage: true });
+
+  // The overview surfaces what changed since last seen, and marking seen clears it.
+  await page.getByRole("tab", { name: "概览" }).click();
+  await expect(page.getByText("自上次查看以来的变动", { exact: true })).toBeVisible();
+  await expect(page.getByText("尚未标记已读", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: rx("标记已读") }).click();
+  expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/seen");
+  await expect(page.getByText("已把此主线标记为已读", { exact: true })).toBeVisible();
 });
 
 test("recalls facts by scope, reviews a candidate and submits a memory candidate", async ({ page }) => {

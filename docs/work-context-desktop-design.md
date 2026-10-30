@@ -387,6 +387,31 @@ ui/web/src/pages/WorkDesktopPage.tsx    # 与既有页面同样的 re-export
 - 门禁：`go vet`/`go test ./internal/core/workcontext ./internal/runtime/httpapi ./internal/services/backend` 通过（`services/backend` 的 `TestHarnessMetadataRejectsUnavailableHarness` 为既有 TempDir 清理 flake，隔离复跑通过）；`make docs-check`、`git diff --check` 通过。
 - 未做（有意）：资源侧检索（资源是有界的手工清单，`ListResources` 全量返回即可）、关系多跳召回（与 §5.4 冲突）。
 
+### WD3.7 工作焦点、计划与就地编辑（2026-10-31）
+
+能力侧（解决“工具不能充分理解和辅助管理桌面”）：
+
+- **计划是一等实体，不是检查点的自由文本**。新增 `wc_todos`（migration v3）+ `Todo{status todo|doing|done|blocked, owner, due_at}`，`CreateTodo`/`PatchTodo`（`if_version` CAS）/`DeleteTodo`，每次变更都写 `wc_events`，因而计划变更会自动进入“自上次以来的变动”。
+- **焦点 = 计划 + 变动**。新增 `wc_seen`（migration v3）与 `Focus{last_seen_at, changes, todos}`；`GET .../focus` 只读，`POST .../seen` 才推进水位（查看不是编辑，不动 context version）。`ack`（工具）/`seen`（HTTP）都是显式动作，避免“打开桌面即静默清掉变动高亮”。
+- **工具 action 扩展**：`work_context` 增加 `focus` / `ack` / `plan` / `todo_patch`（`get` 的 detail 已带 `todos`）；`todo_patch` 支持 status/owner/due_at/text，允许 Agent 边工作边维护计划。
+- **会话注入追加**：`renderWorkContextFeedback` 现在同时注入「计划（受阻/进行中优先，含负责人与截止）」与「自上次查看以来的变动（最新在前）」以及 `ack` 提示，Agent 在任意轮次都能看到桌面焦点而不必再查询。
+- **内置模板按入口注入**：`work-desk` 内置模板（`internal/core/templates/builtin/work-desk.yaml`，`scenarios: [workdesk]`）只授予桌面会话；`work_context` 工具本身仍由后端按“模板=work-desk 或已绑定主线”门控（`load.go`），不是仅靠模板文本。二者是双保险：模板是场景提示，门控是权限边界。
+
+UI 侧（解决“对话不能滚动 / 顶部标题栏无用 / 交互割裂 / 信息密度低”）：
+
+- 去掉注册表头部的 title/subtitle 与 shell header（`headerTitleKey: ""`），说明移到导航图标悬浮提示并扩充文案。
+- 修复内嵌对话滚动：`.wd-chat-feed` 补上 `display:flex; flex-direction:column`，与 Flow 面板一致的完整高度链（`.chat-feed-v2-scrollport { flex:1; min-height:0 }`）。**缺这一条时 scrollport 会按内容撑高，被 `overflow:hidden` 裁掉，永远无法滚动**——这是滚动 bug 的真实根因。
+- 原地编辑成为默认交互：新增 `workDesktopInline.tsx`（`InlineEdit`/`InlineSelect`，Enter 保存、Esc 取消、blur 保存、失败保留输入并显示错误，编辑中不被后台 refetch 覆盖）。
+- 资源改为气泡瀑布：新增 `ResourceChips.tsx`，按 kind 上色/配图标，点击**就地展开**（不再打开抽屉），展开时字段就地编辑、外链就地跳转、目录资源可就地跳到 files Tab。资源更新走同一 upsert 接口带 `id`，共享资源是被更新而不是被复制。
+- 计划面板：新增 `TodoBoard.tsx`，状态/文本/负责人/截止时间全部原位编辑，底部一行内联新增；概览新增「自上次查看以来的变动」卡片（含最近查看时间与「标记已读」）。
+
+验证（2026-10-31）：
+
+- `go build ./...` 通过；`go test ./internal/core/workcontext ./internal/core/templates ./internal/runtime/httpapi` 通过；新增 `TestTodosLifecycleAndEvents`、`TestTodosRejectMissingTextAndBadDueAt`、`TestFocusTracksChangesSinceSeen`、`TestWorkContextHTTPTodosAndFocus`（覆盖 CAS 冲突 409、Focus 不推进水位、seen 为空变动）。
+- `pnpm typecheck` 通过；`pnpm vitest run` 48 文件 / 489 通过；`vitest run src/i18n` 对齐门禁通过（新增键中英同步）。
+- `playwright test work-desktop.spec.ts --project=chromium-desktop` 7 passed（新增「计划原地编辑 + 标记已读」用例）。
+- 已知的仓库既有失败不变：`internal/architecture` 的 `TestFrontendSourceLineBudget`（`ChatPageView.tsx` 920 行）与 `TestGoFunctionComplexityBudget`（`routes_account.go:registerMemberRoutes` score 45）；两个文件本轮均未改动，`git show HEAD:` 基线同样失败。另有 `internal/services/backend` 的 TempDir 清理类 flake，隔离复跑通过。
+
 ### 11.5 后续实现门禁
 
 - 后端：SQLite migrations/reopen/version CAS、同事务事件、租户与来源鉴权、依赖环、幂等补偿、来源删除、事实时间范围；使用实际 modernc SQLite，不只 mock。

@@ -86,7 +86,11 @@ export const builtinApps: BuiltinAppEntry[] = [
     load: loadWorkDesktopPage,
     component: pageComponent(loadWorkDesktopPage, "WorkDesktopPage"),
     isActive: (pathname) => pathname === "/work-desktop",
-    headerSubtitleKey: "workDesktop.subtitle",
+    // No shell header: the desktop owns its whole viewport (the generic
+    // title/subtitle bar wasted vertical space). An empty headerTitleKey plus no
+    // subtitle hides the header on large screens; the explanation moved into an
+    // in-page hover hint (workDesktop.subtitle).
+    headerTitleKey: "",
   }),
   entry({
     id: "files",

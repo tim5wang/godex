@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, App as AntApp, Badge, Button, Card, Descriptions, Drawer, Empty, Form, Input, Modal, Select, Space, Spin, Tabs, Tag, Timeline, Tooltip, Typography } from "antd";
-import { ApartmentOutlined, ArrowRightOutlined, CheckCircleOutlined, ClockCircleOutlined, CodeOutlined, CommentOutlined, CopyOutlined, EditOutlined, FileTextOutlined, FolderOutlined, LinkOutlined, MessageOutlined, PauseCircleOutlined, PlayCircleOutlined, PlusOutlined, ProfileOutlined, SearchOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { Alert, App as AntApp, Badge, Button, Card, Drawer, Empty, Form, Input, Modal, Select, Space, Spin, Tabs, Tag, Timeline, Tooltip, Typography } from "antd";
+import { ApartmentOutlined, ArrowRightOutlined, CheckCircleOutlined, ClockCircleOutlined, CodeOutlined, CommentOutlined, EditOutlined, FileTextOutlined, FolderOutlined, LinkOutlined, MessageOutlined, PauseCircleOutlined, PlayCircleOutlined, PlusOutlined, ProfileOutlined, SearchOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { useI18n } from "../../i18n";
 import { useSettingsStore } from "../../store/settings";
 import { useNodeContextStore } from "../../store/nodeContext";
@@ -17,13 +17,18 @@ import {
   createWorkContext,
   createWorkDelegation,
   createWorkFact,
+  createWorkTodo,
+  deleteWorkTodo,
   getWorkContext,
   getWorkContextBrief,
+  getWorkFocus,
   linkWorkSession,
   listWorkContexts,
   listWorkResources,
+  markWorkContextSeen,
   organizeWorkContext,
   patchWorkContext,
+  patchWorkTodo,
   promoteWorkFactMemoryCandidate,
   recallWorkFacts,
   removeWorkRelation,
@@ -39,12 +44,17 @@ import {
   type WorkDelegation,
   type WorkFact,
   type WorkResource,
+  type WorkTodo,
+  type WorkTodoInput,
+  type WorkTodoStatus,
 } from "../../lib/apiWorkContext";
-import { writeClipboardText } from "../../lib/clipboard";
 import { InfoHint } from "./workDesktopHints";
+import { InlineEdit } from "./workDesktopInline";
+import { ResourceChips } from "./ResourceChips";
+import { TodoBoard } from "./TodoBoard";
 import { WorkChatDock } from "./WorkChatDock";
 import { FilesPanel } from "../files/FilesPanel";
-import { delegationsNeedingReview, formatTimestamp, isExternalLink, isReadOnly, joinLines, otherSide, splitLines } from "./workDesktopView";
+import { delegationsNeedingReview, formatTimestamp, isReadOnly, joinLines, otherSide, splitLines } from "./workDesktopView";
 import "./workDesktop.css";
 
 type Editor =
@@ -103,7 +113,7 @@ const statusColor: Record<string, string> = { active: "processing", paused: "ora
 const cardStatusColor: Record<string, string> = { backlog: "default", todo: "blue", in_progress: "processing", in_review: "gold", done: "green" };
 const factStatusColor: Record<string, string> = { candidate: "gold", confirmed: "green", stale: "orange", superseded: "default", rejected: "default" };
 const nonBlank = { required: true, whitespace: true };
-const tabs = ["overview", "chat", "conversations", "tasks", "knowledge", "files", "timeline"] as const;
+const tabs = ["overview", "plan", "chat", "conversations", "tasks", "knowledge", "files", "timeline"] as const;
 const resourceKinds = ["web", "directory", "repository", "note", "document", "dashboard", "service", "model", "artifact"];
 
 export function WorkDesktopPage() {
@@ -120,7 +130,6 @@ export function WorkDesktopPage() {
   const [briefOpen, setBriefOpen] = useState(false);
   const [editor, setEditor] = useState<Editor>();
   const [reviewTarget, setReviewTarget] = useState<WorkFact>();
-  const [resourceDetail, setResourceDetail] = useState<WorkResource>();
   const [form] = Form.useForm<EditorValues>();
   const tr = (key: string, vars?: Record<string, string | number>) => t(`workDesktop.${key}`, vars);
   // trLabel resolves a namespaced label and falls back to the raw server value when the
@@ -166,6 +175,13 @@ export function WorkDesktopPage() {
     queryFn: () => getWorkContextBrief(token || null, contextId!),
     enabled: !!contextId && briefOpen,
   });
+  // Focus returns the plan items and what changed since the stream was last seen.
+  // It is read-only; the watermark only advances via the explicit mark-seen action.
+  const focusQuery = useQuery({
+    queryKey: workContextQueryKey(token, nodeID, "focus", contextId),
+    queryFn: () => getWorkFocus(token || null, contextId!),
+    enabled: !!contextId,
+  });
   const projectsQuery = useQuery({
     queryKey: workContextQueryKey(token, nodeID, "projects"),
     queryFn: () => listTaskboardProjects(token || null),
@@ -187,7 +203,6 @@ export function WorkDesktopPage() {
   function selectContext(id: string) {
     setParams({ context: id, tab });
     setBriefOpen(false);
-    setResourceDetail(undefined);
   }
 
   function openEditor(kind: Editor) {
@@ -254,7 +269,7 @@ export function WorkDesktopPage() {
 
   const removeResourceMutation = useMutation({
     mutationFn: (resourceId: string) => removeWorkResource(token || null, contextId!, resourceId),
-    onSuccess: () => { invalidateAll(); setResourceDetail(undefined); void message.success(tr("deleted")); },
+    onSuccess: () => { invalidateAll(); void message.success(tr("deleted")); },
     onError: (error) => fail(error, "deleteFailed"),
   });
 
@@ -305,6 +320,47 @@ export function WorkDesktopPage() {
     // client-side shuffle. Files inside the sweep stay maintenance-only.
     mutationFn: () => organizeWorkContext(token || null, contextId!),
     onSuccess: () => { invalidateDetail(); void message.success(tr("organized")); },
+    onError: (error) => fail(error, "saveFailed"),
+  });
+
+  // Plan items are edited in place; every mutation refreshes the focus query so
+  // the plan and the "what changed" list stay consistent.
+  const refreshFocus = () => { void focusQuery.refetch(); invalidateDetail(); };
+  const todoCreateMutation = useMutation({
+    mutationFn: (input: WorkTodoInput) => createWorkTodo(token || null, contextId!, input),
+    onSuccess: () => refreshFocus(),
+    onError: (error) => fail(error, "saveFailed"),
+  });
+  const todoPatchMutation = useMutation({
+    mutationFn: (input: { todo: WorkTodo; patch: { text?: string; status?: WorkTodoStatus; owner?: string; due_at?: string } }) =>
+      patchWorkTodo(token || null, contextId!, input.todo.id, { ...input.patch, if_version: input.todo.version }),
+    onSuccess: () => refreshFocus(),
+    onError: (error) => (isConflict(error) ? void message.error(tr("conflict409")) : fail(error, "saveFailed")),
+  });
+  const todoDeleteMutation = useMutation({
+    mutationFn: (todo: WorkTodo) => deleteWorkTodo(token || null, contextId!, todo.id),
+    onSuccess: () => { refreshFocus(); void message.success(tr("todoDeleted")); },
+    onError: (error) => fail(error, "deleteFailed"),
+  });
+
+  // Resource edits reuse the same upsert endpoint with the existing id so a shared
+  // resource is updated, not duplicated.
+  const resourceUpdateMutation = useMutation({
+    mutationFn: (input: { resource: WorkResource; patch: Partial<Pick<WorkResource, "title" | "kind" | "locator" | "purpose">> }) =>
+      addWorkResource(token || null, contextId!, {
+        id: input.resource.id,
+        title: input.patch.title ?? input.resource.title,
+        kind: input.patch.kind ?? input.resource.kind,
+        locator: input.patch.locator ?? input.resource.locator,
+        purpose: input.patch.purpose ?? input.resource.purpose,
+      }),
+    onSuccess: () => { invalidateAll(); },
+    onError: (error) => fail(error, "saveFailed"),
+  });
+
+  const markSeenMutation = useMutation({
+    mutationFn: () => markWorkContextSeen(token || null, contextId!),
+    onSuccess: () => { void focusQuery.refetch(); void message.success(tr("seenMarked")); },
     onError: (error) => fail(error, "saveFailed"),
   });
 
@@ -379,15 +435,6 @@ export function WorkDesktopPage() {
     }
   }
 
-  async function copyLocator(locator: string) {
-    try {
-      await writeClipboardText(locator);
-      void message.success(tr("copied"));
-    } catch (error) {
-      fail(error, "saveFailed");
-    }
-  }
-
   const filteredContexts = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase();
     if (!needle) return contexts;
@@ -398,13 +445,15 @@ export function WorkDesktopPage() {
     () => (resourcesQuery.data ?? []).filter((resource) => resource.context_ids.includes(contextId ?? "")),
     [resourcesQuery.data, contextId],
   );
-  const allResources = resourcesQuery.data ?? [];
   const detail: WorkContextDetail | undefined = detailQuery.data;
   const facts = recallResult.data ?? detail?.facts ?? [];
   const relations = detail?.relations ?? [];
   const sessions = detail?.sessions ?? [];
   const delegations = detail?.delegations ?? [];
   const events = detail?.events ?? [];
+  const todos = focusQuery.data?.todos ?? detail?.todos ?? [];
+  const focusChanges = focusQuery.data?.changes ?? [];
+  const lastSeenAt = focusQuery.data?.last_seen_at ?? "";
   const pendingReview = delegationsNeedingReview(delegations);
   // The chat dock and file browser reuse the stream's linked session and its
   // project directory, so opening either one keeps the working context instead
@@ -474,6 +523,7 @@ export function WorkDesktopPage() {
         {detailQuery.isError && <Alert className="wd-notice" type="error" showIcon title={tr("loadFailed")} action={<Button size="small" onClick={() => void detailQuery.refetch()}>{tr("retry")}</Button>} />}
         <Tabs activeKey={tab} onChange={(key) => setParams({ context: selected!.id, tab: key })} items={[
           { key: "overview", label: tr("overview"), children: overviewView() },
+          { key: "plan", label: <Space size={4}><ProfileOutlined aria-hidden="true" />{tr("todoTitle")}</Space>, children: planView() },
           { key: "chat", label: <Space size={4}><MessageOutlined aria-hidden="true" />{tr("chatTab")}</Space>, children: chatView() },
           { key: "files", label: <Space size={4}><CodeOutlined aria-hidden="true" />{tr("filesTab")}</Space>, children: filesView() },
           { key: "conversations", label: <Space size={4}><CommentOutlined aria-hidden="true" />{tr("conversations")}</Space>, children: conversationsView() },
@@ -484,7 +534,13 @@ export function WorkDesktopPage() {
       </main>
       <aside className="wd-sidebar" aria-label={tr("resourcesTitle")}>
         <Card size="small" title={<Space size={6}><LinkOutlined aria-hidden="true" />{tr("resourcesTitle")}<InfoHint title={tr("showHint")} text={tr("resourceHint")} /></Space>} extra={<Button size="small" type="link" disabled={readOnly} onClick={() => openEditor("resource")}>{tr("addResource")}</Button>}>
-          {resourceList()}
+          <ResourceChips
+            resources={contextResources}
+            readOnly={readOnly}
+            onUpdate={(resource, patch) => resourceUpdateMutation.mutateAsync({ resource, patch })}
+            onRemove={(resource) => { if (window.confirm(tr("removeResourceConfirm"))) removeResourceMutation.mutate(resource.id); }}
+            onOpenFiles={() => setParams({ context: contextId!, tab: "files" })}
+          />
         </Card>
         <Card size="small" title={<Space size={6}><ApartmentOutlined aria-hidden="true" />{tr("relationsTitle")}<InfoHint title={tr("showHint")} text={tr("relationHint")} /></Space>} extra={<Button size="small" type="link" disabled={readOnly || contexts.length < 2} onClick={() => openEditor("relation")}>{tr("addRelation")}</Button>}>
           {relationList()}
@@ -501,25 +557,6 @@ export function WorkDesktopPage() {
 
     <Drawer zIndex={1300} styles={{ wrapper: { maxWidth: "100vw" } }} title={tr("briefTitle")} open={briefOpen} onClose={() => setBriefOpen(false)} size={600}>
       {briefQuery.isLoading ? <Spin /> : briefQuery.data ? briefBody(briefQuery.data) : <Alert type="error" showIcon title={tr("loadFailed")} />}
-    </Drawer>
-
-    <Drawer zIndex={1300} styles={{ wrapper: { maxWidth: "100vw" } }} title={tr("resourceDetails")} open={!!resourceDetail} onClose={() => setResourceDetail(undefined)} size={480}>
-      {resourceDetail && <div className="wd-stack">
-        <Alert type="info" showIcon title={tr("sourceBoundary")} />
-        <Typography.Title level={4}>{resourceDetail.title}</Typography.Title>
-        <Space wrap><Tag>{trLabel("kind", resourceDetail.kind)}</Tag>{allResources.some((item) => item.id === resourceDetail.id && item.context_ids.length > 1) && <Tag color="blue">{tr("shared")}</Tag>}</Space>
-        <Descriptions column={1} size="small" items={[
-          { key: "locator", label: tr("resourceLocator"), children: <Typography.Text code className="wd-wrap">{resourceDetail.locator}</Typography.Text> },
-          ...(resourceDetail.node_id ? [{ key: "node", label: tr("resourceNode"), children: resourceDetail.node_id }] : []),
-          { key: "purpose", label: tr("resourcePurpose"), children: resourceDetail.purpose || tr("noItems") },
-          { key: "contexts", label: tr("shared"), children: resourceDetail.context_ids.map((id) => contexts.find((item) => item.id === id)?.title ?? id).join(", ") },
-        ]} />
-        <Space wrap>
-          {isExternalLink(resourceDetail.locator) && <Button type="primary" icon={<LinkOutlined />} href={resourceDetail.locator} target="_blank" rel="noreferrer noopener">{tr("openSource")}</Button>}
-          <Button icon={<CopyOutlined />} onClick={() => void copyLocator(resourceDetail.locator)}>{tr("copyLocator")}</Button>
-          {!readOnly && <Button danger onClick={() => { if (window.confirm(tr("removeResourceConfirm"))) removeResourceMutation.mutate(resourceDetail.id); }}>{tr("removeResource")}</Button>}
-        </Space>
-      </div>}
     </Drawer>
 
     {editorModal()}
@@ -572,10 +609,43 @@ export function WorkDesktopPage() {
           {events.length ? <div className="wd-stack">{events.slice(0, 3).map((event) => <div key={event.id}><Typography.Text>{event.title}</Typography.Text><div className="wd-muted">{formatTimestamp(event.created_at)}</div></div>)}</div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={tr("noChanges")} />}
         </Card>
       </div>
+      {changesCard()}
       <Typography.Paragraph type="secondary" className="wd-foot-note">
         <InfoHint title={tr("currentUnknown")} text={tr("currentUnknownHint")} /> {tr("currentUnknown")}
       </Typography.Paragraph>
     </div>;
+  }
+
+  // planView is the stream's plan: first-class items with status/owner/due, edited
+  // in place. It is separate from the checkpoint's free-text next_actions.
+  function planView() {
+    return <div className="wd-stack">
+      <div className="wd-inline-head">
+        <Space size={6} align="center"><ProfileOutlined aria-hidden="true" /><Typography.Text strong>{tr("todoTitle")}</Typography.Text><InfoHint title={tr("showHint")} text={tr("inlineHint")} /></Space>
+        <Typography.Text type="secondary">{tr("pendingCount", { count: todos.filter((item) => item.status !== "done").length })}</Typography.Text>
+      </div>
+      <TodoBoard
+        todos={todos}
+        readOnly={readOnly}
+        onCreate={(input: WorkTodoInput) => todoCreateMutation.mutateAsync(input)}
+        onPatch={(todo: WorkTodo, patch) => todoPatchMutation.mutateAsync({ todo, patch })}
+        onDelete={(todo: WorkTodo) => todoDeleteMutation.mutateAsync(todo)}
+      />
+    </div>;
+  }
+
+  // changesCard surfaces what changed since the user last looked at the stream, so
+  // picking the work back up does not require re-reading the timeline.
+  function changesCard() {
+    const seenLabel = lastSeenAt ? formatTimestamp(lastSeenAt) : tr("lastSeenNever");
+    return <Card
+      size="small"
+      className="wd-focus-card"
+      title={<Space size={6}><ThunderboltOutlined aria-hidden="true" />{tr("changesSinceTitle")}<span className="wd-muted">{seenLabel}</span></Space>}
+      extra={!readOnly && focusChanges.length > 0 ? <Button size="small" loading={markSeenMutation.isPending} onClick={() => markSeenMutation.mutate()}>{tr("markSeen")}</Button> : null}
+    >
+      {focusChanges.length ? <div className="wd-stack">{focusChanges.slice(0, 8).map((event) => <div key={event.id}><Typography.Text>{event.title}</Typography.Text><div className="wd-muted">{event.kind} · {formatTimestamp(event.created_at)}</div></div>)}</div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={tr("noChanges")} />}
+    </Card>;
   }
 
   function chatView() {
@@ -680,16 +750,6 @@ export function WorkDesktopPage() {
       </div>
       {events.length ? <Timeline items={events.map((event) => ({ content: <div><Typography.Text strong>{event.title}</Typography.Text><div className="wd-muted">{event.source || tr("noItems")} · {formatTimestamp(event.created_at)}</div></div> }))} /> : <Empty description={tr("noChanges")} />}
     </div>;
-  }
-
-  function resourceList() {
-    if (resourcesQuery.isLoading) return <Spin />;
-    if (!contextResources.length) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={tr("noResources")} />;
-    return contextResources.map((resource) => <button className="wd-resource" key={resource.id} type="button" onClick={() => setResourceDetail(resource)}>
-      <span className="wd-resource-icon">{resource.kind === "directory" ? <FolderOutlined aria-hidden="true" /> : resource.kind === "document" ? <FileTextOutlined aria-hidden="true" /> : <LinkOutlined aria-hidden="true" />}</span>
-      <span className="wd-resource-text"><strong>{resource.title}</strong><span className="wd-muted">{trLabel("kind", resource.kind)}{resource.context_ids.length > 1 ? ` · ${tr("shared")}` : ""}</span></span>
-      <ArrowRightOutlined aria-hidden="true" />
-    </button>);
   }
 
   function relationList() {

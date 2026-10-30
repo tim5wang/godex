@@ -25,10 +25,11 @@
 .wd-chat-view, .wd-files-view { min-width: 0; }
 .wd-chat-dock { display: flex; flex-direction: column; border: 1px solid var(--godex-border); border-radius: 8px; background: var(--godex-panel); min-height: 420px; height: min(72vh, 760px); }
 .wd-chat-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--godex-border); }
-.wd-chat-feed { flex: 1; min-height: 0; overflow: hidden; }
+.wd-chat-feed { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+.wd-chat-feed .chat-feed-v2-scrollport { flex: 1; min-height: 0; }
 .wd-chat-empty { min-height: 220px; gap: 12px; }
 .wd-chat-composer { border-top: 1px solid var(--godex-border); padding: 6px 8px; }
-.wd-files-view { height: min(76vh, 820px); }
+.wd-files-view { height: min(76vh, 820px); min-height: 0; }
 .wd-center { display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center; min-height: 320px; text-align: center; }
 .wd-empty-card { max-width: 720px; }
 .wd-fact-line { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-top: 1px solid var(--godex-border); }
@@ -120,4 +121,85 @@
   .wd-topic-records .ant-card-extra { font-size: 11px; }
   .wd-knowledge .ant-card-head-wrapper { flex-wrap: wrap; padding-bottom: 8px; }
   .wd-context-header .wd-title { font-size: 22px; }
+}
+
+/* --- in-place editing (shared primitive) --- */
+.wd-inline { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+.wd-inline-value {
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: text;
+  padding: 1px 3px;
+  margin: -1px -3px;
+  border: 1px dashed transparent;
+  border-radius: 4px;
+  background: none;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.wd-inline-value:hover { border-color: var(--godex-border); background: var(--godex-panel-muted); }
+.wd-inline-value:disabled { cursor: default; border-color: transparent; background: none; }
+.wd-inline-editing { width: 100%; }
+.wd-inline-editing .ant-input, .wd-inline-editing .ant-input-affix-wrapper { width: 100%; }
+.wd-inline-error { color: var(--godex-danger, #cf1322); font-size: 12px; }
+
+/* --- resource chip waterfall --- */
+.wd-chips { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px; }
+.wd-chip {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: var(--godex-panel);
+  overflow: hidden;
+}
+/* Closed chips size to their content so they pack like a bubble waterfall; an
+   open chip takes the full row so its fields are readable without a drawer. */
+.wd-chip:not(.wd-chip-open) { max-width: 100%; }
+.wd-chip-open { flex: 1 1 100%; }
+.wd-chip-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 4px 8px;
+  background: none;
+  border: 0;
+  min-width: 0;
+}
+.wd-chip-icon { display: inline-flex; padding: 2px 4px; border-radius: 6px; font-size: 12px; }
+.wd-chip-title { font-weight: 600; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
+.wd-chip-tag { margin: 0; font-size: 10px; line-height: 16px; }
+.wd-chip-body { display: flex; flex-direction: column; gap: 4px; padding: 4px 10px 8px; border-top: 1px solid var(--godex-border); }
+.wd-chip-field { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 8px; align-items: baseline; font-size: 12px; }
+.wd-chip-link { overflow-wrap: anywhere; }
+.wd-chip-created { font-size: 11px; }
+.wd-chip-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* --- plan items --- */
+.wd-todos { display: flex; flex-direction: column; gap: 4px; }
+.wd-todo {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr) 150px 130px auto;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 6px;
+  border: 1px solid var(--godex-border);
+  border-radius: 6px;
+  background: var(--godex-panel);
+}
+.wd-todo-blocked { border-color: var(--godex-danger, #cf1322); }
+.wd-todo-done .wd-todo-text { text-decoration: line-through; opacity: 0.7; }
+.wd-todo-meta { display: flex; align-items: center; gap: 4px; font-size: 12px; min-width: 0; }
+.wd-todo-meta .ant-picker { padding: 0; }
+.wd-todo-add { width: 100%; }
+
+@media (max-width: 760px) {
+  .wd-todo { grid-template-columns: 88px minmax(0, 1fr); }
+  .wd-chip-title { max-width: 120px; }
 }

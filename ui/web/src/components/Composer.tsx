@@ -48,6 +48,14 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, b
   const lastSavedRef = useRef<string>("");
   // True while an async draft restore is in flight. While restoring, the save
   // effect is suppressed so the intermediate empty state is never persisted.
+  //
+  // Also held in a REF, not just state: both effects below run in the SAME commit,
+  // and the load effect runs first, so the save effect reads this in the very same
+  // pass. State has not been applied yet at that point, so a state-only guard still
+  // read `false`, the save effect took its "the input is empty" branch on mount and
+  // DELETED the stored draft. The restored text still appeared (setValue lands one
+  // microtask later), which hid the loss until the following visit.
+  const restoringRef = useRef(false);
   const [restoring, setRestoring] = useState(false);
   // Guards the async draft restore: once the user starts typing or attaching
   // files, a late-arriving restored draft must not clobber their input.
@@ -72,6 +80,11 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, b
     }),
     [],
   );
+  // Latest composer content, kept in a ref so the unmount flush below can persist
+  // it WITHOUT re-subscribing on every keystroke (which would defeat the debounce).
+  const latestContentRef = useRef<{ text: string; files: File[] }>({ text: value, files });
+  latestContentRef.current = { text: value, files };
+
   const uploadItems = useMemo<UploadFile[]>(
     () =>
       files.map((file, index) => ({
@@ -104,6 +117,7 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, b
       setFiles([]);
       draftLoadedRef.current = "";
       lastSavedRef.current = "";
+      restoringRef.current = false;
       setRestoring(false);
       return;
     }
@@ -112,6 +126,7 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, b
     }
     draftLoadedRef.current = draftScope;
     inputDirtyRef.current = false;
+    restoringRef.current = true;
     setRestoring(true);
     setValue("");
     setFiles([]);
@@ -137,6 +152,7 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, b
       })
       .finally(() => {
         if (draftLoadedRef.current === draftScope) {
+          restoringRef.current = false;
           setRestoring(false);
         }
       });
@@ -146,7 +162,7 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, b
   // and on visibility loss (tab switch) so the very last keystroke survives.
   // Skipped while a restore is in flight and when nothing changed.
   useEffect(() => {
-    if (!draftScope || draftLoadedRef.current !== draftScope || restoring) return;
+    if (!draftScope || draftLoadedRef.current !== draftScope || restoringRef.current) return;
     if (draftSignature(value, files) === lastSavedRef.current) return;
     if (!value && files.length === 0) {
       void clearDraft(draftScope);
@@ -159,7 +175,7 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, b
       });
     }, 400);
     const onVisibility = () => {
-      if (document.visibilityState === "hidden" && draftLoadedRef.current === draftScope && !restoring) {
+      if (document.visibilityState === "hidden" && draftLoadedRef.current === draftScope && !restoringRef.current) {
         void saveDraft(draftScope, value, files).then(() => {
           lastSavedRef.current = draftSignature(value, files);
         });
@@ -171,6 +187,30 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, b
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [draftScope, files, restoring, value]);
+
+  // Flush a still-pending draft when this composer goes away. The debounced save
+  // above CANCELS its timer in cleanup, so typing and then immediately navigating
+  // away (or reloading / closing the tab) used to drop the last keystrokes — the
+  // "I typed something, left, and it was gone" case. Saving here also covers
+  // pagehide, which visibilitychange does not fire for.
+  useEffect(() => {
+    if (!draftScope) return;
+    const flush = () => {
+      if (draftLoadedRef.current !== draftScope || restoringRef.current) return;
+      const { text, files: attached } = latestContentRef.current;
+      if (draftSignature(text, attached) === lastSavedRef.current) return;
+      // Never resurrect a draft the user cleared or already sent.
+      if (!text && attached.length === 0) return;
+      void saveDraft(draftScope, text, attached).then(() => {
+        lastSavedRef.current = draftSignature(text, attached);
+      });
+    };
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      flush();
+    };
+  }, [draftScope]);
 
   useEffect(() => {
     if (queuedFiles.length === 0) return;

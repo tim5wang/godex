@@ -139,6 +139,9 @@ func (s *Store) Get(ctx context.Context, scope Scope, id string) (Detail, error)
 	if detail.Events, err = s.listEvents(ctx, tenantID, id); err != nil {
 		return Detail{}, err
 	}
+	if detail.Todos, err = s.listTodos(ctx, tenantID, id); err != nil {
+		return Detail{}, err
+	}
 	return detail, nil
 }
 

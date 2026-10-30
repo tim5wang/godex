@@ -18,7 +18,7 @@ import (
 )
 
 // schemaVersion is the current ordered migration version.
-const schemaVersion = 2
+const schemaVersion = 3
 
 // statusArkid is the terminal read-only status.
 const statusArchived = "archived"
@@ -416,6 +416,38 @@ var migrations = map[int][]string{
 			fact_id UNINDEXED,
 			text,
 			tokenize='unicode61'
+		)`,
+	},
+	3: {
+		// Structured plan items and a per-stream "last seen" watermark. Todos are a
+		// table (not checkpoint JSON) so a single item can be edited in place with its
+		// own version and queried by status/due date; last_seen_at lets the server
+		// compute "what changed since I last looked" without touching the context row.
+		`CREATE TABLE IF NOT EXISTS wc_todos (
+			tenant_id TEXT NOT NULL,
+			id TEXT NOT NULL,
+			context_id TEXT NOT NULL,
+			owner_id TEXT NOT NULL,
+			text TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'todo',
+			assignee TEXT NOT NULL DEFAULT '',
+			due_at TEXT NOT NULL DEFAULT '',
+			source TEXT NOT NULL DEFAULT '',
+			position INTEGER NOT NULL DEFAULT 0,
+			version INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (tenant_id, id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_wc_todos_ctx ON wc_todos(tenant_id, context_id, status, due_at)`,
+		// last_seen_at lives in its own table so the focus watermark changes on view
+		// without bumping the context version (viewing is not an edit).
+		`CREATE TABLE IF NOT EXISTS wc_seen (
+			tenant_id TEXT NOT NULL,
+			context_id TEXT NOT NULL,
+			owner_id TEXT NOT NULL,
+			last_seen_at TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (tenant_id, context_id)
 		)`,
 	},
 }

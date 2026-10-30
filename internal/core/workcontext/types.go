@@ -73,6 +73,38 @@ type SessionLink struct {
 	Topic     string `json:"topic"`
 	CreatedAt string `json:"created_at"`
 }
+
+// Todo is a first-class plan item on a stream: unlike the free-text checkpoint
+// lists it carries status, an owner and a due time, so "what is overdue / who
+// owes it / what is blocked" is answerable without re-reading prose.
+type Todo struct {
+	ID        string `json:"id"`
+	ContextID string `json:"context_id"`
+	Text      string `json:"text"`
+	Status    string `json:"status"`
+	Owner     string `json:"owner"`
+	DueAt     string `json:"due_at"`
+	Source    string `json:"source"`
+	Position  int    `json:"position"`
+	Version   int    `json:"version"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+type TodoInput struct {
+	Text   string `json:"text"`
+	Status string `json:"status"`
+	Owner  string `json:"owner"`
+	DueAt  string `json:"due_at"`
+	Source string `json:"source"`
+}
+type TodoPatch struct {
+	Text      *string `json:"text,omitempty"`
+	Status    *string `json:"status,omitempty"`
+	Owner     *string `json:"owner,omitempty"`
+	DueAt     *string `json:"due_at,omitempty"`
+	Position  *int    `json:"position,omitempty"`
+	IfVersion int     `json:"if_version"`
+}
 type Delegation struct {
 	ID        string `json:"id"`
 	RequestID string `json:"request_id"`
@@ -151,4 +183,5 @@ type Detail struct {
 	Facts       []Fact        `json:"facts"`
 	Relations   []Relation    `json:"relations"`
 	Events      []Event       `json:"events"`
+	Todos       []Todo        `json:"todos"`
 }

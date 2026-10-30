@@ -69,7 +69,7 @@ func renderWorkContextFeedback(detail workcontext.Detail) string {
 		count++
 		fmt.Fprintf(&b, "Knowledge [%s], scope=%s, observed=%s, source=%s: %s — %s\n", f.Status, f.Scope, f.ObservedAt, f.Source, f.Title, truncateInline(f.Content, 450))
 	}
-	b.WriteString("Work progress is maintained in the desktop checkpoint and taskboard. If asked about now/production, verify the authorized system of record. Propose durable knowledge with evidence; do not silently treat an attempted command or model assertion as a verified result.\n")
+	b.WriteString("Work progress is maintained in the desktop checkpoint and taskboard. Maintain it yourself as you work, not only when asked: update the checkpoint with work_context as progress happens, propose facts for conclusions you can source, supersede an outdated fact by id (never overwrite silently), and keep unverified items marked as unverified. If asked about now/production, verify the authorized system of record. Propose durable knowledge with evidence; do not silently treat an attempted command or model assertion as a verified result.\n")
 	// ponytail: hard 12k-rune ceiling; add relevance ranking if real streams
 	// consistently need more, never inject every historical conversation.
 	return truncateInline(b.String(), 12000)

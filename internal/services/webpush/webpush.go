@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/SherClockHolmes/webpush-go"
@@ -40,9 +41,18 @@ type Service struct {
 	subscriber string
 
 	mu   sync.Mutex
-	subs map[string]Subscription // keyed by endpoint
+	subs map[string]registered // keyed by endpoint
 
 	client *http.Client
+}
+
+// registered pairs a subscription with the identity that created it. Nudges are
+// owner-targeted, so a background job for one user can never deliver a
+// notification body (which quotes that user's stream titles) to another user's
+// browser. The zero owner means "unattributed" and only receives broadcasts.
+type registered struct {
+	owner string
+	sub   Subscription
 }
 
 // New creates a service with freshly generated VAPID keys.
@@ -55,7 +65,7 @@ func New() (*Service, error) {
 		privateKey: privateKey,
 		publicKey:  publicKey,
 		subscriber: DefaultSubscriber,
-		subs:       make(map[string]Subscription),
+		subs:       make(map[string]registered),
 		client:     &http.Client{},
 	}, nil
 }
@@ -102,7 +112,7 @@ func NewWithKeys(privateKey, publicKey, subscriber string) (*Service, error) {
 		privateKey: privateKey,
 		publicKey:  publicKey,
 		subscriber: subscriber,
-		subs:       make(map[string]Subscription),
+		subs:       make(map[string]registered),
 		client:     &http.Client{},
 	}, nil
 }
@@ -111,15 +121,29 @@ func NewWithKeys(privateKey, publicKey, subscriber string) (*Service, error) {
 // browser uses when subscribing.
 func (s *Service) PublicKey() string { return s.publicKey }
 
-// Subscribe registers (or refreshes) a subscription, keyed by endpoint.
+// Subscribe registers (or refreshes) a subscription, keyed by endpoint. The
+// owner is left empty: unattributed subscriptions receive broadcasts only.
 func (s *Service) Subscribe(sub Subscription) error {
+	return s.SubscribeFor("", sub)
+}
+
+// SubscribeFor registers a subscription owned by one identity.
+func (s *Service) SubscribeFor(owner string, sub Subscription) error {
 	if sub.Endpoint == "" {
 		return fmt.Errorf("subscription endpoint is required")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.subs[sub.Endpoint] = sub
+	s.subs[sub.Endpoint] = registered{owner: strings.TrimSpace(owner), sub: sub}
 	return nil
+}
+
+// OwnerOf returns the identity a registered endpoint belongs to, or "" when the
+// endpoint is unknown or unattributed.
+func (s *Service) OwnerOf(endpoint string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.subs[endpoint].owner
 }
 
 // Unsubscribe removes a subscription by endpoint.
@@ -138,16 +162,37 @@ func (s *Service) SubscriptionCount() int {
 
 // Notify delivers a {title, body} notification to every subscription. Failed
 // endpoints are pruned (410 Gone / network errors) and counted out of the
-// returned total.
+// returned total. It is intentionally unfiltered: only the operator-driven test
+// path uses it, where the caller has already been authorized as the operator.
 func (s *Service) Notify(ctx context.Context, title, body string) (int, error) {
+	return s.notify(ctx, "", false, title, body)
+}
+
+// NotifyOwner delivers a notification only to the subscriptions registered by
+// one identity. This is the path background nudges must use: the body quotes
+// stream titles, so broadcasting it would leak one user's work to another.
+func (s *Service) NotifyOwner(ctx context.Context, owner, title, body string) (int, error) {
+	target := strings.TrimSpace(owner)
+	if target == "" {
+		// Refusing an empty owner is deliberate: falling back to a broadcast
+		// here would turn a scoping bug into a cross-user leak.
+		return 0, nil
+	}
+	return s.notify(ctx, target, true, title, body)
+}
+
+func (s *Service) notify(ctx context.Context, owner string, onlyOwner bool, title, body string) (int, error) {
 	payload, err := json.Marshal(map[string]string{"title": title, "body": body})
 	if err != nil {
 		return 0, fmt.Errorf("marshal notification: %w", err)
 	}
 	s.mu.Lock()
 	subs := make([]Subscription, 0, len(s.subs))
-	for _, sub := range s.subs {
-		subs = append(subs, sub)
+	for _, entry := range s.subs {
+		if onlyOwner && entry.owner != owner {
+			continue
+		}
+		subs = append(subs, entry.sub)
 	}
 	s.mu.Unlock()
 	if len(subs) == 0 {

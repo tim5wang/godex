@@ -20,12 +20,17 @@ import (
 type PushHandler struct {
 	service   *webpush.Service
 	authorize func(*http.Request) bool
+	// owner attributes a subscription to the identity that created it. It is what
+	// keeps owner-targeted nudges from reaching another user's browser, so a nil
+	// resolver registers subscriptions as unattributed: they then receive
+	// broadcasts only, never another user's work items.
+	owner func(*http.Request) string
 }
 
 // NewPushHandler creates the push endpoint. authorize may be nil to accept
-// every request (web token check).
-func NewPushHandler(service *webpush.Service, authorize func(*http.Request) bool) *PushHandler {
-	return &PushHandler{service: service, authorize: authorize}
+// every request (web token check). owner may be nil; see PushHandler.owner.
+func NewPushHandler(service *webpush.Service, authorize func(*http.Request) bool, owner func(*http.Request) string) *PushHandler {
+	return &PushHandler{service: service, authorize: authorize, owner: owner}
 }
 
 func (h *PushHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -54,7 +59,11 @@ func (h *PushHandler) subscribe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := h.service.Subscribe(sub); err != nil {
+	owner := ""
+	if h.owner != nil {
+		owner = h.owner(r)
+	}
+	if err := h.service.SubscribeFor(owner, sub); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}

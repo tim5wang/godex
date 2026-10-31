@@ -521,7 +521,13 @@ func main() {
 			if err != nil {
 				return err
 			}
-			root.Handle("/push/", httpapi.NewPushHandler(pushService, relayAuthorize(cfg)))
+			// Subscriptions are attributed to the resolving identity so an
+			// owner-targeted nudge can only reach that owner's browsers.
+			root.Handle("/push/", httpapi.NewPushHandler(pushService, relayAuthorize(cfg), httpapi.NewPushOwnerResolver(resolvePrincipal)))
+			// Give the backend its notification transport. Until this is set the
+			// attention sweep still records progress and fills the inbox, it just
+			// stays silent instead of pushing.
+			service.SetNudgeNotifier(pushService)
 			root.Handle("/", apiHandler)
 			handler, err := webui.NewHandler(root, filepath.Join(cfg.WorkspaceDir, "internal", "uiassets", "embedded_dist"))
 			if err != nil {

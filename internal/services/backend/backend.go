@@ -372,6 +372,15 @@ type Service struct {
 	workContextErr      error
 	workContextBridgeMu sync.Mutex
 
+	// Attention sweep: records delegated-card progress as events even when nobody
+	// is looking at the desktop, and pushes the subset that needs a human. The
+	// notifier is optional so a center without Web Push still gets the inbox.
+	attentionMu     sync.Mutex
+	attentionCancel context.CancelFunc
+	attentionDone   chan struct{}
+	nudgeMu         sync.Mutex
+	nudgeNotifier   NudgeNotifier
+
 	flowRunsMu sync.Mutex
 	flowRuns   map[agent.FlowRunRef]struct{}
 

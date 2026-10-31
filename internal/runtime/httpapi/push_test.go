@@ -17,7 +17,7 @@ func newPushTestServer(t *testing.T) (*httptest.Server, *webpush.Service) {
 	if err != nil {
 		t.Fatalf("new webpush service: %v", err)
 	}
-	handler := NewPushHandler(svc, nil)
+	handler := NewPushHandler(svc, nil, nil)
 	return httptest.NewServer(handler), svc
 }
 
@@ -116,7 +116,7 @@ func TestPushAuthorizeRejectsUnauthorized(t *testing.T) {
 	}
 	handler := NewPushHandler(svc, func(r *http.Request) bool {
 		return strings.TrimSpace(r.Header.Get("Authorization")) == "Bearer secret"
-	})
+	}, nil)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 

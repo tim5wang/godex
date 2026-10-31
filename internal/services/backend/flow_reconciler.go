@@ -53,6 +53,13 @@ func (s *Service) Start(ctx context.Context) error {
 	s.flowSessionScheduler = sessionScheduler
 	go s.runFlowRunReconciler(runCtx, done)
 	go sessionScheduler.run()
+	// The attention sweep rides the same exclusive state-directory ownership:
+	// it writes events and pushes notifications, so two runtimes on one state dir
+	// would double-nudge. It shares runCtx, so Stop cancels it with the rest.
+	if err := s.StartAttentionSweep(runCtx); err != nil {
+		cancel()
+		return err
+	}
 	return nil
 }
 
@@ -78,6 +85,9 @@ func (s *Service) Stop(ctx context.Context) error {
 	if cancel != nil {
 		cancel()
 	}
+	// The sweep shares runCtx, so the cancel above stops it; this only waits for
+	// its current pass so a push is not cut off mid-flight.
+	s.StopAttentionSweep(ctx)
 	waits := []<-chan struct{}{done, flowSessionSchedulerDone(sessionScheduler)}
 	for _, wait := range waits {
 		if wait == nil {

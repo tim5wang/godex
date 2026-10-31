@@ -55,6 +55,11 @@ func registerWorkContextRoutes(mux *http.ServeMux, service *backend.Service, pro
 	handle("GET /v1/work-contexts", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
 		return s.List(r.Context(), scope)
 	})
+	// Attention inbox: the cross-stream "what needs me" list plus per-stream
+	// unread counts, so the desktop wall can badge every stream from one call.
+	handle("GET /v1/work-attention", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
+		return service.AttentionInbox(r.Context(), scope)
+	})
 	handle("POST /v1/work-contexts", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
 		var input workcontext.ContextInput
 		if err := decodeJSON(r, &input); err != nil {

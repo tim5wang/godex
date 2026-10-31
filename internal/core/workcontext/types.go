@@ -15,6 +15,19 @@ type Scope struct {
 	TenantID string
 	OwnerID  string
 }
+
+// ScopeKey renders a Scope as one stable string. Push subscriptions are keyed by
+// this so a background nudge for one user can never be delivered to another
+// user's browser — and the tenant is part of the key because two tenants may
+// legitimately have a user with the same id.
+func ScopeKey(scope Scope) string {
+	tenantID, ownerID := scopeArgs(scope)
+	if tenantID == "" && ownerID == "" {
+		return ""
+	}
+	return tenantID + "\x00" + ownerID
+}
+
 type Checkpoint struct {
 	Summary       string   `json:"summary"`
 	Completed     []string `json:"completed"`

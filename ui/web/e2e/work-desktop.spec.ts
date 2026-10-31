@@ -106,6 +106,37 @@ function handleWorkContext(store: Store) {
     }
 
     if (path === "/v1/work-context-resources" && method === "GET") return json(store.resources);
+    // Cross-stream attention inbox: decisions (cards awaiting acceptance) plus
+    // overdue/soon plan items, each pointing at the tab that resolves it.
+    if (path === "/v1/work-attention" && method === "GET") {
+      const items: Record<string, string>[] = [];
+      for (const delegation of store.delegations) {
+        const card = store.cards[delegation.card_id];
+        if (!card || card.status !== "in_review") continue;
+        items.push({
+          kind: "delegation_review", priority: "high", context_id: delegationCtx(delegation),
+          context_title: store.contexts.find((item) => item.id === delegationCtx(delegation))?.title ?? "",
+          title: card.title, detail: "等待验收", tab: "tasks",
+        });
+      }
+      for (const todo of store.todos) {
+        if (!todo.due_at || todo.status === "done") continue;
+        const due = Date.parse(todo.due_at);
+        if (Number.isNaN(due) || due > Date.now() + 24 * 3600 * 1000) continue;
+        items.push({
+          kind: due <= Date.now() ? "todo_overdue" : "todo_soon",
+          priority: due <= Date.now() ? "normal" : "low", context_id: todo.context_id,
+          context_title: store.contexts.find((item) => item.id === todo.context_id)?.title ?? "",
+          title: todo.text, detail: due <= Date.now() ? "已过期" : "即将到期", due_at: todo.due_at, tab: "plan",
+        });
+      }
+      const unread: Record<string, number> = {};
+      for (const context of store.contexts) {
+        const seen = store.seen[context.id] ?? "";
+        unread[context.id] = (store.events[context.id] ?? []).filter((event) => event.created_at > seen).length;
+      }
+      return json({ items, unread, counts: {}, generated_at: NOW });
+    }
     if (path === "/v1/work-contexts" && method === "GET") return json(store.contexts);
     if (path === "/v1/work-contexts" && method === "POST") {
       const input = body();
@@ -414,6 +445,28 @@ test("saves checkpoints, resources, relations and sessions as real server writes
   await expect(page).toHaveURL(/workspace_dir=%2Fsrv%2Fapp/);
 });
 
+test("surfaces a cross-stream inbox and jumps straight to the resolving tab", async ({ page }) => {
+  const store = await install(page, seededStore());
+  await page.goto("/work-desktop?context=ctx-1");
+
+  // The seeded store has a delegation whose card sits in in_review, so it must
+  // appear as a decision item belonging to ctx-1.
+  const inbox = page.locator(".wd-attention");
+  await expect(inbox).toBeVisible();
+  await expect(inbox.getByText("等待验收", { exact: true })).toBeVisible();
+  await expect(inbox.getByText("补充发布回滚 Runbook", { exact: true })).toBeVisible();
+  await expect(inbox.getByText("语音服务 · 长期维护", { exact: true })).toBeVisible();
+
+  // Clicking an item lands on the tab where it is resolved, not the default tab.
+  await inbox.getByRole("button", { name: /补充发布回滚 Runbook/ }).click();
+  await expect(page).toHaveURL(/context=ctx-1/);
+  await expect(page).toHaveURL(/tab=tasks/);
+  await expect(page.getByRole("tab", { name: "工作委派", exact: true })).toHaveAttribute("aria-selected", "true");
+
+  // Opening the inbox is read-only: it must not silently mark the stream seen.
+  expect(store.seen["ctx-1"]).toBeUndefined();
+});
+
 test("keeps plan items in place and marks the stream seen", async ({ page }, info) => {
   test.skip((page.viewportSize()?.width ?? 0) < 1024);
   const store = await install(page, seededStore());
@@ -483,7 +536,9 @@ test("delegates to a real card without auto-running it, then executes and review
   await dialog.getByLabel("委派目标", { exact: true }).fill("隔离模型与参数影响");
   await dialog.getByLabel("验收条件 · 每行一项", { exact: true }).fill("同一评测集与权重\n附命令与参数 hash");
   await dialog.getByRole("button", { name: rx("委派工作") }).click();
-  await expect(page.getByText("隔离模型与参数影响", { exact: true })).toBeVisible();
+  // Scope to the tab panel: the cross-stream inbox above also names this card, so
+  // an unscoped text match is ambiguous by design, not by accident.
+  await expect(page.getByRole("tabpanel").getByText("隔离模型与参数影响", { exact: true })).toBeVisible();
   expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/delegations");
   // Creating a delegation must NOT start an execution.
   expect(store.writes).not.toContain("POST /v1/taskboard/cards/card-2/execute");

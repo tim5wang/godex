@@ -203,3 +203,37 @@
   .wd-todo { grid-template-columns: 88px minmax(0, 1fr); }
   .wd-chip-title { max-width: 120px; }
 }
+
+/* --- cross-stream attention inbox --- */
+/* Compact by design: this is a triage list, not a workspace. One line per item
+   so the whole set stays scannable. */
+.wd-attention { margin-bottom: 12px; }
+.wd-attention-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.wd-attention-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 2px;
+  border-top: 1px solid var(--godex-border);
+}
+.wd-attention-item:first-child { border-top: 0; }
+/* A high-priority (blocking) item gets a left accent so it is findable without
+   reading the tag text. */
+.wd-attention-high { box-shadow: inset 3px 0 0 var(--godex-danger, #cf1322); padding-left: 8px; }
+.wd-attention-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  padding: 2px 0;
+}
+.wd-attention-main strong { overflow-wrap: anywhere; }
+.wd-attention-due { white-space: nowrap; }
+.wd-attention-item .wd-muted { font-size: 12px; }

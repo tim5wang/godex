@@ -22,6 +22,7 @@ import {
   getWorkContext,
   getWorkContextBrief,
   getWorkFocus,
+  getWorkAttention,
   linkWorkSession,
   listWorkContexts,
   listWorkResources,
@@ -49,6 +50,7 @@ import {
   type WorkTodoStatus,
 } from "../../lib/apiWorkContext";
 import { InfoHint } from "./workDesktopHints";
+import { AttentionInbox } from "./AttentionInbox";
 import { InlineEdit } from "./workDesktopInline";
 import { ResourceChips } from "./ResourceChips";
 import { TodoBoard } from "./TodoBoard";
@@ -182,12 +184,19 @@ export function WorkDesktopPage() {
     queryFn: () => getWorkFocus(token || null, contextId!),
     enabled: !!contextId,
   });
+  // Attention is cross-stream: what needs the user across every stream, plus the
+  // unread count per stream (the wall's badge). Polled so a card that finishes in
+  // the background shows up without a manual refresh.
+  const attentionQuery = useQuery({
+    queryKey: workContextQueryKey(token, nodeID, "attention"),
+    queryFn: () => getWorkAttention(token || null),
+    refetchInterval: 60_000,
+  });
   const projectsQuery = useQuery({
     queryKey: workContextQueryKey(token, nodeID, "projects"),
     queryFn: () => listTaskboardProjects(token || null),
     enabled: !!editor && (editor === "delegate"),
-  });
-  const templatesQuery = useQuery({
+  });  const templatesQuery = useQuery({
     queryKey: workContextQueryKey(token, nodeID, "templates"),
     queryFn: () => listAgentTemplates(token || null),
     enabled: editor === "delegate",
@@ -202,6 +211,15 @@ export function WorkDesktopPage() {
 
   function selectContext(id: string) {
     setParams({ context: id, tab });
+    setBriefOpen(false);
+  }
+
+  // selectContextTab switches stream AND tab in one navigation: the attention
+  // inbox knows where an item is resolved (tasks / plan), so landing on the
+  // stream's default tab would make the user hunt for it again.
+  function selectContextTab(id: string, target: string) {
+    const known = (tabs as readonly string[]).includes(target) ? target : "overview";
+    setParams({ context: id, tab: known });
     setBriefOpen(false);
   }
 
@@ -454,6 +472,8 @@ export function WorkDesktopPage() {
   const todos = focusQuery.data?.todos ?? detail?.todos ?? [];
   const focusChanges = focusQuery.data?.changes ?? [];
   const lastSeenAt = focusQuery.data?.last_seen_at ?? "";
+  const attentionItems = attentionQuery.data?.items ?? [];
+  const unreadByContext = attentionQuery.data?.unread ?? {};
   const pendingReview = delegationsNeedingReview(delegations);
   // The chat dock and file browser reuse the stream's linked session and its
   // project directory, so opening either one keeps the working context instead
@@ -489,13 +509,14 @@ export function WorkDesktopPage() {
         <Input aria-label={tr("searchContexts")} placeholder={tr("searchContexts")} prefix={<SearchOutlined aria-hidden="true" />} value={search} onChange={(event) => setSearch(event.target.value)} allowClear />
         <Select className="wd-mobile-switch" aria-label={tr("contexts")} value={contextId} options={contexts.map((item) => ({ value: item.id, label: item.title }))} onChange={selectContext} />
         <nav className="wd-stream-list">{filteredContexts.length ? filteredContexts.map((item) => <button type="button" key={item.id} className={`wd-stream ${contextId === item.id ? "wd-stream-selected" : ""}`} aria-current={contextId === item.id ? "page" : undefined} onClick={() => selectContext(item.id)}>
-          <span className="wd-item-heading"><strong>{item.title}</strong><span className={`wd-status-dot wd-status-${item.status}`} /></span>
+          <span className="wd-item-heading"><strong>{item.title}</strong><Space size={4} align="center">{(unreadByContext[item.id] ?? 0) > 0 && <Badge count={unreadByContext[item.id]} size="small" title={tr("attentionUnread", { count: unreadByContext[item.id] })} />}<span className={`wd-status-dot wd-status-${item.status}`} /></Space></span>
           <span className="wd-stream-summary">{item.checkpoint.summary || item.goal || item.background}</span>
           <span><Tag color={statusColor[item.status] ?? "default"}>{trLabel("", item.status)}</Tag><span className="wd-muted">{tr("revision", { revision: item.checkpoint.revision })}</span></span>
         </button>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={tr("emptyContexts")} />}</nav>
         <Button block icon={<PlusOutlined aria-hidden="true" />} onClick={() => openEditor("create")}>{tr("newContext")}</Button>
       </aside>
       <main className="wd-main">
+        <AttentionInbox items={attentionItems} loading={attentionQuery.isLoading} onOpen={selectContextTab} />
         <header className="wd-context-header">
           <div className="wd-title-row">
             <Space size={8} align="center" wrap>

@@ -412,6 +412,24 @@ UI 侧（解决“对话不能滚动 / 顶部标题栏无用 / 交互割裂 / �
 - `playwright test work-desktop.spec.ts --project=chromium-desktop` 7 passed（新增「计划原地编辑 + 标记已读」用例）。
 - 已知的仓库既有失败不变：`internal/architecture` 的 `TestFrontendSourceLineBudget`（`ChatPageView.tsx` 920 行）与 `TestGoFunctionComplexityBudget`（`routes_account.go:registerMemberRoutes` score 45）；两个文件本轮均未改动，`git show HEAD:` 基线同样失败。另有 `internal/services/backend` 的 TempDir 清理类 flake，隔离复跑通过。
 
+### WD3.8 注意力收件箱与主动提醒（2026-10-31）
+
+目标：从「你要来看桌面」变成「有进展才叫你」——并行推进六七条主线时能一键切换、一眼扫清、有进展才被打扰。
+
+- **进展不再依赖你打开桌面**。此前卡状态事件只在读 `WorkContextDetail` 时才写入（按 version 去重），taskboard 自己不写工作桌面事件；因此「有进展」只在你访问后才存在。新增后台巡检（`work_context_attention.go`，挂在既有 `Service.Start` 的独占进程锁与 runCtx 上，与 Flow reconciler 同生命周期），按每个 (tenant, owner) 主动投影卡状态并写事件。
+- **写事件与读事件共用同一去重键**（`task:<cardID>:v<version>`），所以巡检先写过之后再打开桌面不会重复，未读计数才是诚实的。
+- **注意力收件箱**（`GET /v1/work-attention`）：跨主线汇总「需要你动作」的条目——待验收委派（决策类，恒为 high）、过期/即将到期的计划项；每条带 `context_id` 与**应跳转的页签**（tasks / plan），前端一键切主线+页签，不用回墙上找。同一响应带每条主线的未读数，供主线列表打红点。打开收件箱**只读**，不推进 seen 水位。
+- **推送纪律**（决定了这功能是帮忙还是添乱）：只对决策类（卡进 `in_review`）实时推送，纯进展只落事件抬未读；每条按 dedup 键去重，一分钟一次的巡检不会一分钟推一次；静默时段 22:00–08:00（本地时间）；每人每日上限 12 条。**纪律检查在写事件之前**：否则被静默时段拦下的提醒会被记成「已发」而永久丢失——这是提醒功能绝不能有的结果。
+- **推送按所有者隔离**（安全边界）：`webpush` 订阅新增归属（`SubscribeFor`/`NotifyOwner`），归属键 = `workcontext.ScopeKey{tenant, owner}`，由 `NewPushOwnerResolver` 用与全站一致的 principal 分类器解析；通知正文引用的是该用户的主线标题，因此绝不能广播。归属为空的订阅只收广播，收不到任何人的工作条目；`NotifyOwner("")` 直接返回 0 而不是退化成广播（避免把隔离 bug 变成跨用户泄露）。
+- **不做**：让 LLM 判断「什么时候该提醒」（不确定、要定时起模型、会幻觉）；通用 IM 集成；新建提醒实体（复用 `wc_todos.due_at` 与既有 events 表，**无新 migration**）。
+
+验证（2026-10-31）：
+
+- 新增 `TestAttentionSweepRecordsProgressWithoutOpeningTheDesktop`（巡检独立落事件 + 读桌面不重复计数 + 决策类推送）、`TestAttentionSweepDoesNotRenotify`（重复巡检不重复推送）、`TestPushDisciplineQuietHoursAndCap`（静默时段拦截且**不烧掉**提醒，日上限生效）、`TestAttentionInboxSurfacesDecisionsAndDues`（决策排最前、带正确跳转页签与计数）、`TestUnreadCountsArePerStreamAndRespectSeeWatermark`、`TestAttentionSweepNeverCrossesOwners`（两个 owner 的条目不会串投）。
+- `go build ./...`、`go vet` 通过；`go test ./internal/core/workcontext ./internal/services/webpush` 通过；`internal/services/backend` 与 `internal/runtime/httpapi` 除既有 TempDir 清理 flake（隔离复跑通过）外通过。
+- 前端：`pnpm typecheck` 通过；`vitest run` 48 文件 / 489 通过；`playwright work-desktop --project=chromium-desktop` **8 passed**（新增「跨主线收件箱并可跳到对应页签」用例，含「打开收件箱不标记已读」断言）。
+- 既有门禁失败不变（`ChatPageView.tsx` 920 行、`routes_account.go:registerMemberRoutes` 45），两个文件本轮未改。
+
 ### 11.5 后续实现门禁
 
 - 后端：SQLite migrations/reopen/version CAS、同事务事件、租户与来源鉴权、依赖环、幂等补偿、来源删除、事实时间范围；使用实际 modernc SQLite，不只 mock。

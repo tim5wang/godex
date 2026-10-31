@@ -469,6 +469,36 @@ export function markWorkContextSeen(token: string | null, contextId: string) {
   );
 }
 
+// AttentionItem is one actionable line in the cross-stream inbox. It carries the
+// tab that resolves it, so the desktop can jump straight to where the work is
+// done instead of to the stream's default tab.
+export type AttentionPriority = "high" | "normal" | "low";
+export interface AttentionItem {
+  kind: string;
+  priority: AttentionPriority;
+  context_id: string;
+  context_title: string;
+  title: string;
+  detail: string;
+  due_at?: string;
+  tab: string;
+}
+
+// WorkAttention is the inbox plus per-stream unread counts, so the desktop wall
+// badges every stream from the same request that built the list.
+export interface WorkAttention {
+  items: AttentionItem[];
+  unread: Record<string, number>;
+  counts: Record<string, number>;
+  generated_at: string;
+}
+
+// getWorkAttention returns what needs the user across every stream. Read-only, so
+// opening it never advances a stream's seen watermark.
+export function getWorkAttention(token: string | null) {
+  return request<WorkAttention>(`/v1/work-attention`, { method: "GET" }, token);
+}
+
 // workContextQueryKey keeps the token and active node in the key so switching the active
 // remote node (or logging out) refetches instead of serving another node's desktop from
 // cache — node-scoped data must not leak across the node context store.

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, App as AntApp, Badge, Button, Card, Drawer, Empty, Form, Input, Modal, Select, Space, Spin, Tabs, Tag, Timeline, Tooltip, Typography } from "antd";
@@ -9,6 +9,7 @@ import { useNodeContextStore } from "../../store/nodeContext";
 import { executeTaskboardCard, listAgentTemplates, listSessions, listTaskboardProjects, patchTaskboardCard } from "../../lib/api";
 import { buildChatRouteForSession } from "../../lib/chatRoutes";
 import { showError } from "../../lib/notifications";
+import { ensurePushSubscriptionSilent } from "../../lib/push";
 import type { AgentTemplate } from "../../lib/apiAgent";
 import type { TaskboardCard } from "../../lib/types";
 import {
@@ -142,6 +143,15 @@ export function WorkDesktopPage() {
   };
   const fail = (error: unknown, key: string) => showError(message, error, tr(key));
   const isConflict = (error: unknown) => (error as { status?: number })?.status === 409;
+
+  // The desktop is where nudges arrive, so re-register the push subscription on
+  // entry. It is deliberately silent (see ensurePushSubscriptionSilent): it never
+  // prompts, so a user who has not granted permission is left alone and one who
+  // has does not have to revisit settings after every server restart. Runs once
+  // per mount; failures are swallowed because the user did not ask for this.
+  useEffect(() => {
+    void ensurePushSubscriptionSilent(token || null);
+  }, [token]);
 
   const contextsQuery = useQuery({
     queryKey: workContextQueryKey(token, nodeID, "contexts"),

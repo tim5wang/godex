@@ -71,6 +71,32 @@ export async function ensurePushSubscription(token: string | null): Promise<Push
   return { supported: true, permission, subscribed: true };
 }
 
+/**
+ * Ensure the browser is subscribed, but NEVER prompt for permission.
+ *
+ * This is the work-desktop path. The desktop is where nudges arrive, so a user
+ * who already granted notification permission should start receiving them the
+ * moment they open it — without hunting for a settings toggle. A user who has
+ * not granted permission is left alone: `Notification.requestPermission()` must
+ * only run from a deliberate gesture, and prompting on page load is how a
+ * feature trains people to click "block".
+ *
+ * Returns null when there is nothing to do (unsupported, or permission not yet
+ * granted).
+ */
+export async function ensurePushSubscriptionSilent(token: string | null): Promise<PushState | null> {
+  if (!pushSupported()) return null;
+  // "default" means never asked; "denied" means they said no. Both mean: do not subscribe.
+  if (Notification.permission !== "granted") return null;
+  try {
+    return await ensurePushSubscription(token);
+  } catch {
+    // A silent path must stay silent: a failed background re-subscribe is not
+    // worth an error toast the user did not ask for.
+    return null;
+  }
+}
+
 /** Ask the center to send a test notification to all subscribers. */
 export async function sendTestPush(token: string | null): Promise<number> {
   const resp = await fetch(apiURL("/push/test"), {

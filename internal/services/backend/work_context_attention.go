@@ -401,21 +401,3 @@ func inQuietHours(now time.Time) bool {
 	}
 	return hour >= quietHoursStart && hour < quietHoursEnd
 }
-
-// attentionSummary renders a one-line inbox summary for callers that only need a
-// count (the desktop nav badge) without the full list.
-func attentionSummary(items []AttentionItem) string {
-	if len(items) == 0 {
-		return ""
-	}
-	decisions := 0
-	for _, item := range items {
-		if item.Priority == AttentionHigh {
-			decisions++
-		}
-	}
-	if decisions > 0 {
-		return fmt.Sprintf("%d 项待决策 / 共 %d 项", decisions, len(items))
-	}
-	return fmt.Sprintf("%d 项待关注", len(items))
-}

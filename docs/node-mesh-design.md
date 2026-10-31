@@ -323,7 +323,7 @@ POST /control/nodes/{id}/disconnect       # 管理：踢下线（可选）
 **结论**：Web UI 已自带移动端适配（viewport + 720/900/1180px media query + 移动导航抽屉），手机浏览器直接打开中心地址即可，**不需要 React Native**。手机访问流程与桌面完全一致：手机浏览器 → 中心 Web UI → 中心 `nodeProxy` 代理 → 目标内网节点（复用 Phase 3 同一套控制面 API）。
 
 - [ ] 移动端体验补强（✅ 已纳入 Web Push，PWA 待做）：PWA manifest + service worker（主屏图标/离线缓存）、终端触屏键盘、审批按钮触屏优化
-- [x] 推送（✅ 已完成 2026-08-06）：Web Push（中心不持久化历史，只推实时事件）——`internal/services/webpush`（VAPID 密钥生成/持久化到 state/push_keys.json + 内存订阅注册表 + `Notify` 发送，失败端点自动剔除）；中心端点 `/api/push/{public-key,subscribe,unsubscribe,test}`（`internal/runtime/httpapi/push.go`，web token 鉴权）；前端 `ui/web/public/sw.js`（service worker）+ `lib/push.ts`（订阅/测试）+ Settings「通知」区块；`scripts/smoke_push.sh` PASS
+- [x] 推送（✅ 已完成 2026-08-06，2026-10-31 补充持久化）：Web Push（中心不持久化历史，只推实时事件）——`internal/services/webpush`（VAPID 密钥生成/持久化到 state/push_keys.json + 订阅注册表持久化到 state/push_subscriptions.json + `Notify`/`NotifyOwner` 发送，失败端点自动剔除）；中心端点 `/api/push/{public-key,subscribe,unsubscribe,test}`（`internal/runtime/httpapi/push.go`，web token 鉴权）；前端 `ui/web/public/sw.js`（service worker）+ `lib/push.ts`（订阅/测试）+ Settings「通知」区块；`scripts/smoke_push.sh` PASS。注：「中心不持久化」指的是节点 session 历史，订阅是用户要求被提醒的长期意愿，重启即丢会让提醒永远不触发，故订阅落盘（`LoadOrCreate` 绑定的服务；`New`/`NewWithKeys` 仍为内存态，供测试与一次性运行）。
 - [ ] 实验性「手机即节点」（✅ 已立项）：godex 编译到 Android（`GOOS=android GOARCH=arm64`，依赖基本纯 Go：modernc sqlite / gorilla websocket / creack-pty 的 linux tag 匹配 android），在 Termux 类环境跑本地 agent，作为节点注册到中心——手机本身成为节点，对应「保留移动端本地 agent 能力」的诉求。iOS 因沙箱限制（无 shell/任意进程/PTY）不作为本地 agent 目标，仅用浏览器。
 - 说明：手机只是另一类客户端 + 可选节点；内网节点无需任何改动。
 

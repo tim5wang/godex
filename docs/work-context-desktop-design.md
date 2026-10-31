@@ -421,13 +421,14 @@ UI 侧（解决“对话不能滚动 / 顶部标题栏无用 / 交互割裂 / �
 - **注意力收件箱**（`GET /v1/work-attention`）：跨主线汇总「需要你动作」的条目——待验收委派（决策类，恒为 high）、过期/即将到期的计划项；每条带 `context_id` 与**应跳转的页签**（tasks / plan），前端一键切主线+页签，不用回墙上找。同一响应带每条主线的未读数，供主线列表打红点。打开收件箱**只读**，不推进 seen 水位。
 - **推送纪律**（决定了这功能是帮忙还是添乱）：只对决策类（卡进 `in_review`）实时推送，纯进展只落事件抬未读；每条按 dedup 键去重，一分钟一次的巡检不会一分钟推一次；静默时段 22:00–08:00（本地时间）；每人每日上限 12 条。**纪律检查在写事件之前**：否则被静默时段拦下的提醒会被记成「已发」而永久丢失——这是提醒功能绝不能有的结果。
 - **推送按所有者隔离**（安全边界）：`webpush` 订阅新增归属（`SubscribeFor`/`NotifyOwner`），归属键 = `workcontext.ScopeKey{tenant, owner}`，由 `NewPushOwnerResolver` 用与全站一致的 principal 分类器解析；通知正文引用的是该用户的主线标题，因此绝不能广播。归属为空的订阅只收广播，收不到任何人的工作条目；`NotifyOwner("")` 直接返回 0 而不是退化成广播（避免把隔离 bug 变成跨用户泄露）。
+- **订阅持久化 + 进桌面静默重订**（2026-10-31 补）：订阅原先只在内存，且只有手动去设置页点「启用」才注册——两者叠加的实际后果是「不去设置页就一条也收不到」，服务一重启更是全部清零，对有进展才叫人的功能等于白做。现在 `LoadOrCreate` 绑定的服务把注册表落盘到 `state/push_subscriptions.json`（含归属，故 owner 隔离也跨重启成立；temp+rename 原子写；`New`/`NewWithKeys` 仍为内存态）；失效端点被剔除时同步落盘，浏览器退订后不会被下次重启复活。前端在工作桌面挂载时调 `ensurePushSubscriptionSilent`：**已授权才重订、从不弹窗**（权限请求只能在用户手势里发起，页面加载弹窗只会训练用户点「阻止」，永久静音掉他要的提醒）；未授权则保持安静。
 - **不做**：让 LLM 判断「什么时候该提醒」（不确定、要定时起模型、会幻觉）；通用 IM 集成；新建提醒实体（复用 `wc_todos.due_at` 与既有 events 表，**无新 migration**）。
 
 验证（2026-10-31）：
 
 - 新增 `TestAttentionSweepRecordsProgressWithoutOpeningTheDesktop`（巡检独立落事件 + 读桌面不重复计数 + 决策类推送）、`TestAttentionSweepDoesNotRenotify`（重复巡检不重复推送）、`TestPushDisciplineQuietHoursAndCap`（静默时段拦截且**不烧掉**提醒，日上限生效）、`TestAttentionInboxSurfacesDecisionsAndDues`（决策排最前、带正确跳转页签与计数）、`TestUnreadCountsArePerStreamAndRespectSeeWatermark`、`TestAttentionSweepNeverCrossesOwners`（两个 owner 的条目不会串投）。
-- `go build ./...`、`go vet` 通过；`go test ./internal/core/workcontext ./internal/services/webpush` 通过；`internal/services/backend` 与 `internal/runtime/httpapi` 除既有 TempDir 清理 flake（隔离复跑通过）外通过。
-- 前端：`pnpm typecheck` 通过；`vitest run` 48 文件 / 489 通过；`playwright work-desktop --project=chromium-desktop` **8 passed**（新增「跨主线收件箱并可跳到对应页签」用例，含「打开收件箱不标记已读」断言）。
+- `go build ./...`、`go vet` 通过；`go test ./internal/core/workcontext ./internal/services/webpush` 通过；`internal/services/backend` 与 `internal/runtime/httpapi` 除既有 TempDir 清理 flake（隔离复跑通过）外通过。订阅持久化新增 `TestSubscriptionsSurviveRestart`、`TestOwnerScopingSurvivesRestart`（重启后 owner 隔离仍成立）、`TestUnsubscribeIsPersisted`（退订不被重启复活）、`TestUnattributedSubscriptionNeverReceivesOwnerNudges`、`TestInMemoryServiceDoesNotTouchDisk`，`webpush` 共 10 个测试通过。
+- 前端：`pnpm typecheck` 通过；`vitest run` 49 文件 / 492 通过（含新增 `test/pushSilent.test.ts`：未授权绝不弹窗、拒绝权限不抛错、不支持浏览器直接跳过）；`playwright work-desktop --project=chromium-desktop` **8 passed**（新增「跨主线收件箱并可跳到对应页签」用例，含「打开收件箱不标记已读」断言）。
 - 既有门禁失败不变（`ChatPageView.tsx` 920 行、`routes_account.go:registerMemberRoutes` 45），两个文件本轮未改。
 
 ### 11.5 后续实现门禁

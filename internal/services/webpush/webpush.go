@@ -5,10 +5,16 @@
 // 文档：docs/node-mesh-design.md、docs/node-center-bridge-design.md
 
 // Package webpush provides center-side Web Push support: VAPID key
-// management, an in-memory subscription registry, and notification sending
-// via the standard Web Push protocol. Subscriptions are intentionally NOT
-// persisted — the center only relays live events, matching the node-mesh
-// design decision that the center keeps no durable per-node history.
+// management, a subscription registry, and notification sending via the
+// standard Web Push protocol.
+//
+// Subscriptions are persisted when the service is bound to a state directory
+// (LoadOrCreate). They used to be memory-only, mirroring the node-mesh "the
+// center keeps no durable per-node history" decision — but a subscription is a
+// user's standing request to be interrupted, not node history, and dropping it
+// on every restart would silently turn the work desktop's nudges into a feature
+// that never fires. Services built by New/NewWithKeys stay in-memory, which is
+// what tests and ephemeral runs want.
 package webpush
 
 import (
@@ -43,8 +49,14 @@ type Service struct {
 	mu   sync.Mutex
 	subs map[string]registered // keyed by endpoint
 
+	// subsPath is where the registry is persisted. Empty means in-memory only.
+	subsPath string
+
 	client *http.Client
 }
+
+// subscriptionsFileName is the registry file inside the state directory.
+const subscriptionsFileName = "push_subscriptions.json"
 
 // registered pairs a subscription with the identity that created it. Nudges are
 // owner-targeted, so a background job for one user can never deliver a
@@ -53,6 +65,14 @@ type Service struct {
 type registered struct {
 	owner string
 	sub   Subscription
+}
+
+// storedSubscription is the on-disk shape: the browser subscription plus the
+// identity that owns it, so owner scoping survives a restart too.
+type storedSubscription struct {
+	Owner    string `json:"owner"`
+	Endpoint string `json:"endpoint"`
+	Keys     Keys   `json:"keys"`
 }
 
 // New creates a service with freshly generated VAPID keys.
@@ -71,8 +91,9 @@ func New() (*Service, error) {
 }
 
 // LoadOrCreate restores VAPID keys from stateDir/push_keys.json when present,
-// otherwise generates fresh keys and persists them so subscriptions survive
-// restarts. The subscription registry itself stays in-memory (not persisted).
+// otherwise generates fresh keys and persists them. Either way it restores the
+// subscription registry, so a restart does not silently unsubscribe every
+// browser (which would make the desktop's nudges never fire).
 func LoadOrCreate(stateDir string) (*Service, error) {
 	path := filepath.Join(stateDir, "push_keys.json")
 	if data, err := os.ReadFile(path); err == nil {
@@ -82,7 +103,12 @@ func LoadOrCreate(stateDir string) (*Service, error) {
 			Subscriber string `json:"subscriber"`
 		}
 		if err := json.Unmarshal(data, &stored); err == nil && stored.PrivateKey != "" && stored.PublicKey != "" {
-			return NewWithKeys(stored.PrivateKey, stored.PublicKey, stored.Subscriber)
+			svc, err := NewWithKeys(stored.PrivateKey, stored.PublicKey, stored.Subscriber)
+			if err != nil {
+				return nil, err
+			}
+			svc.loadState(stateDir)
+			return svc, nil
 		}
 	}
 	svc, err := New()
@@ -97,7 +123,70 @@ func LoadOrCreate(stateDir string) (*Service, error) {
 	data, _ := json.Marshal(stored)
 	_ = os.MkdirAll(stateDir, 0o755)
 	_ = os.WriteFile(path, data, 0o600)
+	svc.loadState(stateDir)
 	return svc, nil
+}
+
+// loadState binds the service to a state directory and restores the persisted
+// subscription registry.
+func (s *Service) loadState(stateDir string) {
+	s.subsPath = filepath.Join(stateDir, subscriptionsFileName)
+	s.loadSubscriptions()
+}
+
+// loadSubscriptions restores the registry from disk. A missing or unreadable
+// file is not an error: it just means no browser has subscribed yet.
+func (s *Service) loadSubscriptions() {
+	if s.subsPath == "" {
+		return
+	}
+	data, err := os.ReadFile(s.subsPath)
+	if err != nil {
+		return
+	}
+	var stored []storedSubscription
+	if err := json.Unmarshal(data, &stored); err != nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, item := range stored {
+		endpoint := strings.TrimSpace(item.Endpoint)
+		if endpoint == "" {
+			continue
+		}
+		s.subs[endpoint] = registered{
+			owner: strings.TrimSpace(item.Owner),
+			sub:   Subscription{Endpoint: endpoint, Keys: item.Keys},
+		}
+	}
+}
+
+// persistLocked writes the registry to disk. The caller must hold s.mu.
+// The write is atomic (temp file + rename) so a crash mid-write cannot leave an
+// unreadable registry behind; a persist failure is non-fatal because the
+// in-memory registry is still correct for this process's lifetime.
+func (s *Service) persistLocked() {
+	if s.subsPath == "" {
+		return
+	}
+	stored := make([]storedSubscription, 0, len(s.subs))
+	for _, entry := range s.subs {
+		stored = append(stored, storedSubscription{
+			Owner:    entry.owner,
+			Endpoint: entry.sub.Endpoint,
+			Keys:     entry.sub.Keys,
+		})
+	}
+	data, err := json.Marshal(stored)
+	if err != nil {
+		return
+	}
+	tmp := s.subsPath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, s.subsPath)
 }
 
 // NewWithKeys creates a service from operator-provided VAPID keys.
@@ -135,15 +224,8 @@ func (s *Service) SubscribeFor(owner string, sub Subscription) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.subs[sub.Endpoint] = registered{owner: strings.TrimSpace(owner), sub: sub}
+	s.persistLocked()
 	return nil
-}
-
-// OwnerOf returns the identity a registered endpoint belongs to, or "" when the
-// endpoint is unknown or unattributed.
-func (s *Service) OwnerOf(endpoint string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.subs[endpoint].owner
 }
 
 // Unsubscribe removes a subscription by endpoint.
@@ -151,6 +233,7 @@ func (s *Service) Unsubscribe(endpoint string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.subs, endpoint)
+	s.persistLocked()
 }
 
 // SubscriptionCount returns the number of live subscriptions.

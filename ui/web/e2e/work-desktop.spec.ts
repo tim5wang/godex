@@ -103,6 +103,36 @@ function handleWorkContext(store: Store) {
         { session_id: "wc-session-9", locator: { channel: "web", key: "wc-topic-9", metadata: { project_dir: "/srv/app" } }, title: "历史排查对话", created_at: NOW, updated_at: NOW, last_activity_at: NOW },
       ]);
     }
+    // The embedded chat dock reads the linked session directly (snapshot plus the
+    // three sources behind the status line), so the status line is asserted for
+    // real rather than stubbed away.
+    if (path === "/models" && method === "GET") {
+      return json({
+        default_profile_id: "p1", session_profile_id: "p1",
+        profiles: [{ id: "p1", name: "Default", provider: "openai", model: "gpt-5.5", base_url: "", max_tokens: 0, timeout_seconds: 0, supports_streaming: true, supports_vision: false }],
+      });
+    }
+    const sesSub = path.match(/^\/sessions\/([^/]+)(\/.*)?$/);
+    if (sesSub && method === "GET" && sesSub[2]) {
+      const sub = sesSub[2];
+      if (sub === "/context-inspector") {
+        return json({
+          context: {
+            message_count: 2, token_estimate: 1200, total_token_estimate: 1200, compress_threshold: 10000, suggest_compact: false,
+            token_breakdown: { system: 400, history: 800, total: 1200 },
+            prefix_cache: { stable_system_tokens: 400, stable_tool_schema_tokens: 0, stable_memory_index_tokens: 0, dynamic_runtime_tokens: 0, dynamic_section_tokens: {} },
+          },
+          transcript_ref_count: 0, memory_preview: {},
+        });
+      }
+      if (sub === "/context-usage") {
+        return json({
+          cache_usage: { calls: 1, input_tokens: 1000, cache_read_tokens: 0, cache_write_tokens: 0, hit_rate_percent: 0 },
+          cumulative_tokens: 1200, cumulative_input_tokens: 1000, cumulative_output_tokens: 200,
+        });
+      }
+      if (sub === "/timeline") return json([]);
+    }
     if (path === "/agent-templates" && method === "GET") {
       return json([{ id: "tpl-1", name: "Reviewer" }]);
     }
@@ -463,8 +493,8 @@ test("saves checkpoints, resources, relations and sessions as real server writes
   await expect(page.locator(".ant-modal-wrap")).toHaveCount(0);
   await expect(page.getByText("发布交接", { exact: true })).toBeVisible();
   expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/sessions");
-  // The pre-seeded link resolves to its full locator, so the jump carries project_dir.
-  await page.getByRole("button", { name: rx("打开对话") }).first().click();
+  // The pre-seeded link resolves to its full locator, so the Chat jump carries project_dir.
+  await page.getByRole("button", { name: rx("跳转 Chat 打开") }).first().click();
   await expect(page).toHaveURL(/\/chat\/web\/wc-topic-1/);
   await expect(page).toHaveURL(/workspace_dir=%2Fsrv%2Fapp/);
 });
@@ -495,7 +525,7 @@ test("edits the title, background and goal in place from the header pencil", asy
   expect(store.contexts[0]!.background).toBe("共享语音能力维护（已收敛）");
 });
 
-test("edits the header goal in place and renders a multi-line value as-is", async ({ page }) => {
+test("edits the goal in place in the overview and renders a multi-line value as-is", async ({ page }) => {
   const store = await install(page, seededStore());
   // A goal with markdown and real line breaks: it must render as markdown rather
   // than collapsing into one run-on line. The mock reads the store live, so this
@@ -503,21 +533,74 @@ test("edits the header goal in place and renders a multi-line value as-is", asyn
   store.contexts[0]!.goal = "- 先跑固定参数评测\n- 再准备回滚清单";
   await page.goto("/work-desktop?context=ctx-1");
 
-  // The subtitle under the title is the goal, rendered as a list here.
-  const subtitle = page.locator(".wd-subtitle");
-  await expect(subtitle.locator("li")).toHaveCount(2);
-  await expect(subtitle.getByText("先跑固定参数评测", { exact: true })).toBeVisible();
+  // The goal lives in the overview (it is no longer a header subtitle), rendered
+  // as a list here.
+  const overview = page.getByRole("tabpanel");
+  const goal = overview.locator(".wd-inline-rich").filter({ has: page.getByRole("button", { name: "目标", exact: true }) });
+  await expect(goal.locator("li")).toHaveCount(2);
+  await expect(goal.getByText("先跑固定参数评测", { exact: true })).toBeVisible();
 
-  // It is edited in place through its own pencil (distinct from the overview
-  // card's goal pencil, which carries the bare "目标" label).
-  await subtitle.getByRole("button", { name: "编辑目标", exact: true }).click();
+  await goal.getByRole("button", { name: "目标", exact: true }).click();
   const input = page.getByRole("textbox", { name: "目标", exact: true });
   await input.fill("可追溯的发布与回滚");
   await input.press("Control+Enter");
-  await expect(subtitle.getByText("可追溯的发布与回滚", { exact: true })).toBeVisible();
+  await expect(goal.getByText("可追溯的发布与回滚", { exact: true })).toBeVisible();
   expect(store.writes).toContain("PATCH /v1/work-contexts/ctx-1");
   expect(store.contexts[0]!.goal).toBe("可追溯的发布与回滚");
   await expect(page.getByRole("dialog")).toHaveCount(0);
+});
+
+test("opens a topic conversation inside the desktop with a live status line", async ({ page }) => {
+  const store = await install(page, seededStore());
+  await page.goto("/work-desktop?context=ctx-1&tab=conversations");
+
+  // "Open in desktop" keeps the conversation inside the stream: it switches to the
+  // chat tab targeted at THAT session instead of navigating to the Chat page.
+  await page.getByRole("button", { name: rx("在桌面打开") }).first().click();
+  await expect(page).toHaveURL(/tab=chat/);
+  await expect(page).toHaveURL(/session=wc-session-1/);
+  // Opening it must not disturb the linked session.
+  expect(store.writes.filter((entry) => entry.startsWith("DELETE"))).toEqual([]);
+
+  // The dock carries the same status line the Chat topbar does: model, context
+  // usage badge and stream state — reusing ContextStatusInline, not a lookalike.
+  const dock = page.locator(".wd-chat-dock");
+  await expect(dock).toBeVisible();
+  await expect(dock.getByText("gpt-5.5", { exact: false })).toBeVisible();
+  // Assert the VALUES, not just presence: when the dock's queries were wrongly
+  // gated on a token it still rendered a badge reading "ctx 0 · calls 0 · msgs 0",
+  // so a mere visibility check would pass on a permanently-empty status line.
+  await expect(dock.locator(".chat-context-status")).toContainText("1.2k/10k");
+  await expect(dock.getByText("空闲", { exact: true })).toBeVisible();
+
+  // The composer must be reachable without scrolling — that was the reported bug
+  // (the dock guessed its own height, so the input sat below the fold).
+  await expect(dock.locator(".chat-composer").first()).toBeInViewport();
+});
+
+test("scopes the attention inbox to the open desktop or every desktop", async ({ page }) => {
+  const store = await install(page, seededStore());
+  // Give the OTHER stream its own overdue item, so the two scopes differ
+  // observably instead of both rendering the same single row.
+  store.todos.push({
+    id: "todo-2", context_id: "ctx-2", text: "对齐印尼语短句评测", status: "todo", owner: "",
+    due_at: "2026-10-01T00:00:00Z", source: "human", position: 0, version: 1, created_at: NOW, updated_at: NOW,
+  });
+  await page.goto("/work-desktop?context=ctx-1");
+
+  const inbox = page.locator(".wd-attention");
+  await expect(inbox).toBeVisible();
+  // Default covers every desktop, so the other stream's item is listed.
+  await expect(inbox.getByText("对齐印尼语短句评测", { exact: true })).toBeVisible();
+
+  // Narrowing to the open desktop hides the other stream's item.
+  await inbox.locator(".ant-segmented-item", { hasText: "当前桌面" }).click();
+  await expect(inbox.getByText("对齐印尼语短句评测", { exact: true })).toHaveCount(0);
+  await expect(inbox.getByText("补充发布回滚 Runbook", { exact: true })).toBeVisible();
+
+  // And back out to every desktop.
+  await inbox.locator(".ant-segmented-item", { hasText: "全部桌面" }).click();
+  await expect(inbox.getByText("对齐印尼语短句评测", { exact: true })).toBeVisible();
 });
 
 test("links an existing conversation to the stream without moving it", async ({ page }) => {

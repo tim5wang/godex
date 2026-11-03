@@ -143,6 +143,11 @@
 .wd-inline-editing { width: 100%; }
 .wd-inline-editing .ant-input, .wd-inline-editing .ant-input-affix-wrapper { width: 100%; }
 .wd-inline-error { color: var(--godex-danger, #cf1322); font-size: 12px; }
+/* An in-place edited list: the same markup a plain <ul>/<ol> would have, but the
+   wrapper must not swallow the pencil or collapse the list into one line. */
+.wd-inline-list { margin: 6px 0; padding-left: 20px; }
+.wd-inline-list li { line-height: 1.6; overflow-wrap: anywhere; }
+.wd-inline .wd-inline-list { display: block; }
 /* Static value + pencil: for fields whose value must keep its own semantics (a
    heading inside a button is no longer a heading), so only the pencil is clickable. */
 .wd-inline-static { min-width: 0; max-width: 100%; }

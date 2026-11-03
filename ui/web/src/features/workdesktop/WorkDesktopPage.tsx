@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, App as AntApp, Badge, Button, Card, Drawer, Empty, Form, Input, Modal, Select, Space, Spin, Tabs, Tag, Timeline, Tooltip, Typography } from "antd";
-import { ApartmentOutlined, ArrowRightOutlined, CheckCircleOutlined, ClockCircleOutlined, CodeOutlined, CommentOutlined, EditOutlined, FileTextOutlined, FolderOutlined, LinkOutlined, MessageOutlined, PauseCircleOutlined, PlayCircleOutlined, PlusOutlined, ProfileOutlined, SearchOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { ApartmentOutlined, ArrowRightOutlined, CheckCircleOutlined, ClockCircleOutlined, CodeOutlined, CommentOutlined, FileTextOutlined, FolderOutlined, LinkOutlined, MessageOutlined, PlayCircleOutlined, PlusOutlined, ProfileOutlined, SearchOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { useI18n } from "../../i18n";
 import { useSettingsStore } from "../../store/settings";
 import { useNodeContextStore } from "../../store/nodeContext";
@@ -39,6 +39,7 @@ import {
   saveCheckpoint,
   unlinkWorkSession,
   workContextQueryKey,
+  type CheckpointInput,
   type RecallScope,
   type WorkContext,
   type WorkContextBrief,
@@ -54,16 +55,16 @@ import { InfoHint } from "./workDesktopHints";
 import { AttentionInbox } from "./AttentionInbox";
 import { InlineEdit } from "./workDesktopInline";
 import { LinkSessionPicker } from "./LinkSessionPicker";
+import { OverviewPanel } from "./OverviewPanel";
 import { ResourceChips } from "./ResourceChips";
 import { TodoBoard } from "./TodoBoard";
 import { WorkChatDock } from "./WorkChatDock";
 import { FilesPanel } from "../files/FilesPanel";
-import { delegationsNeedingReview, formatTimestamp, isReadOnly, joinLines, otherSide, splitLines } from "./workDesktopView";
+import { delegationsNeedingReview, formatTimestamp, isReadOnly, otherSide, splitLines } from "./workDesktopView";
 import "./workDesktop.css";
 
 type Editor =
   | "create"
-  | "checkpoint"
   | "delegate"
   | "session"
   | "fact"
@@ -75,13 +76,6 @@ type EditorValues = {
   title?: string;
   background?: string;
   goal?: string;
-  summary?: string;
-  next?: string;
-  completed?: string;
-  inProgress?: string;
-  blockers?: string;
-  openQuestions?: string;
-  evidenceRefs?: string;
   description?: string;
   acceptance?: string;
   project?: string;
@@ -235,17 +229,7 @@ export function WorkDesktopPage() {
 
   function openEditor(kind: Editor) {
     form.resetFields();
-    if (kind === "checkpoint" && selected) {
-      form.setFieldsValue({
-        summary: selected.checkpoint.summary,
-        next: joinLines(selected.checkpoint.next_actions),
-        completed: joinLines(selected.checkpoint.completed),
-        inProgress: joinLines(selected.checkpoint.in_progress),
-        blockers: joinLines(selected.checkpoint.blockers),
-        openQuestions: joinLines(selected.checkpoint.open_questions),
-        evidenceRefs: joinLines(selected.checkpoint.evidence_refs),
-      });
-    } else if (kind === "fact") {
+    if (kind === "fact") {
       form.setFieldsValue({ factKind: "fact" });
     } else if (kind === "resource") {
       form.setFieldsValue({ resourceKind: "web" });
@@ -274,17 +258,31 @@ export function WorkDesktopPage() {
   });
 
   const checkpointMutation = useMutation({
-    mutationFn: (values: EditorValues) => saveCheckpoint(token || null, contextId!, selected?.version ?? 0, {
-      summary: values.summary!.trim(),
-      completed: splitLines(values.completed),
-      in_progress: splitLines(values.inProgress),
-      next_actions: splitLines(values.next),
-      blockers: splitLines(values.blockers),
-      open_questions: splitLines(values.openQuestions),
-      evidence_refs: splitLines(values.evidenceRefs),
-    }),
-    onSuccess: () => { invalidateDetail(); setEditor(undefined); void message.success(tr("checkpointSaved")); },
+    // A checkpoint is one versioned document, not per-field patches, so editing a
+    // single field still submits the whole document with just that field replaced.
+    // Reading the current checkpoint here keeps that merge in one place.
+    mutationFn: (patch: Partial<CheckpointInput>) => {
+      const current = selected?.checkpoint;
+      return saveCheckpoint(token || null, contextId!, selected?.version ?? 0, {
+        summary: patch.summary ?? current?.summary ?? "",
+        completed: patch.completed ?? current?.completed ?? [],
+        in_progress: patch.in_progress ?? current?.in_progress ?? [],
+        next_actions: patch.next_actions ?? current?.next_actions ?? [],
+        blockers: patch.blockers ?? current?.blockers ?? [],
+        open_questions: patch.open_questions ?? current?.open_questions ?? [],
+        evidence_refs: patch.evidence_refs ?? current?.evidence_refs ?? [],
+      });
+    },
+    onSuccess: () => { invalidateDetail(); void message.success(tr("checkpointSaved")); },
     onError: (error) => (isConflict(error) ? void message.error(tr("conflict409")) : fail(error, "saveFailed")),
+  });
+
+  // Retitling an already-linked conversation reuses the same link endpoint: the
+  // backend updates the topic of an existing link instead of adding a second one.
+  const topicMutation = useMutation({
+    mutationFn: (input: { sessionId: string; topic: string }) => linkWorkSession(token || null, contextId!, { topic: input.topic, session_id: input.sessionId }),
+    onSuccess: () => { invalidateDetail(); void message.success(tr("saved")); },
+    onError: (error) => fail(error, "saveFailed"),
   });
 
   const resourceMutation = useMutation({
@@ -434,9 +432,6 @@ export function WorkDesktopPage() {
   function submitEditor(values: EditorValues) {
     switch (editor) {
       case "create": return createMutation.mutate(values);
-      case "checkpoint":
-        if (!values.summary?.trim() || !splitLines(values.next).length) { void message.warning(tr("checkBlank")); return; }
-        return checkpointMutation.mutate(values);
       case "delegate": return delegationMutation.mutate(values);
       case "session": return sessionMutation.mutate(values);
       case "fact": return factMutation.mutate(values);
@@ -534,7 +529,6 @@ export function WorkDesktopPage() {
             <Space size={6} wrap>
               <InfoHint title={tr("maintain")} text={tr("maintainHint")} />
               <Button size="small" type="primary" icon={<PlayCircleOutlined aria-hidden="true" />} onClick={() => setBriefOpen(true)}>{tr("continueWork")}</Button>
-              <Button size="small" icon={<EditOutlined aria-hidden="true" />} disabled={readOnly} onClick={() => openEditor("checkpoint")}>{tr("checkpoint")}</Button>
               <Button size="small" icon={<PlusOutlined aria-hidden="true" />} disabled={readOnly} onClick={() => openEditor("delegate")}>{tr("delegate")}</Button>
             </Space>
           </div>
@@ -618,33 +612,23 @@ export function WorkDesktopPage() {
     return <section className="wd-section">{title && <Typography.Text strong>{title}</Typography.Text>}{items.length ? <ul>{items.map((item, index) => <li key={index}>{item}</li>)}</ul> : <Typography.Paragraph type="secondary">{tr("noItems")}</Typography.Paragraph>}</section>;
   }
 
+  // overviewView renders the stream's overview through OverviewPanel, whose every
+  // value is edited in place (that is what retired the checkpoint modal).
   function overviewView() {
-    const checkpoint = selected!.checkpoint;
-    return <div className="wd-stack">
-      <Card size="small" className="wd-next-card" title={<Space><PlayCircleOutlined aria-hidden="true" />{tr("next")}</Space>} extra={<Tag>{tr("revision", { revision: checkpoint.revision })}</Tag>}>
-        <Typography.Paragraph>{checkpoint.summary || tr("noItems")}</Typography.Paragraph>
-        {checkpoint.next_actions.length ? <ol className="wd-next-list">{checkpoint.next_actions.map((item, index) => <li key={index}>{item}</li>)}</ol> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={tr("noItems")} />}
-        <Typography.Text type="secondary">{tr("savedAt")} · {formatTimestamp(checkpoint.created_at) || tr("noItems")}</Typography.Text>
-      </Card>
-      <div className="wd-overview-grid">
-        <Card size="small" title={<Space><FileTextOutlined aria-hidden="true" />{tr("background")}</Space>}>
-          <InlineEdit multiline ariaLabel={tr("background")} placeholder={tr("noItems")} value={selected!.background} disabled={readOnly} onSave={(next) => patchContextMutation.mutateAsync({ id: selected!.id, version: selected!.version, background: next })} />
-          <Typography.Text strong>{tr("goal")}</Typography.Text>
-          <InlineEdit multiline ariaLabel={tr("goal")} placeholder={tr("noItems")} value={selected!.goal} disabled={readOnly} onSave={(next) => patchContextMutation.mutateAsync({ id: selected!.id, version: selected!.version, goal: next })} />
-        </Card>
-        <Card size="small" title={<Space><CheckCircleOutlined aria-hidden="true" />{tr("completed")}</Space>}>{bullets("", checkpoint.completed)}</Card>
-      </div>
-      <div className="wd-overview-grid">
-        <Card size="small" title={<Space><PauseCircleOutlined aria-hidden="true" />{tr("blockers")}</Space>}>{bullets("", checkpoint.blockers)}{bullets("", checkpoint.open_questions)}</Card>
-        <Card size="small" title={<Space size={6}><ClockCircleOutlined aria-hidden="true" />{tr("changes")}<InfoHint title={tr("showHint")} text={tr("changesHint")} /></Space>}>
-          {events.length ? <div className="wd-stack">{events.slice(0, 3).map((event) => <div key={event.id}><Typography.Text>{event.title}</Typography.Text><div className="wd-muted">{formatTimestamp(event.created_at)}</div></div>)}</div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={tr("noChanges")} />}
-        </Card>
-      </div>
-      {changesCard()}
-      <Typography.Paragraph type="secondary" className="wd-foot-note">
-        <InfoHint title={tr("currentUnknown")} text={tr("currentUnknownHint")} /> {tr("currentUnknown")}
-      </Typography.Paragraph>
-    </div>;
+    return <OverviewPanel
+      background={selected!.background}
+      goal={selected!.goal}
+      checkpoint={selected!.checkpoint}
+      events={events}
+      focusChanges={focusChanges}
+      lastSeenAt={lastSeenAt}
+      readOnly={readOnly}
+      markSeenPending={markSeenMutation.isPending}
+      onMarkSeen={() => markSeenMutation.mutate()}
+      onPatchContext={(patch) => patchContextMutation.mutateAsync({ id: selected!.id, version: selected!.version, ...patch })}
+      onPatchCheckpoint={(patch) => checkpointMutation.mutateAsync(patch)}
+      tr={tr}
+    />;
   }
 
   // planView is the stream's plan: first-class items with status/owner/due, edited
@@ -663,20 +647,6 @@ export function WorkDesktopPage() {
         onDelete={(todo: WorkTodo) => todoDeleteMutation.mutateAsync(todo)}
       />
     </div>;
-  }
-
-  // changesCard surfaces what changed since the user last looked at the stream, so
-  // picking the work back up does not require re-reading the timeline.
-  function changesCard() {
-    const seenLabel = lastSeenAt ? formatTimestamp(lastSeenAt) : tr("lastSeenNever");
-    return <Card
-      size="small"
-      className="wd-focus-card"
-      title={<Space size={6}><ThunderboltOutlined aria-hidden="true" />{tr("changesSinceTitle")}<span className="wd-muted">{seenLabel}</span></Space>}
-      extra={!readOnly && focusChanges.length > 0 ? <Button size="small" loading={markSeenMutation.isPending} onClick={() => markSeenMutation.mutate()}>{tr("markSeen")}</Button> : null}
-    >
-      {focusChanges.length ? <div className="wd-stack">{focusChanges.slice(0, 8).map((event) => <div key={event.id}><Typography.Text>{event.title}</Typography.Text><div className="wd-muted">{event.kind} · {formatTimestamp(event.created_at)}</div></div>)}</div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={tr("noChanges")} />}
-    </Card>;
   }
 
   function chatView() {
@@ -710,7 +680,7 @@ export function WorkDesktopPage() {
           <Button size="small" type="primary" icon={<PlusOutlined aria-hidden="true" />} disabled={readOnly} onClick={() => openEditor("session")}>{tr("newSession")}</Button>
         </Space>
       </div>
-      {sessions.length ? <div className="wd-topic-records">{sessions.map((link) => <Card key={link.id} size="small" title={link.topic || tr("topicName")} extra={<Typography.Text type="secondary">{formatTimestamp(link.created_at)}</Typography.Text>}>
+      {sessions.length ? <div className="wd-topic-records">{sessions.map((link) => <Card key={link.id} size="small" title={<InlineEdit className="wd-title-edit" ariaLabel={tr("topicName")} editIconLabel={tr("editTopic")} value={link.topic} disabled={readOnly} required render={(value) => <span>{value || tr("topicName")}</span>} onSave={(next) => topicMutation.mutateAsync({ sessionId: link.session_id, topic: next })} />} extra={<Typography.Text type="secondary">{formatTimestamp(link.created_at)}</Typography.Text>}>
         <div className="wd-muted wd-wrap">{link.session_id}</div>
         <Space wrap style={{ marginTop: 12 }}>
           <Button size="small" icon={<CommentOutlined aria-hidden="true" />} onClick={() => void openSession(link.session_id)}>{tr("openChat")}</Button>
@@ -805,7 +775,6 @@ export function WorkDesktopPage() {
 
   function editorModal() {
     const title = editor === "create" ? tr("newContext")
-      : editor === "checkpoint" ? tr("checkpoint")
       : editor === "delegate" ? tr("delegate")
       : editor === "session" ? tr("newSession")
       : editor === "fact" ? tr("addFact")
@@ -820,15 +789,6 @@ export function WorkDesktopPage() {
           <Form.Item label={tr("contextName")} name="title" rules={[{ ...nonBlank, message: tr("required") }]}><Input maxLength={160} autoFocus /></Form.Item>
           <Form.Item label={tr("background")} name="background"><Input.TextArea rows={3} maxLength={4000} /></Form.Item>
           <Form.Item label={tr("goal")} name="goal" rules={[{ ...nonBlank, message: tr("required") }]}><Input.TextArea rows={2} maxLength={2000} /></Form.Item>
-        </>}
-        {editor === "checkpoint" && <>
-          <Form.Item name="summary" label={tr("checkpointSummary")} rules={[{ ...nonBlank, message: tr("required") }]}><Input.TextArea rows={3} maxLength={4000} /></Form.Item>
-          <Form.Item name="next" label={tr("checkpointNext")} rules={[{ ...nonBlank, message: tr("required") }]}><Input.TextArea rows={2} maxLength={4000} /></Form.Item>
-          <Form.Item name="completed" label={tr("checkpointCompleted")}><Input.TextArea rows={2} maxLength={4000} /></Form.Item>
-          <Form.Item name="inProgress" label={tr("checkpointInProgress")}><Input.TextArea rows={2} maxLength={4000} /></Form.Item>
-          <Form.Item name="blockers" label={tr("checkpointBlockers")}><Input.TextArea rows={2} maxLength={4000} /></Form.Item>
-          <Form.Item name="openQuestions" label={tr("checkpointOpenQuestions")}><Input.TextArea rows={2} maxLength={4000} /></Form.Item>
-          <Form.Item name="evidenceRefs" label={tr("checkpointEvidenceRefs")}><Input.TextArea rows={2} maxLength={4000} /></Form.Item>
         </>}
         {editor === "delegate" && <>
           <Form.Item label={tr("delegateTitle")} name="title" rules={[{ ...nonBlank, message: tr("required") }]}><Input maxLength={160} autoFocus placeholder={tr("delegateTitleHint")} /></Form.Item>
@@ -875,7 +835,7 @@ export function WorkDesktopPage() {
           <Form.Item label={tr("reviewReason")} name="reason" rules={[{ ...nonBlank, message: tr("required") }]}><Input.TextArea rows={3} maxLength={2000} placeholder={tr("reviewReasonPlaceholder")} /></Form.Item>
         </>}
         <Space style={{ marginTop: 20 }}>
-          <Button type="primary" htmlType="submit" loading={createMutation.isPending || checkpointMutation.isPending || delegationMutation.isPending || factMutation.isPending || reviewMutation.isPending || patchContextMutation.isPending}>{submitLabel}</Button>
+          <Button type="primary" htmlType="submit" loading={createMutation.isPending || delegationMutation.isPending || factMutation.isPending || reviewMutation.isPending || patchContextMutation.isPending}>{submitLabel}</Button>
           <Button onClick={() => { setEditor(undefined); setReviewTarget(undefined); }}>{tr("cancel")}</Button>
         </Space>
       </Form>

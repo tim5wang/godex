@@ -445,6 +445,24 @@ UI 侧（解决“对话不能滚动 / 顶部标题栏无用 / 交互割裂 / �
 - `playwright work-desktop --project=chromium-desktop` **10 passed**（新增「铅笔就地改标题/背景」与「关联已有对话且不移动原会话」两条用例）；被暴露的既有用例 `--repeat-each=5` 5 次全过。
 - 无后端改动，故二进制无需重建；仅重建前端产物（webui 优先读盘，刷新即生效，不重启服务）。
 
+### WD3.10 概览展示全面就地编辑（2026-11-03）
+
+目标：把「其余展示也改成原地编辑」落到实处——概览上能看到的值，都应当当场改，而不是回到弹窗、也不是只读。
+
+- **检查点全部字段就地编辑**：当前进展、下一步、最近完成、阻塞、待确认、证据引用均可在概览直接改，**「编辑检查点」按钮与 `editContext` 式弹窗分支一并删除**。列表字段用「每行一项」文本就地编辑、渲染回 `<ol>/<ul>`（用户输入与阅读同一套格式）。
+- **列表用铅笔模式而非裸点值**：列表是块级内容，把它嵌进点击目标的 `<button>` 里是非法 HTML，屏幕阅读器输出也会错乱；所以列表值保持静态标记，只有铅笔可点（复用 WD3.9 的 `editIconLabel`）。单行字段仍保留「点值即编辑」的手感。
+- **一次字段编辑仍提交整份检查点**：后端检查点是「一份带版本的文档」而非逐字段 patch，所以 `checkpointMutation` 改为读当前文档 + 只替换被改字段再整体提交。该合并在页面层（只有它知道当前文档），`OverviewPanel` 只负责把 `Partial<CheckpointInput>` 交给它。这避免了新 UI 把未触碰字段静默清空（e2e 断言 `completed` 在改 `summary` 后未丢）。
+- **会话主题就地编辑**：主题对话卡片标题改为可就地重命名，走既有 `POST /v1/work-contexts/{id}/sessions`——后端对已存在链接是**更新 topic** 而非新增第二条（`LinkSession` 现有语义，未新增接口）。
+- **不做（后端不支持内容更新，故不做以免造假接口）**：关联条件、事实内容。`PATCH .../facts/{id}` 只收 `status`（`FactReview`），relation 只有新增/删除，没有改条件/内容的路径。要支持需新增后端接口，另行评估。
+- **行数预算**：页面越改越大的真风险是撞 900 行门禁；把概览（含检查点就地编辑 + 变动卡片）整体抽成 `OverviewPanel.tsx`，页面从 884 降到 **844** 行。
+- **清死键**：弹窗删除后 `checkpoint`（编辑检查点）、`checkpointInProgress`、`checkBlank` 变成死 i18n 键，一并删除（中英同步，parity 门禁通过）。
+
+验证（2026-11-03）：
+
+- 前端：`pnpm typecheck` 通过；`vitest run` 49 文件 / 492 通过；`vitest run src/i18n` 中英对齐通过。
+- `playwright work-desktop --project=chromium-desktop` **10 passed**。「saves checkpoints…」用例改为就地编辑：断言 `POST /checkpoints` 与 revision 自增、未触碰的 `completed` 未丢、以及**全程无弹窗**（`getByRole("dialog")` 计数 0）。只读门禁用例从「编辑检查点」按钮改为断言标题铅笔 `disabled`（就地编辑器同样受 readOnly 约束）。
+- 无后端改动，故不重建二进制、不重启服务；仅重建前端产物并只读核验。
+
 ### 11.5 后续实现门禁
 
 - 后端：SQLite migrations/reopen/version CAS、同事务事件、租户与来源鉴权、依赖环、幂等补偿、来源删除、事实时间范围；使用实际 modernc SQLite，不只 mock。

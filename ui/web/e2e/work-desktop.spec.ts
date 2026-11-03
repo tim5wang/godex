@@ -406,24 +406,34 @@ test("saves checkpoints, resources, relations and sessions as real server writes
   await expect(page.getByText("检查点 r3", { exact: true }).first()).toBeVisible();
   await page.screenshot({ path: `../../.godex/tmp/work-desktop-${info.project.name}.png`, fullPage: true });
 
-  // Checkpoint: optimistic-locked write, reflected from the server response.
-  await page.getByRole("button", { name: rx("编辑检查点") }).click();
-  let dialog = page.getByRole("dialog");
-  await dialog.getByLabel("当前进展", { exact: true }).fill("确认范围后继续参数对比");
-  await dialog.getByLabel("下一步 · 每行一项", { exact: true }).fill("跑一轮固定参数评测\n准备回滚清单");
-  await dialog.getByRole("button", { name: rx("保存") }).click();
-  // Wait for the dialog to unmount before asserting on what it wrote. While the
-  // modal is still mounted its own field value also matches the text, and a
-  // lingering mask swallows the next click.
-  await expect(page.locator(".ant-modal-wrap")).toHaveCount(0);
-  await expect(page.getByText("确认范围后继续参数对比", { exact: true }).first()).toBeVisible();
+  // Checkpoint: edited in place on the overview (the modal is gone). One field
+  // edit still submits the whole checkpoint document, so untouched fields must
+  // survive — that merge is what a per-field UI could silently lose.
+  await page.getByRole("button", { name: "当前进展", exact: true }).click();
+  const summaryInput = page.getByRole("textbox", { name: "当前进展", exact: true });
+  await summaryInput.fill("确认范围后继续参数对比");
+  await summaryInput.press("Enter");
+  // Scope to the tab panel: the sidebar stream summary also shows the checkpoint
+  // summary, so an unscoped text match is ambiguous by design.
+  await expect(page.getByRole("tabpanel").getByRole("button", { name: "当前进展", exact: true })).toHaveText("确认范围后继续参数对比");
   expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/checkpoints");
   expect(store.contexts[0]!.checkpoint.revision).toBe(4);
+  expect(store.contexts[0]!.checkpoint.completed).toEqual(["补齐评测脚本"]);
+
+  // A list field is edited as one item per line, through the pencil affordance
+  // (a list is block content, so it cannot sit inside the click target's button).
+  await page.getByRole("button", { name: "下一步 · 每行一项", exact: true }).click();
+  const nextInput = page.getByRole("textbox", { name: "下一步 · 每行一项", exact: true });
+  await nextInput.fill("跑一轮固定参数评测\n准备回滚清单");
+  await nextInput.press("Control+Enter");
+  await expect(page.getByRole("tabpanel").getByText("跑一轮固定参数评测", { exact: true })).toBeVisible();
   expect(store.contexts[0]!.checkpoint.next_actions).toEqual(["跑一轮固定参数评测", "准备回滚清单"]);
+  // No dialog was involved anywhere in the checkpoint edit.
+  await expect(page.getByRole("dialog")).toHaveCount(0);
 
   // Resource: added to the shared list and referenced by this stream.
   await page.getByRole("button", { name: rx("添加资源") }).click();
-  dialog = page.getByRole("dialog");
+  let dialog = page.getByRole("dialog");
   await dialog.getByLabel("资源标题", { exact: true }).fill("发布 Runbook");
   await dialog.getByLabel("地址 / 定位", { exact: true }).fill("https://docs.example.invalid/runbook");
   await dialog.getByRole("button", { name: rx("保存") }).click();
@@ -620,11 +630,12 @@ test("archives to read-only, resolves an unknown stream and surfaces write confl
   await page.getByRole("button", { name: rx("归档主线") }).click();
   await expect.poll(() => store.contexts[0]!.status).toBe("archived");
   await expect(page.getByText("主线已归档，只读。先恢复再编辑。", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: rx("编辑检查点") })).toBeDisabled();
+  // Read-only is enforced on the in-place editors too, not only on the buttons.
+  await expect(page.getByRole("button", { name: "编辑标题", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: rx("委派工作") })).toBeDisabled();
   await page.getByRole("button", { name: rx("恢复主线") }).click();
   await expect.poll(() => store.contexts[0]!.status).toBe("active");
-  await expect(page.getByRole("button", { name: rx("编辑检查点") })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "编辑标题", exact: true })).toBeEnabled();
 
   // A 409 is reported as a conflict, not as a silent success or a generic error.
   store.failNextPatch = true;

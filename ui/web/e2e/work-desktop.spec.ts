@@ -37,6 +37,16 @@ type Store = {
 
 const NOW = "2026-10-30T09:00:00Z";
 
+// A feed long enough to overflow the dock. The dock's scrolling was never covered
+// before because the snapshot mock always returned no messages, so "can you scroll
+// the conversation" could not fail.
+const CHAT_MESSAGES = Array.from({ length: 40 }, (_, index) => ({
+  id: `m-${index + 1}`,
+  role: index % 2 === 0 ? "user" : "assistant",
+  content: [{ type: "text", text: `消息 ${index + 1}` }],
+  created_at: NOW,
+}));
+
 function emptyContext(id: string, title: string, goal: string): Ctx {
   return {
     id, title, background: `${title} background`, goal, status: "active", version: 1,
@@ -111,6 +121,12 @@ function handleWorkContext(store: Store) {
         default_profile_id: "p1", session_profile_id: "p1",
         profiles: [{ id: "p1", name: "Default", provider: "openai", model: "gpt-5.5", base_url: "", max_tokens: 0, timeout_seconds: 0, supports_streaming: true, supports_vision: false }],
       });
+    }
+    // The dock's snapshot. Served with a long feed so the scroll path is real.
+    const snapMatch = path.match(/^\/sessions\/([^/]+)$/);
+    if (snapMatch && method === "GET") {
+      const id = decodeURIComponent(snapMatch[1]!);
+      return json({ session_id: id, locator: { channel: "web", key: id }, messages: CHAT_MESSAGES, display_messages: CHAT_MESSAGES, running: false, updated_at: NOW });
     }
     const sesSub = path.match(/^\/sessions\/([^/]+)(\/.*)?$/);
     if (sesSub && method === "GET" && sesSub[2]) {
@@ -574,8 +590,12 @@ test("opens a topic conversation inside the desktop with a live status line", as
   await expect(dock.getByText("空闲", { exact: true })).toBeVisible();
 
   // The composer must be reachable without scrolling — that was the reported bug
-  // (the dock guessed its own height, so the input sat below the fold).
-  await expect(dock.locator(".chat-composer").first()).toBeInViewport();
+  // (the dock guessed its own height, so the input sat below the fold). Only
+  // asserted where the desktop owns the viewport: below 1024px the page scrolls as
+  // a whole by design, a separate open piece of work.
+  if ((page.viewportSize()?.width ?? 0) >= 1024) {
+    await expect(dock.locator(".chat-composer").first()).toBeInViewport();
+  }
 });
 
 test("scopes the attention inbox to the open desktop or every desktop", async ({ page }) => {
@@ -771,4 +791,53 @@ test("opens without a configured provider and honours the English locale", async
   // locale is now proven by the localized tab labels and the work-memory hint.
   await expect(page.getByRole("tab", { name: "Overview" })).toBeVisible();
   await expect(page.getByRole("note", { name: /AI maintenance/ })).toBeVisible();
+});
+
+// A long conversation must scroll inside the dock, with the composer reachable.
+// This was the reported bug: the centre column grew to its content height and was
+// then clipped, so the feed never scrolled and the input sat outside the viewport.
+test("scrolls a long conversation and keeps the composer in view", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  await install(page, seededStore());
+  await page.goto("/work-desktop?context=ctx-1&tab=chat");
+  const feed = page.locator(".wd-chat-feed .chat-feed");
+  await expect(feed).toBeVisible();
+
+  // The 40-message history must overflow its scroll container.
+  const { client, scroll } = await feed.evaluate((el) => ({ client: el.clientHeight, scroll: el.scrollHeight }));
+  expect(scroll).toBeGreaterThan(client);
+
+  // And the last message must be reachable by scrolling the feed itself.
+  await feed.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  await expect(page.getByText("消息 40", { exact: true })).toBeInViewport();
+
+  // The composer stays on screen without scrolling the page.
+  await expect(page.locator(".wd-chat-composer")).toBeInViewport();
+});
+
+// Every tab must share one width. The page used to shrink-to-fit its own content
+// (margin:auto on a column flex container cancels the cross-axis stretch), so each
+// tab took whatever width its content measured and the narrower ones sat centred in
+// dead space with uneven side gutters.
+test("gives every tab the same width instead of shrinking to content", async ({ page }) => {
+  await install(page, seededStore());
+  await page.setViewportSize({ width: 1920, height: 900 });
+  const widths: number[] = [];
+  for (const tab of ["overview", "chat", "knowledge"]) {
+    await page.goto(`/work-desktop?context=ctx-1&tab=${tab}`);
+    await page.locator(".wd-layout").first().waitFor({ state: "attached" });
+    const measured = await page.evaluate(() => {
+      const el = document.querySelector(".wd-page") as HTMLElement;
+      const parent = el.parentElement as HTMLElement;
+      return {
+        page: Math.round(el.getBoundingClientRect().width),
+        parent: Math.round(parent.getBoundingClientRect().width),
+      };
+    });
+    // Fills its container rather than sizing itself to its content...
+    expect(measured.page).toBe(measured.parent);
+    widths.push(measured.page);
+  }
+  // ...so all tabs agree, with no horizontal overflow.
+  expect(new Set(widths).size).toBe(1);
 });

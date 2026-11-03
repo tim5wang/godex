@@ -1,6 +1,12 @@
 .wd-page {
   padding: 14px 18px 24px;
   max-width: 1900px;
+  /* width:100% + auto margins, NOT margin alone: .godex-content is a COLUMN flex
+     container, where `margin: 0 auto` on the cross axis cancels the default stretch
+     and makes the page shrink-to-fit ITS OWN CONTENT. Every tab then got its own
+     width (whatever its content measured) and the narrower ones appeared centred in
+     dead space. Filling the parent makes all tabs share one width. */
+  width: 100%;
   margin: 0 auto;
   color: var(--godex-text);
   /* The route uses the chat shell, which bounds the shell to the viewport. So the
@@ -13,40 +19,10 @@
   overflow-y: auto;
 }
 
-/* Above 1024px the columns scroll independently and the embedded chat fills the
-   centre column, so its composer sits at the bottom of the viewport instead of
-   below the fold. Narrower widths keep the single page-level scroll above. */
-@media (min-width: 1024px) {
-  .wd-page { overflow: hidden; }
-  /* align-items:start (the base rule) sizes grid items to their content, so the
-     centre column would never fill the viewport and the chat could not reach the
-     bottom. Stretch + a 1fr row is what makes "fill the remaining height" work. */
-  .wd-layout { flex: 1; min-height: 0; overflow: hidden; align-items: stretch; grid-template-rows: minmax(0, 1fr); }
-  .wd-streams { position: static; overflow-y: auto; }
-  .wd-sidebar { overflow-y: auto; }
-  .wd-main { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-  /* Fill the tab area: tab bar fixed, pane scrolls. Without this the chat dock
-     only ever gets its own guessed height and pushes its composer out of view. */
-  .wd-main > .ant-tabs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-  .wd-main > .ant-tabs > .ant-tabs-nav { flex: 0 0 auto; margin-bottom: 0; }
-  .wd-main > .ant-tabs > .ant-tabs-content-holder { flex: 1; min-height: 0; }
-  .wd-main > .ant-tabs .ant-tabs-content,
-  .wd-main > .ant-tabs .ant-tabs-tabpane { height: 100%; min-height: 0; }
-  .wd-main > .ant-tabs .ant-tabs-tabpane { overflow-y: auto; }
-  /* The chat/files panes own their scrolling, so their pane must not scroll too. */
-  .wd-main > .ant-tabs .ant-tabs-tabpane:has(> .wd-chat-view),
-  .wd-main > .ant-tabs .ant-tabs-tabpane:has(> .wd-files-view) { overflow: hidden; }
-  .wd-chat-view, .wd-files-view { height: 100%; min-height: 0; display: flex; flex-direction: column; }
-  .wd-chat-view .wd-chat-dock { height: auto; flex: 1 1 auto; min-height: 0; }
-  .wd-files-view > * { flex: 1 1 auto; min-height: 0; }
-}
-
-/* 1024-1350 is the two-column branch: the sidebar wraps under the centre, so pin
-   the centre row to the remaining height and cap the wrapped sidebar. */
-@media (min-width: 1024px) and (max-width: 1350px) {
-  .wd-layout { grid-template-rows: minmax(0, 1fr) auto; }
-  .wd-sidebar { max-height: 42vh; }
-}
+/* The desktop's fill-the-viewport rules live at the END of this file on purpose:
+   the base rules further down set align-items/height defaults on the same classes,
+   and with equal specificity the later rule wins. Keeping them here — after those
+   base rules — is what makes the overrides actually apply. */
 
 /* .wd-store is the persistent "personal SQLite store" banner; it replaced the old
    prototype banner and keeps the same bottom spacing. */
@@ -323,3 +299,41 @@
 .wd-sidebar .wd-attention { margin-bottom: 0; }
 .wd-sidebar .wd-attention-item { flex-wrap: wrap; row-gap: 2px; }
 .wd-sidebar .wd-attention-item .ant-btn-link { padding: 0; height: auto; }
+
+/* --- Fill the viewport (desktop) -------------------------------------------
+   Must stay after the base rules above: `.wd-layout { align-items: start }` and the
+   `height: min(72vh, 760px)` guesses further up are what these override, and with
+   equal specificity only source order decides which one applies. When that order was
+   wrong, align-items stayed `start`, the centre column grew to its content height
+   (thousands of px) and was then clipped by the layout's overflow — so the
+   conversation could not scroll and its composer sat outside the viewport. */
+@media (min-width: 1024px) {
+  .wd-page { overflow: hidden; }
+  /* align-items:start sizes grid items to their content, so the centre column would
+     never fill the viewport. Stretch + a 1fr row is what makes it fill. */
+  .wd-layout { flex: 1; min-height: 0; overflow: hidden; align-items: stretch; grid-template-rows: minmax(0, 1fr); }
+  .wd-streams { position: static; overflow-y: auto; }
+  .wd-sidebar { overflow-y: auto; }
+  .wd-main { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  /* Tab bar fixed, pane fills the rest. Without this the chat dock only ever had
+     its own guessed height and pushed its composer out of view. */
+  .wd-main > .ant-tabs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .wd-main > .ant-tabs > .ant-tabs-nav { flex: 0 0 auto; margin-bottom: 0; }
+  .wd-main > .ant-tabs > .ant-tabs-content-holder { flex: 1; min-height: 0; }
+  .wd-main > .ant-tabs .ant-tabs-content,
+  .wd-main > .ant-tabs .ant-tabs-tabpane { height: 100%; min-height: 0; }
+  .wd-main > .ant-tabs .ant-tabs-tabpane { overflow-y: auto; }
+  /* The chat/files panes own their scrolling, so their pane must not scroll too. */
+  .wd-main > .ant-tabs .ant-tabs-tabpane:has(> .wd-chat-view),
+  .wd-main > .ant-tabs .ant-tabs-tabpane:has(> .wd-files-view) { overflow: hidden; }
+  .wd-chat-view, .wd-files-view { height: 100%; min-height: 0; display: flex; flex-direction: column; }
+  .wd-chat-view .wd-chat-dock { height: auto; flex: 1 1 auto; min-height: 0; }
+  .wd-files-view > * { flex: 1 1 auto; min-height: 0; }
+}
+
+/* 1024-1350 wraps the sidebar under the centre, so the centre row takes the free
+   height and the wrapped sidebar is capped. */
+@media (min-width: 1024px) and (max-width: 1350px) {
+  .wd-layout { grid-template-rows: minmax(0, 1fr) auto; }
+  .wd-sidebar { max-height: 42vh; }
+}

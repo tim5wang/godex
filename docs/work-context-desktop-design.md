@@ -498,6 +498,22 @@ UI 侧（解决“对话不能滚动 / 顶部标题栏无用 / 交互割裂 / �
 - `playwright work-desktop` **三端 33 passed / 6 skipped**（窄屏用例按设计跳过）。新增用例：会话在桌面内打开且状态栏显示真实数值、注意力范围 switch 真的会过滤（给另一条主线造了一条过期项，切“当前桌面”后它必须消失）。“saves checkpoints…” 用例里的旧按钮名“打开对话”改为“跳转 Chat 打开”。
 - 无后端改动，故不重建二进制、不重启服务；仅重建前端产物并只读核验。
 
+### WD3.13 对话滚动修复 + 各 tab 等宽（2026-11-03）
+
+两个都是 WD3.12 那套高度 CSS 的回踏，共同点是**当时没有任何测试覆盖**（dock 的 snapshot mock 一直返回空消息），所以两个 bug 都是靠**实测数字**定位，不是靠推理。
+
+- **病状一：对话上下滚不动，输入框看不到**。真根因是 **CSS 级联顺序**：我为填充视口写的 `@media (min-width: 1024px)` 块放在文件**开头**，而基类 `.wd-layout { align-items: start }` 在**后面**——同特异性下后者胜出，于是 `align-items: stretch` **从未生效**。后果是中列被内容撑到 5069px，再被 `.wd-layout{overflow:hidden}` 裁到 862px，所以 feed 永不滚动、composer 被裁在视口外。修法：把整块填充规则**移到文件末尾**（基类之后），并加注释说明“这个位置是有意的”，避免下次被“整理文件顺序”再次弄坏。
+- **病状二：其它 tab 左右留白多、宽度与主线对话不一致**。真根因是 `.wd-page` **shrink-to-fit**：它在一个**列向 flex 容器**里，而 `margin: 0 auto` 在 cross 轴上会**取消默认的 stretch**，于是页宽变成**内容宽度**。每个 tab 各按自己内容定宽，窄的就在空白里居中。修法：补 `width: 100%`（保留 `margin: 0 auto` 与 `max-width` 用于居中上限），所有 tab 共用同一宽度。
+- **实测证据**（不是推测）：修前 `.wd-main` h=5069px、`.wd-layout` `alignItems: "start"`、`.wd-page` `natural === maxContent === 1359` 而父级 1744；修后 `align: stretch`、`dock: 724`、`feedClient 563 < feedScroll 4770`（可滚）、全部 tab `pageW === parentW === 1744`、`overflowPx: 0`。
+- **e2e 补上真正缺失的覆盖**：mock 的 snapshot 现在返回 40 条消息，新增用例断言（①）长对话**确实溢出**（`scrollHeight > clientHeight`）、（②）滚到底能看到最后一条、（③）composer 在视口内、（④）各 tab 宽度相等且无横向溢出。前两个断言在修前会失败——这正是之前漏掉的。
+- **窄屏门控要精确**：composer 视口断言只在 `>=1024px` 跑（窄屏按设计是整页滚动，是单独的待办）；**状态栏断言不做门控**，因为它要防的失败模式（dock 查询被 token 错误门控导致全空）与视口宽度无关，为了窄屏有覆盖而整体跳过会丢掉真正的保护。
+
+验证（2026-11-03）：
+
+- 前端：`pnpm typecheck` 通过；`vitest run` 49 文件 / 492 通过；`vitest run src/i18n` 中英对齐通过（无新增文案）。
+- `playwright work-desktop` **三端 37 passed / 8 skipped / 0 failed**。
+- 无后端改动，故不重建二进制、不重启服务；仅重建前端产物并只读核验。
+
 ### 11.5 后续实现门禁
 
 - 后端：SQLite migrations/reopen/version CAS、同事务事件、租户与来源鉴权、依赖环、幂等补偿、来源删除、事实时间范围；使用实际 modernc SQLite，不只 mock。

@@ -51,6 +51,7 @@ import {
   type WorkTodoInput,
   type WorkTodoStatus,
 } from "../../lib/apiWorkContext";
+import { MarkdownContent } from "../../components/MarkdownContent";
 import { InfoHint } from "./workDesktopHints";
 import { AttentionInbox } from "./AttentionInbox";
 import { InlineEdit } from "./workDesktopInline";
@@ -532,7 +533,7 @@ export function WorkDesktopPage() {
               <Button size="small" icon={<PlusOutlined aria-hidden="true" />} disabled={readOnly} onClick={() => openEditor("delegate")}>{tr("delegate")}</Button>
             </Space>
           </div>
-          <Typography.Paragraph type="secondary" className="wd-subtitle">{selected!.goal || selected!.background}</Typography.Paragraph>
+          <InlineEdit className="wd-subtitle" rich ariaLabel={tr("goal")} editIconLabel={tr("editGoal")} placeholder={tr("noItems")} value={selected!.goal} disabled={readOnly} onSave={(next) => patchContextMutation.mutateAsync({ id: selected!.id, version: selected!.version, goal: next })} />
         </header>
         <div className="wd-stat-row">
           <span><FolderOutlined aria-hidden="true" /> {tr("resourcesCount", { count: contextResources.length })}</span>
@@ -588,8 +589,8 @@ export function WorkDesktopPage() {
     return <div className="wd-stack">
       <Alert type="info" showIcon title={tr("briefHint")} />
       <Typography.Title level={4}>{brief.context.title}</Typography.Title>
-      <Typography.Paragraph>{brief.context.background || tr("noItems")}</Typography.Paragraph>
-      <Typography.Text strong>{tr("goal")}</Typography.Text><Typography.Paragraph>{brief.context.goal}</Typography.Paragraph>
+      <MarkdownContent content={brief.context.background || tr("noItems")} />
+      <Typography.Text strong>{tr("goal")}</Typography.Text><MarkdownContent content={brief.context.goal || tr("noItems")} />
       <Typography.Text type="secondary">{tr("basedOnRevision", { revision: checkpoint.revision })}</Typography.Text>
       {bullets(tr("completed"), checkpoint.completed)}
       {bullets(tr("inProgress"), checkpoint.in_progress)}
@@ -727,7 +728,7 @@ export function WorkDesktopPage() {
         <Select aria-label={tr("recallScope")} value={recallScope} onChange={setRecallScope} options={[{ value: "current", label: tr("scopeCurrent") }, { value: "related", label: tr("scopeRelated") }, { value: "all", label: tr("scopeAll") }]} />
       </div>
       {recallResult.isLoading ? <Spin /> : facts.length ? facts.map((fact) => <Card key={fact.id} size="small" className="wd-knowledge" title={<Space wrap><Tag>{trLabel("factKind", fact.kind)}</Tag><span>{fact.title}</span></Space>} extra={<Tag color={factStatusColor[fact.status] ?? "default"}>{trLabel("factStatus", fact.status)}</Tag>}>
-        <Typography.Paragraph>{fact.content}</Typography.Paragraph>
+        <MarkdownContent content={fact.content} />
         <div className="wd-muted">{tr("factScopeLabel")} · {fact.scope || tr("noItems")}</div>
         <div className="wd-muted">{tr("factObserved")} · {formatTimestamp(fact.observed_at) || tr("noItems")}</div>
         {fact.verified_at && <div className="wd-muted">{tr("verifiedAt")} · {formatTimestamp(fact.verified_at)}</div>}

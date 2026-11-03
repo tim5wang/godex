@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Input, Select, Spin } from "antd";
 import { EditOutlined } from "@ant-design/icons";
+import { MarkdownContent } from "../../components/MarkdownContent";
 
 /**
  * InlineEdit is the shared in-place editing primitive for the work desktop.
@@ -30,8 +31,18 @@ export function InlineEdit(props: {
    * a button would stop being a heading — but still wants the one-click affordance.
    */
   editIconLabel?: string;
+  /**
+   * Render the read-only value as text that keeps its own line breaks (and as
+   * markdown when it looks like markdown), instead of one collapsed line.
+   *
+   * This implies the pencil affordance: markdown emits block elements (p, ul, ol),
+   * which cannot legally live inside the click-to-edit button. The value therefore
+   * stays static markup and only the pencil is clickable — the same reason lists
+   * use it. Titles still cannot use bare click-to-edit (they must stay headings).
+   */
+  rich?: boolean;
 }) {
-  const { value, ariaLabel, placeholder, multiline, disabled, className, render, onSave, required, editIconLabel } = props;
+  const { value, ariaLabel, placeholder, multiline, disabled, className, render, onSave, required, editIconLabel, rich } = props;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   const [saving, setSaving] = useState(false);
@@ -79,21 +90,41 @@ export function InlineEdit(props: {
   };
 
   if (!editing) {
+    // rich implies the pencil (see the rich prop docs); an explicit editIconLabel does too.
+    const iconLabel = rich ? (editIconLabel ?? ariaLabel) : editIconLabel;
+    const pencil = iconLabel ? (
+      <button
+        type="button"
+        className="wd-inline-icon"
+        aria-label={iconLabel}
+        title={iconLabel}
+        disabled={disabled}
+        onClick={() => !disabled && setEditing(true)}
+      >
+        <EditOutlined aria-hidden="true" />
+      </button>
+    ) : null;
+
+    // rich renders block content (markdown paragraphs, lists, code), so its wrapper
+    // must be a block element too: a <div> inside the <span>/<button> the other modes
+    // use is invalid HTML and the browser would re-parent it.
+    if (rich) {
+      return (
+        <div className={`wd-inline wd-inline-rich ${className ?? ""}`}>
+          <div className="wd-inline-static">
+            {value.trim() ? <MarkdownContent content={value} /> : <span className="wd-muted">{placeholder}</span>}
+          </div>
+          {pencil}
+        </div>
+      );
+    }
+
     const valueNode = render ? render(value) : (value || <span className="wd-muted">{placeholder}</span>);
-    if (editIconLabel) {
+    if (pencil) {
       return (
         <span className={`wd-inline ${className ?? ""}`}>
           <span className="wd-inline-static">{valueNode}</span>
-          <button
-            type="button"
-            className="wd-inline-icon"
-            aria-label={editIconLabel}
-            title={editIconLabel}
-            disabled={disabled}
-            onClick={() => !disabled && setEditing(true)}
-          >
-            <EditOutlined aria-hidden="true" />
-          </button>
+          {pencil}
         </span>
       );
     }

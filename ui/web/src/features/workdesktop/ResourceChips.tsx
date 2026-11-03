@@ -122,6 +122,8 @@ export function ResourceChips(props: {
                 <div className="wd-chip-field">
                   <span className="wd-muted">{tr("resourcePurpose")}</span>
                   <InlineEdit
+                    rich
+                    multiline
                     ariaLabel={`${tr("resourcePurpose")}: ${resource.title}`}
                     value={resource.purpose}
                     placeholder={tr("inlineHint")}

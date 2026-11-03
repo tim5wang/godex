@@ -412,10 +412,12 @@ test("saves checkpoints, resources, relations and sessions as real server writes
   await page.getByRole("button", { name: "当前进展", exact: true }).click();
   const summaryInput = page.getByRole("textbox", { name: "当前进展", exact: true });
   await summaryInput.fill("确认范围后继续参数对比");
-  await summaryInput.press("Enter");
+  // The summary is a multi-line field, so plain Enter keeps a newline and the
+  // modifier commits (same contract as background/goal).
+  await summaryInput.press("Control+Enter");
   // Scope to the tab panel: the sidebar stream summary also shows the checkpoint
   // summary, so an unscoped text match is ambiguous by design.
-  await expect(page.getByRole("tabpanel").getByRole("button", { name: "当前进展", exact: true })).toHaveText("确认范围后继续参数对比");
+  await expect(page.getByRole("tabpanel").getByText("确认范围后继续参数对比", { exact: true })).toBeVisible();
   expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/checkpoints");
   expect(store.contexts[0]!.checkpoint.revision).toBe(4);
   expect(store.contexts[0]!.checkpoint.completed).toEqual(["补齐评测脚本"]);
@@ -491,6 +493,31 @@ test("edits the title, background and goal in place from the header pencil", asy
   await background.press("Control+Enter");
   await expect(page.getByText("共享语音能力维护（已收敛）", { exact: true })).toBeVisible();
   expect(store.contexts[0]!.background).toBe("共享语音能力维护（已收敛）");
+});
+
+test("edits the header goal in place and renders a multi-line value as-is", async ({ page }) => {
+  const store = await install(page, seededStore());
+  // A goal with markdown and real line breaks: it must render as markdown rather
+  // than collapsing into one run-on line. The mock reads the store live, so this
+  // mutation is what the first GET serves.
+  store.contexts[0]!.goal = "- 先跑固定参数评测\n- 再准备回滚清单";
+  await page.goto("/work-desktop?context=ctx-1");
+
+  // The subtitle under the title is the goal, rendered as a list here.
+  const subtitle = page.locator(".wd-subtitle");
+  await expect(subtitle.locator("li")).toHaveCount(2);
+  await expect(subtitle.getByText("先跑固定参数评测", { exact: true })).toBeVisible();
+
+  // It is edited in place through its own pencil (distinct from the overview
+  // card's goal pencil, which carries the bare "目标" label).
+  await subtitle.getByRole("button", { name: "编辑目标", exact: true }).click();
+  const input = page.getByRole("textbox", { name: "目标", exact: true });
+  await input.fill("可追溯的发布与回滚");
+  await input.press("Control+Enter");
+  await expect(subtitle.getByText("可追溯的发布与回滚", { exact: true })).toBeVisible();
+  expect(store.writes).toContain("PATCH /v1/work-contexts/ctx-1");
+  expect(store.contexts[0]!.goal).toBe("可追溯的发布与回滚");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
 });
 
 test("links an existing conversation to the stream without moving it", async ({ page }) => {

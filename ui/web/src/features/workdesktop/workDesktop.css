@@ -146,6 +146,16 @@
 /* An in-place edited list: the same markup a plain <ul>/<ol> would have, but the
    wrapper must not swallow the pencil or collapse the list into one line. */
 .wd-inline-list { margin: 6px 0; padding-left: 20px; }
+/* Rich in-place editing: block content (markdown) needs a block wrapper, and the
+   value must keep its own line breaks. min-width:0 + flex keeps the pencil at the
+   end without letting long content push it off. */
+.wd-inline-rich { display: flex; align-items: flex-start; gap: 6px; }
+.wd-inline-rich .wd-inline-static { flex: 1; min-width: 0; }
+.wd-inline-rich .wd-inline-icon { margin-top: 2px; }
+.wd-inline-rich .markdown-body p { margin: 0 0 0.4rem; }
+.wd-inline-rich .markdown-body p:last-child { margin-bottom: 0; }
+/* The header subtitle keeps the muted, secondary look it had as a Paragraph. */
+.wd-subtitle.wd-inline-rich .wd-inline-static { color: var(--godex-muted); }
 .wd-inline-list li { line-height: 1.6; overflow-wrap: anywhere; }
 .wd-inline .wd-inline-list { display: block; }
 /* Static value + pencil: for fields whose value must keep its own semantics (a

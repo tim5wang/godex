@@ -60,15 +60,15 @@ export function OverviewPanel(props: {
 
   return <div className="wd-stack">
     <Card size="small" className="wd-next-card" title={<Space><PlayCircleOutlined aria-hidden="true" />{tr("next")}</Space>} extra={<Tag>{tr("revision", { revision: checkpoint.revision })}</Tag>}>
-      <InlineEdit ariaLabel={tr("checkpointSummary")} placeholder={tr("noItems")} value={checkpoint.summary} disabled={readOnly} onSave={(next) => onPatchCheckpoint({ summary: next })} />
+      <InlineEdit rich multiline ariaLabel={tr("checkpointSummary")} placeholder={tr("noItems")} value={checkpoint.summary} disabled={readOnly} onSave={(next) => onPatchCheckpoint({ summary: next })} />
       {listEdit("checkpointNext", checkpoint.next_actions, (items) => ({ next_actions: items }), true)}
       <Typography.Text type="secondary">{tr("savedAt")} · {formatTimestamp(checkpoint.created_at) || tr("noItems")}</Typography.Text>
     </Card>
     <div className="wd-overview-grid">
       <Card size="small" title={<Space><FileTextOutlined aria-hidden="true" />{tr("background")}</Space>}>
-        <InlineEdit multiline ariaLabel={tr("background")} placeholder={tr("noItems")} value={background} disabled={readOnly} onSave={(next) => onPatchContext({ background: next })} />
+        <InlineEdit rich multiline ariaLabel={tr("background")} placeholder={tr("noItems")} value={background} disabled={readOnly} onSave={(next) => onPatchContext({ background: next })} />
         <Typography.Text strong>{tr("goal")}</Typography.Text>
-        <InlineEdit multiline ariaLabel={tr("goal")} placeholder={tr("noItems")} value={goal} disabled={readOnly} onSave={(next) => onPatchContext({ goal: next })} />
+        <InlineEdit rich multiline ariaLabel={tr("goal")} placeholder={tr("noItems")} value={goal} disabled={readOnly} onSave={(next) => onPatchContext({ goal: next })} />
       </Card>
       <Card size="small" title={<Space><CheckCircleOutlined aria-hidden="true" />{tr("completed")}</Space>}>{listEdit("checkpointCompleted", checkpoint.completed, (items) => ({ completed: items }))}</Card>
     </div>

@@ -463,6 +463,22 @@ UI 侧（解决“对话不能滚动 / 顶部标题栏无用 / 交互割裂 / �
 - `playwright work-desktop --project=chromium-desktop` **10 passed**。「saves checkpoints…」用例改为就地编辑：断言 `POST /checkpoints` 与 revision 自增、未触碰的 `completed` 未丢、以及**全程无弹窗**（`getByRole("dialog")` 计数 0）。只读门禁用例从「编辑检查点」按钮改为断言标题铅笔 `disabled`（就地编辑器同样受 readOnly 约束）。
 - 无后端改动，故不重建二进制、不重启服务；仅重建前端产物并只读核验。
 
+### WD3.11 目标需就地编辑 + 多行文本原样渲染（2026-11-03）
+
+目标：把「原地编辑」推进到标题区，并让多行文本真的按多行显示——不能编辑的值要能改，能编辑的值不能在渲染时被压成一行。
+
+- **标题下的 subtitle 就是目标，现在可编辑**：它原来是个只读 `Typography.Paragraph`，显示 `goal || background`。改为 `InlineEdit`（`rich`），只绑 `goal`——**不再回退到 `background`**，否则一个空目标会显示成背景、用户「编辑目标」时看到的是背景文本，保存下去就把背景写成了目标。
+- **多行文本原样渲染（复用 `MarkdownContent`，不新写渲染器）**：`MarkdownContent` 已经是现成能力——纯文本路径用 `white-space: pre-wrap` 保留换行，检测到 markdown 语法才进 `MarkdownRenderer`（已挂 `remark-breaks` + `rehype-sanitize` 白名单）。所以换行与 markdown 用同一条路径解决，且有既有消毒保障。`InlineEdit` 新增 `rich` 模式，把值交给 `MarkdownContent`。
+- **`rich` 自动隐含铅笔模式**：markdown 会产出 `p/ul/ol` 等块级元素，嵌进可点击的 `<button>` 里是非法 HTML，所以 `rich` 的值必须是静态标记、只有铅笔可点（与列表用铅笔同一个理由）。包装元素也必须是块级（`div`），否则浏览器会把 `div` 从 `span` 里重排出去。标题仍不能用「点值即编辑」（必须保持 heading 角色）。
+- **应用到哪些多行字段**：目标（subtitle + 概览）、背景、检查点 summary、资源 purpose，知识卡片 `fact.content` 展示（只读→`MarkdownContent`），以及简报里 background/goal。检查点 summary 同时补上 `multiline`——它在旧弹窗里本来就是 3 行 textarea，之前就地编辑沿用了单行契约（回车提交），是一个漏掉的行为降级。
+- **e2e 抓到的真后果（本轮我自己改出来的）**：summary 改成多行后，旧 `press("Enter")` 只插入换行不再提交，断言因此失败。修法是改断言（`Control+Enter` 提交），不是改回去。两个铅笔的可达名需要区分：标题区铅笔叫「编辑目标」，概览卡片铅笔仍是裸「目标」。
+
+验证（2026-11-03）：
+
+- 前端：`pnpm typecheck` 通过；`vitest run` 49 文件 / 492 通过；`vitest run src/i18n` 中英对齐通过（新增 `editGoal` 中英同步）。
+- `playwright work-desktop --project=chromium-desktop` **11 passed**。新增用例：标题下目标渲染为真实列表（`li` 计数 2，单换行不丢）、经「编辑目标」铅笔就地改写、`PATCH /work-contexts/ctx-1` 写入、全程无弹窗。
+- 无后端改动，故不重建二进制、不重启服务；仅重建前端产物并只读核验。
+
 ### 11.5 后续实现门禁
 
 - 后端：SQLite migrations/reopen/version CAS、同事务事件、租户与来源鉴权、依赖环、幂等补偿、来源删除、事实时间范围；使用实际 modernc SQLite，不只 mock。

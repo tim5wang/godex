@@ -479,6 +479,25 @@ UI 侧（解决“对话不能滚动 / 顶部标题栏无用 / 交互割裂 / �
 - `playwright work-desktop --project=chromium-desktop` **11 passed**。新增用例：标题下目标渲染为真实列表（`li` 计数 2，单换行不丢）、经「编辑目标」铅笔就地改写、`PATCH /work-contexts/ctx-1` 写入、全程无弹窗。
 - 无后端改动，故不重建二进制、不重启服务；仅重建前端产物并只读核验。
 
+### WD3.12 内嵌对话状态栏 + 会话双开方式 + 布局高度预算（2026-11-03）
+
+目标：桌面上的对话要“看得见状态、放得下输入框”，切换/打开会话要有选择，顶部不要再占固定高度。
+
+- **顶部收拢（症状：“输入框要往上滚才看得到”）**：真根因不是 padding，而是 work-desktop 路由从未采用视图受限外壳——`.godex-content` 是整页滚动，而对话 dock 在用 `min(72vh, 760px)` 自己猜高度，于是 composer 被推到首屏外。修法是根因层：路由加 `shellClassName: "chat-shell"`（与 Chat 同外壳），`.wd-page` 改为列内滚动，并让 `.wd-main > .ant-tabs` 撑满剩余高度（tab 栏固定、面板滚动）。另两处关键：基类 `.wd-layout` 是 `align-items: start`，不改成 `stretch` 则中列永远不会撑满；chat/files 面板自己管滚动，所以它们的 pane 必须 `overflow: hidden`（用 `:has()`）否则会双滚动条。`<1024px` 保留单页滚动。
+- **顶部内容搬家**：副标题（目标）与四个统计计数从固定头部移入概览。它们描述“这条主线是什么”，不是“我在哪”，放在概览更合理，也把头部高度让给了对话。计数移到概览后头部只剩标题行 + 操作按钮。
+- **“待我处理”右移**：从主区顶部移到右侧栏顶部（那里本来就是资源/关联侧栏），不再占用中列垂直空间。侧栏窄，行内加 `flex-wrap` 并把冗余的“打开”链接收窄。
+- **范围 switch（当前桌面/全部桌面）**：内侧新增 `Segmented`，本地 state 默认“全部桌面”（跨主线汇总的初衷），切“当前桌面”只看本条。**过滤在页面层做**（`scopedAttention`），AttentionInbox 只负责展示——取数与展示解耦。
+- **会话两种打开方式**：主题对话卡片从单一“打开对话”改为“在桌面打开”（切到 chat tab 且带 `?session=<id>`，不离开桌面）+“跳转 Chat 打开”（原行为）。页面把 `session` 参数纳入 chat tab 的目标会话选择，所以“在桌面打开”能精确指向某条会话，而不是永远只开第一条。
+- **内嵌对话状态栏（对齐 Chat）**：dock 顶部补上模型名 + 上下文用量徽章 + 流连接状态 + 运行/空闲 + 刷新。**复用 Chat 的同一个 `ContextStatusInline` 与 `buildContextStatusSummary`**，不是长得像的复制品——所以你看到的“上下文用了多少”在两边含义一致。
+- **顺手修掉的真 bug（e2e 抽出来的）**：dock 把快照与三个状态查询都门控在 `!!token` 上，而桌面页本身的查询只门控 `!!contextId`（token 可空）。在 `auth_required=false` 的部署里没有 token 但会话完全可读，于是 dock 的**整个 feed 和状态栏都永远空白**。已改为与页面一致地只门控会话。
+- **e2e 断言含金量**：状态栏只断言“徽章可见”是抓不住这个 bug 的（坏的时候它也可见，只是显示 `ctx 0 · calls 0 · msgs 0`），所以断言改成校验数值（`1.2k/10k`）与 `chat-composer` 在视口内（`toBeInViewport`，直接盯住本次痛点）。
+
+验证（2026-11-03）：
+
+- 前端：`pnpm typecheck` 通过；`vitest run` 49 文件 / 492 通过；`vitest run src/i18n` 中英对齐通过（新增 `openInDesktop`/`attentionScope*`/`refresh`，删除死键 `editGoal` 与死样式 `.wd-subtitle`）。
+- `playwright work-desktop` **三端 33 passed / 6 skipped**（窄屏用例按设计跳过）。新增用例：会话在桌面内打开且状态栏显示真实数值、注意力范围 switch 真的会过滤（给另一条主线造了一条过期项，切“当前桌面”后它必须消失）。“saves checkpoints…” 用例里的旧按钮名“打开对话”改为“跳转 Chat 打开”。
+- 无后端改动，故不重建二进制、不重启服务；仅重建前端产物并只读核验。
+
 ### 11.5 后续实现门禁
 
 - 后端：SQLite migrations/reopen/version CAS、同事务事件、租户与来源鉴权、依赖环、幂等补偿、来源删除、事实时间范围；使用实际 modernc SQLite，不只 mock。

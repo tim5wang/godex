@@ -431,6 +431,20 @@ UI 侧（解决“对话不能滚动 / 顶部标题栏无用 / 交互割裂 / �
 - 前端：`pnpm typecheck` 通过；`vitest run` 49 文件 / 492 通过（含新增 `test/pushSilent.test.ts`：未授权绝不弹窗、拒绝权限不抛错、不支持浏览器直接跳过）；`playwright work-desktop --project=chromium-desktop` **8 passed**（新增「跨主线收件箱并可跳到对应页签」用例，含「打开收件箱不标记已读」断言）。
 - 既有门禁失败不变（`ChatPageView.tsx` 920 行、`routes_account.go:registerMemberRoutes` 45），两个文件本轮未改。
 
+### WD3.9 标题/背景/目标就地编辑与关联已有对话（2026-11-03）
+
+目标：桌面上的编辑不要再打断工作上下文——改标题不该开弹窗，拉回一条已经发生过的对话不该去别处翻会话 ID。
+
+- **就地编辑（标题/背景/目标）**：主线的标题、背景、目标不再走「编辑主线」弹窗，而是在标题旁加一个铅笔按钮、在概览卡片里直接点字段编辑（复用既有 `InlineEdit` 与 `PATCH /v1/work-contexts/{id}`，**无后端改动**）。`InlineEdit` 新增 `editIconLabel` 模式：值保持静态、只有铅笔可点——因为把标题包进 `<button>` 会让它不再是 heading（既有 e2e 依赖 `getByRole("heading")`，屏幕阅读器也依赖它）。背景/目标仍用点值即编辑，回车提交、Esc 取消、失焦保存，保存失败保持编辑态。原来的「编辑主线」按钮与 `editContext` 弹窗分支及 i18n 键一并删除（不再是死代码）。
+- **关联已有对话**：新增 `LinkSessionPicker.tsx`——拉取 `GET /sessions`，**只列出尚未关联本主线的会话**，选定后把会话标题预填为主题（后端拒绝空主题），提交走既有 `POST /v1/work-contexts/{id}/sessions`。选择器而不是「填会话 ID」输入框，因为用户认得出对话的标题、认不出不透明 id。关联只记录引用：**不移动、不重命名、不删除原会话**（e2e 断言写入中无 DELETE）。会话列表仅在拾取器打开时才拉取，不进桌面首屏渲染路径。
+- **既有 e2e 竞态根因修复**：本轮的 InlineEdit（概览卡片多两个实例）让概览渲染变重，暴露出既有 e2e 的一个既有竞态——保存后未等 antd 弹窗**卸载完成**就去断言/点击：弹窗仍在时它的输入框也匹配断言文本（strict 冲突），残留遮罩还会吞掉下一次点击（表现为「点了另一个 tab 却没切换」）。这不是本轮引入的 bug，但本轮把它从偶发变成必现。修法是根因层：每次弹窗保存后都 `await expect(page.locator(".ant-modal-wrap")).toHaveCount(0)` 再继续。已用二分（回退页面文件则 3/3 通过，带改动 3/3 失败）定位到确为本轮渲染变化触发。
+
+验证（2026-11-03）：
+
+- 前端：`pnpm typecheck` 通过；`vitest run` 49 文件 / 492 通过；`vitest run src/i18n` 中英对齐通过（新增 `editTitle`/`linkExistingHint`/`linkPickSession`/`linkNoAvailable` 同步，删除死键 `editContext`）。
+- `playwright work-desktop --project=chromium-desktop` **10 passed**（新增「铅笔就地改标题/背景」与「关联已有对话且不移动原会话」两条用例）；被暴露的既有用例 `--repeat-each=5` 5 次全过。
+- 无后端改动，故二进制无需重建；仅重建前端产物（webui 优先读盘，刷新即生效，不重启服务）。
+
 ### 11.5 后续实现门禁
 
 - 后端：SQLite migrations/reopen/version CAS、同事务事件、租户与来源鉴权、依赖环、幂等补偿、来源删除、事实时间范围；使用实际 modernc SQLite，不只 mock。

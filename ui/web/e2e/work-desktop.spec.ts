@@ -93,10 +93,15 @@ function handleWorkContext(store: Store) {
 
     if (method !== "GET") store.writes.push(`${method} ${path}`);
 
-    // Sessions list is used only to resolve a stored session_id into a FULL locator before
-    // navigating; a partial locator would re-hash into a different session.
+    // Sessions list is used to resolve a stored session_id into a FULL locator before
+    // navigating (a partial locator would re-hash into a different session), and by the
+    // link-existing picker. wc-session-9 is deliberately NOT linked to ctx-1 so the
+    // picker has something to offer.
     if (path === "/sessions" && method === "GET") {
-      return json([{ session_id: "wc-session-1", locator: { channel: "web", key: "wc-topic-1", metadata: { project_dir: "/srv/app" } }, title: "Topic", created_at: NOW, updated_at: NOW, last_activity_at: NOW }]);
+      return json([
+        { session_id: "wc-session-1", locator: { channel: "web", key: "wc-topic-1", metadata: { project_dir: "/srv/app" } }, title: "Topic", created_at: NOW, updated_at: NOW, last_activity_at: NOW },
+        { session_id: "wc-session-9", locator: { channel: "web", key: "wc-topic-9", metadata: { project_dir: "/srv/app" } }, title: "历史排查对话", created_at: NOW, updated_at: NOW, last_activity_at: NOW },
+      ]);
     }
     if (path === "/agent-templates" && method === "GET") {
       return json([{ id: "tpl-1", name: "Reviewer" }]);
@@ -407,6 +412,10 @@ test("saves checkpoints, resources, relations and sessions as real server writes
   await dialog.getByLabel("当前进展", { exact: true }).fill("确认范围后继续参数对比");
   await dialog.getByLabel("下一步 · 每行一项", { exact: true }).fill("跑一轮固定参数评测\n准备回滚清单");
   await dialog.getByRole("button", { name: rx("保存") }).click();
+  // Wait for the dialog to unmount before asserting on what it wrote. While the
+  // modal is still mounted its own field value also matches the text, and a
+  // lingering mask swallows the next click.
+  await expect(page.locator(".ant-modal-wrap")).toHaveCount(0);
   await expect(page.getByText("确认范围后继续参数对比", { exact: true }).first()).toBeVisible();
   expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/checkpoints");
   expect(store.contexts[0]!.checkpoint.revision).toBe(4);
@@ -418,6 +427,7 @@ test("saves checkpoints, resources, relations and sessions as real server writes
   await dialog.getByLabel("资源标题", { exact: true }).fill("发布 Runbook");
   await dialog.getByLabel("地址 / 定位", { exact: true }).fill("https://docs.example.invalid/runbook");
   await dialog.getByRole("button", { name: rx("保存") }).click();
+  await expect(page.locator(".ant-modal-wrap")).toHaveCount(0);
   await expect(page.getByRole("button", { name: /发布 Runbook/ })).toBeVisible();
   expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/resources");
 
@@ -428,6 +438,7 @@ test("saves checkpoints, resources, relations and sessions as real server writes
   await page.locator(".ant-select-item-option-content", { hasText: "模型效果 · 对齐与更新" }).click();
   await dialog.getByLabel("满足条件", { exact: true }).fill("短句门禁通过后继续");
   await dialog.getByRole("button", { name: rx("保存") }).click();
+  await expect(page.locator(".ant-modal-wrap")).toHaveCount(0);
   await expect(page.getByText("短句门禁通过后继续", { exact: true })).toBeVisible();
   expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/relations");
 
@@ -437,12 +448,57 @@ test("saves checkpoints, resources, relations and sessions as real server writes
   dialog = page.getByRole("dialog");
   await dialog.getByLabel("主题名称", { exact: true }).fill("发布交接");
   await dialog.getByRole("button", { name: rx("保存") }).click();
+  await expect(page.locator(".ant-modal-wrap")).toHaveCount(0);
   await expect(page.getByText("发布交接", { exact: true })).toBeVisible();
   expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/sessions");
   // The pre-seeded link resolves to its full locator, so the jump carries project_dir.
   await page.getByRole("button", { name: rx("打开对话") }).first().click();
   await expect(page).toHaveURL(/\/chat\/web\/wc-topic-1/);
   await expect(page).toHaveURL(/workspace_dir=%2Fsrv%2Fapp/);
+});
+
+test("edits the title, background and goal in place from the header pencil", async ({ page }) => {
+  const store = await install(page, seededStore());
+  await page.goto("/work-desktop?context=ctx-1");
+
+  // The title is edited through the pencil beside the heading, not a modal: the
+  // heading stays a heading and the stream stays visible while editing.
+  await page.getByRole("button", { name: "编辑标题", exact: true }).click();
+  const input = page.getByRole("textbox", { name: "编辑标题", exact: true });
+  await input.fill("语音服务 · 维护中");
+  await input.press("Enter");
+  await expect(page.getByRole("heading", { name: "语音服务 · 维护中", exact: true })).toBeVisible();
+  expect(store.writes).toContain("PATCH /v1/work-contexts/ctx-1");
+  expect(store.contexts[0]!.title).toBe("语音服务 · 维护中");
+  // No modal was involved.
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  // Background and goal are edited in place in the overview card. A multiline
+  // field commits on Cmd/Ctrl+Enter (plain Enter keeps its newline).
+  await page.getByRole("button", { name: "背景", exact: true }).click();
+  const background = page.getByRole("textbox", { name: "背景", exact: true });
+  await background.fill("共享语音能力维护（已收敛）");
+  await background.press("Control+Enter");
+  await expect(page.getByText("共享语音能力维护（已收敛）", { exact: true })).toBeVisible();
+  expect(store.contexts[0]!.background).toBe("共享语音能力维护（已收敛）");
+});
+
+test("links an existing conversation to the stream without moving it", async ({ page }) => {
+  const store = await install(page, seededStore());
+  await page.goto("/work-desktop?context=ctx-1&tab=conversations");
+
+  await page.getByRole("button", { name: rx("关联已有会话") }).click();
+  const dialog = page.getByRole("dialog");
+  // Only unlinked conversations are offered: the already-linked wc-session-1 is absent.
+  await dialog.getByLabel("选择已有对话", { exact: true }).click();
+  await page.locator(".ant-select-item-option-content", { hasText: "历史排查对话" }).click();
+  // Linking records a reference; it must not delete the original conversation.
+  await dialog.getByRole("button", { name: rx("关联已有会话") }).click();
+
+  await expect(page.locator(".wd-topic-records").getByText("历史排查对话", { exact: true })).toBeVisible();
+  expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/sessions");
+  expect(store.sessions["ctx-1"]!.some((link) => link.session_id === "wc-session-9")).toBe(true);
+  expect(store.writes.some((entry) => entry.startsWith("DELETE"))).toBe(false);
 });
 
 test("surfaces a cross-stream inbox and jumps straight to the resolving tab", async ({ page }) => {

@@ -143,6 +143,27 @@
 .wd-inline-editing { width: 100%; }
 .wd-inline-editing .ant-input, .wd-inline-editing .ant-input-affix-wrapper { width: 100%; }
 .wd-inline-error { color: var(--godex-danger, #cf1322); font-size: 12px; }
+/* Static value + pencil: for fields whose value must keep its own semantics (a
+   heading inside a button is no longer a heading), so only the pencil is clickable. */
+.wd-inline-static { min-width: 0; max-width: 100%; }
+.wd-inline-icon {
+  flex: none;
+  font: inherit;
+  line-height: 1;
+  color: var(--godex-muted);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 4px;
+  cursor: pointer;
+  opacity: 0.55;
+}
+.wd-inline-icon:hover { opacity: 1; color: var(--godex-accent); border-color: var(--godex-border); }
+.wd-inline-icon:disabled { cursor: default; opacity: 0.25; }
+.wd-inline-icon:disabled:hover { color: var(--godex-muted); border-color: transparent; }
+/* Keep the heading and its pencil on one line without letting the pencil drift away. */
+.wd-title-edit { align-items: center; }
+.wd-title-edit .wd-inline-icon { font-size: 15px; }
 
 /* --- resource chip waterfall --- */
 .wd-chips { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px; }

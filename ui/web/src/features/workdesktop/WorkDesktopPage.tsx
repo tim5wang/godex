@@ -53,6 +53,7 @@ import {
 import { InfoHint } from "./workDesktopHints";
 import { AttentionInbox } from "./AttentionInbox";
 import { InlineEdit } from "./workDesktopInline";
+import { LinkSessionPicker } from "./LinkSessionPicker";
 import { ResourceChips } from "./ResourceChips";
 import { TodoBoard } from "./TodoBoard";
 import { WorkChatDock } from "./WorkChatDock";
@@ -62,7 +63,6 @@ import "./workDesktop.css";
 
 type Editor =
   | "create"
-  | "editContext"
   | "checkpoint"
   | "delegate"
   | "session"
@@ -245,8 +245,6 @@ export function WorkDesktopPage() {
         openQuestions: joinLines(selected.checkpoint.open_questions),
         evidenceRefs: joinLines(selected.checkpoint.evidence_refs),
       });
-    } else if (kind === "editContext" && selected) {
-      form.setFieldsValue({ title: selected.title, background: selected.background, goal: selected.goal });
     } else if (kind === "fact") {
       form.setFieldsValue({ factKind: "fact" });
     } else if (kind === "resource") {
@@ -436,7 +434,6 @@ export function WorkDesktopPage() {
   function submitEditor(values: EditorValues) {
     switch (editor) {
       case "create": return createMutation.mutate(values);
-      case "editContext": return selected && patchContextMutation.mutate({ id: selected.id, version: selected.version, title: values.title!.trim(), background: values.background?.trim() ?? "", goal: values.goal!.trim() });
       case "checkpoint":
         if (!values.summary?.trim() || !splitLines(values.next).length) { void message.warning(tr("checkBlank")); return; }
         return checkpointMutation.mutate(values);
@@ -530,7 +527,7 @@ export function WorkDesktopPage() {
         <header className="wd-context-header">
           <div className="wd-title-row">
             <Space size={8} align="center" wrap>
-              <Typography.Title level={4} className="wd-title">{selected!.title}</Typography.Title>
+              <InlineEdit className="wd-title-edit" ariaLabel={tr("editTitle")} editIconLabel={tr("editTitle")} value={selected!.title} disabled={readOnly} required render={(value) => <Typography.Title level={4} className="wd-title">{value}</Typography.Title>} onSave={(next) => patchContextMutation.mutateAsync({ id: selected!.id, version: selected!.version, title: next })} />
               <Tag color={statusColor[selected!.status] ?? "default"}>{trLabel("", selected!.status)}</Tag>
               {pendingReview > 0 && <Tag color="gold" icon={<CheckCircleOutlined aria-hidden="true" />}>{tr("pendingCount", { count: pendingReview })}</Tag>}
             </Space>
@@ -539,7 +536,6 @@ export function WorkDesktopPage() {
               <Button size="small" type="primary" icon={<PlayCircleOutlined aria-hidden="true" />} onClick={() => setBriefOpen(true)}>{tr("continueWork")}</Button>
               <Button size="small" icon={<EditOutlined aria-hidden="true" />} disabled={readOnly} onClick={() => openEditor("checkpoint")}>{tr("checkpoint")}</Button>
               <Button size="small" icon={<PlusOutlined aria-hidden="true" />} disabled={readOnly} onClick={() => openEditor("delegate")}>{tr("delegate")}</Button>
-              <Button size="small" icon={<EditOutlined aria-hidden="true" />} disabled={readOnly} onClick={() => openEditor("editContext")}>{tr("editContext")}</Button>
             </Space>
           </div>
           <Typography.Paragraph type="secondary" className="wd-subtitle">{selected!.goal || selected!.background}</Typography.Paragraph>
@@ -631,7 +627,11 @@ export function WorkDesktopPage() {
         <Typography.Text type="secondary">{tr("savedAt")} · {formatTimestamp(checkpoint.created_at) || tr("noItems")}</Typography.Text>
       </Card>
       <div className="wd-overview-grid">
-        <Card size="small" title={<Space><FileTextOutlined aria-hidden="true" />{tr("background")}</Space>}><Typography.Paragraph>{selected!.background || tr("noItems")}</Typography.Paragraph><Typography.Text strong>{tr("goal")}</Typography.Text><Typography.Paragraph>{selected!.goal || tr("noItems")}</Typography.Paragraph></Card>
+        <Card size="small" title={<Space><FileTextOutlined aria-hidden="true" />{tr("background")}</Space>}>
+          <InlineEdit multiline ariaLabel={tr("background")} placeholder={tr("noItems")} value={selected!.background} disabled={readOnly} onSave={(next) => patchContextMutation.mutateAsync({ id: selected!.id, version: selected!.version, background: next })} />
+          <Typography.Text strong>{tr("goal")}</Typography.Text>
+          <InlineEdit multiline ariaLabel={tr("goal")} placeholder={tr("noItems")} value={selected!.goal} disabled={readOnly} onSave={(next) => patchContextMutation.mutateAsync({ id: selected!.id, version: selected!.version, goal: next })} />
+        </Card>
         <Card size="small" title={<Space><CheckCircleOutlined aria-hidden="true" />{tr("completed")}</Space>}>{bullets("", checkpoint.completed)}</Card>
       </div>
       <div className="wd-overview-grid">
@@ -705,7 +705,10 @@ export function WorkDesktopPage() {
     return <div className="wd-stack">
       <div className="wd-inline-head">
         <Space size={6} align="center"><CommentOutlined aria-hidden="true" /><Typography.Text strong>{tr("conversations")}</Typography.Text><InfoHint title={tr("showHint")} text={tr("topicHint")} /></Space>
-        <Button size="small" type="primary" icon={<PlusOutlined aria-hidden="true" />} disabled={readOnly} onClick={() => openEditor("session")}>{tr("newSession")}</Button>
+        <Space size={6} wrap>
+          <LinkSessionPicker contextId={contextId!} linkedIds={sessions.map((item) => item.session_id)} disabled={readOnly} onLinked={invalidateDetail} />
+          <Button size="small" type="primary" icon={<PlusOutlined aria-hidden="true" />} disabled={readOnly} onClick={() => openEditor("session")}>{tr("newSession")}</Button>
+        </Space>
       </div>
       {sessions.length ? <div className="wd-topic-records">{sessions.map((link) => <Card key={link.id} size="small" title={link.topic || tr("topicName")} extra={<Typography.Text type="secondary">{formatTimestamp(link.created_at)}</Typography.Text>}>
         <div className="wd-muted wd-wrap">{link.session_id}</div>
@@ -802,7 +805,6 @@ export function WorkDesktopPage() {
 
   function editorModal() {
     const title = editor === "create" ? tr("newContext")
-      : editor === "editContext" ? tr("editContext")
       : editor === "checkpoint" ? tr("checkpoint")
       : editor === "delegate" ? tr("delegate")
       : editor === "session" ? tr("newSession")
@@ -818,12 +820,6 @@ export function WorkDesktopPage() {
           <Form.Item label={tr("contextName")} name="title" rules={[{ ...nonBlank, message: tr("required") }]}><Input maxLength={160} autoFocus /></Form.Item>
           <Form.Item label={tr("background")} name="background"><Input.TextArea rows={3} maxLength={4000} /></Form.Item>
           <Form.Item label={tr("goal")} name="goal" rules={[{ ...nonBlank, message: tr("required") }]}><Input.TextArea rows={2} maxLength={2000} /></Form.Item>
-        </>}
-        {editor === "editContext" && <>
-          <Form.Item label={tr("contextName")} name="title" rules={[{ ...nonBlank, message: tr("required") }]}><Input maxLength={160} autoFocus /></Form.Item>
-          <Form.Item label={tr("background")} name="background"><Input.TextArea rows={3} maxLength={4000} /></Form.Item>
-          <Form.Item label={tr("goal")} name="goal" rules={[{ ...nonBlank, message: tr("required") }]}><Input.TextArea rows={2} maxLength={2000} /></Form.Item>
-          <Typography.Text type="secondary">{tr("revision", { revision: selected?.checkpoint.revision ?? 0 })}</Typography.Text>
         </>}
         {editor === "checkpoint" && <>
           <Form.Item name="summary" label={tr("checkpointSummary")} rules={[{ ...nonBlank, message: tr("required") }]}><Input.TextArea rows={3} maxLength={4000} /></Form.Item>

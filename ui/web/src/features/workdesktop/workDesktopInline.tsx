@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Input, Select, Spin } from "antd";
+import { EditOutlined } from "@ant-design/icons";
 
 /**
  * InlineEdit is the shared in-place editing primitive for the work desktop.
@@ -23,8 +24,14 @@ export function InlineEdit(props: {
   onSave: (next: string) => Promise<unknown> | unknown;
   /** When true, an empty value cannot be saved (reverts instead). */
   required?: boolean;
+  /**
+   * When set, the value becomes static and this label is put on the pencil button
+   * that edits it. Used where the value must keep its own role — a heading inside
+   * a button would stop being a heading — but still wants the one-click affordance.
+   */
+  editIconLabel?: string;
 }) {
-  const { value, ariaLabel, placeholder, multiline, disabled, className, render, onSave, required } = props;
+  const { value, ariaLabel, placeholder, multiline, disabled, className, render, onSave, required, editIconLabel } = props;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   const [saving, setSaving] = useState(false);
@@ -72,6 +79,24 @@ export function InlineEdit(props: {
   };
 
   if (!editing) {
+    const valueNode = render ? render(value) : (value || <span className="wd-muted">{placeholder}</span>);
+    if (editIconLabel) {
+      return (
+        <span className={`wd-inline ${className ?? ""}`}>
+          <span className="wd-inline-static">{valueNode}</span>
+          <button
+            type="button"
+            className="wd-inline-icon"
+            aria-label={editIconLabel}
+            title={editIconLabel}
+            disabled={disabled}
+            onClick={() => !disabled && setEditing(true)}
+          >
+            <EditOutlined aria-hidden="true" />
+          </button>
+        </span>
+      );
+    }
     return (
       <span className={`wd-inline ${className ?? ""}`}>
         <button
@@ -81,7 +106,7 @@ export function InlineEdit(props: {
           disabled={disabled}
           onClick={() => !disabled && setEditing(true)}
         >
-          {render ? render(value) : (value || <span className="wd-muted">{placeholder}</span>)}
+          {valueNode}
         </button>
       </span>
     );

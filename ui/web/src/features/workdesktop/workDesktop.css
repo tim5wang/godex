@@ -3,6 +3,49 @@
   max-width: 1900px;
   margin: 0 auto;
   color: var(--godex-text);
+  /* The route uses the chat shell, which bounds the shell to the viewport. So the
+     desktop scrolls inside the content area instead of scrolling the document:
+     the app nav and header stay put while the page content scrolls. */
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Above 1024px the columns scroll independently and the embedded chat fills the
+   centre column, so its composer sits at the bottom of the viewport instead of
+   below the fold. Narrower widths keep the single page-level scroll above. */
+@media (min-width: 1024px) {
+  .wd-page { overflow: hidden; }
+  /* align-items:start (the base rule) sizes grid items to their content, so the
+     centre column would never fill the viewport and the chat could not reach the
+     bottom. Stretch + a 1fr row is what makes "fill the remaining height" work. */
+  .wd-layout { flex: 1; min-height: 0; overflow: hidden; align-items: stretch; grid-template-rows: minmax(0, 1fr); }
+  .wd-streams { position: static; overflow-y: auto; }
+  .wd-sidebar { overflow-y: auto; }
+  .wd-main { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  /* Fill the tab area: tab bar fixed, pane scrolls. Without this the chat dock
+     only ever gets its own guessed height and pushes its composer out of view. */
+  .wd-main > .ant-tabs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .wd-main > .ant-tabs > .ant-tabs-nav { flex: 0 0 auto; margin-bottom: 0; }
+  .wd-main > .ant-tabs > .ant-tabs-content-holder { flex: 1; min-height: 0; }
+  .wd-main > .ant-tabs .ant-tabs-content,
+  .wd-main > .ant-tabs .ant-tabs-tabpane { height: 100%; min-height: 0; }
+  .wd-main > .ant-tabs .ant-tabs-tabpane { overflow-y: auto; }
+  /* The chat/files panes own their scrolling, so their pane must not scroll too. */
+  .wd-main > .ant-tabs .ant-tabs-tabpane:has(> .wd-chat-view),
+  .wd-main > .ant-tabs .ant-tabs-tabpane:has(> .wd-files-view) { overflow: hidden; }
+  .wd-chat-view, .wd-files-view { height: 100%; min-height: 0; display: flex; flex-direction: column; }
+  .wd-chat-view .wd-chat-dock { height: auto; flex: 1 1 auto; min-height: 0; }
+  .wd-files-view > * { flex: 1 1 auto; min-height: 0; }
+}
+
+/* 1024-1350 is the two-column branch: the sidebar wraps under the centre, so pin
+   the centre row to the remaining height and cap the wrapped sidebar. */
+@media (min-width: 1024px) and (max-width: 1350px) {
+  .wd-layout { grid-template-rows: minmax(0, 1fr) auto; }
+  .wd-sidebar { max-height: 42vh; }
 }
 
 /* .wd-store is the persistent "personal SQLite store" banner; it replaced the old
@@ -14,7 +57,6 @@
 .wd-notice { margin-bottom: 10px; }
 .wd-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .wd-title-row .wd-title { margin: 0; overflow-wrap: anywhere; }
-.wd-subtitle { margin: 2px 0 0; }
 /* .wd-inline-head is the compact header each tab uses instead of a full-width
    Alert: icon + title + a hover info hint on the left, actions on the right. */
 .wd-inline-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
@@ -24,7 +66,12 @@
    navigating to the Chat / Files pages. */
 .wd-chat-view, .wd-files-view { min-width: 0; }
 .wd-chat-dock { display: flex; flex-direction: column; border: 1px solid var(--godex-border); border-radius: 8px; background: var(--godex-panel); min-height: 420px; height: min(72vh, 760px); }
-.wd-chat-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--godex-border); }
+.wd-chat-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--godex-border); flex-wrap: wrap; row-gap: 4px; }
+/* The status line is a dense row: the session id, model and state must not push
+   the context badge off-screen, so each truncates instead of wrapping. */
+.wd-chat-id { font-size: 13px; font-weight: 600; font-family: var(--godex-mono, ui-monospace, monospace); }
+.wd-chat-model { font-size: 12px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wd-chat-status { font-size: 12px; white-space: nowrap; }
 .wd-chat-feed { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 .wd-chat-feed .chat-feed-v2-scrollport { flex: 1; min-height: 0; }
 .wd-chat-empty { min-height: 220px; gap: 12px; }
@@ -154,8 +201,6 @@
 .wd-inline-rich .wd-inline-icon { margin-top: 2px; }
 .wd-inline-rich .markdown-body p { margin: 0 0 0.4rem; }
 .wd-inline-rich .markdown-body p:last-child { margin-bottom: 0; }
-/* The header subtitle keeps the muted, secondary look it had as a Paragraph. */
-.wd-subtitle.wd-inline-rich .wd-inline-static { color: var(--godex-muted); }
 .wd-inline-list li { line-height: 1.6; overflow-wrap: anywhere; }
 .wd-inline .wd-inline-list { display: block; }
 /* Static value + pencil: for fields whose value must keep its own semantics (a
@@ -273,3 +318,8 @@
 .wd-attention-main strong { overflow-wrap: anywhere; }
 .wd-attention-due { white-space: nowrap; }
 .wd-attention-item .wd-muted { font-size: 12px; }
+/* In the right column the inbox is narrow, so rows wrap instead of squeezing the
+   title flat, and the redundant "open" link is dropped (the row itself opens it). */
+.wd-sidebar .wd-attention { margin-bottom: 0; }
+.wd-sidebar .wd-attention-item { flex-wrap: wrap; row-gap: 2px; }
+.wd-sidebar .wd-attention-item .ant-btn-link { padding: 0; height: auto; }

@@ -86,6 +86,11 @@ export const builtinApps: BuiltinAppEntry[] = [
     load: loadWorkDesktopPage,
     component: pageComponent(loadWorkDesktopPage, "WorkDesktopPage"),
     isActive: (pathname) => pathname === "/work-desktop",
+    // chat-shell bounds the page to the viewport instead of letting the whole page
+    // scroll. The desktop embeds a real chat (WorkChatDock); without this the
+    // composer was pushed below the fold by page-level scrolling. This is the same
+    // shell the Chat page uses.
+    shellClassName: "chat-shell",
     // No shell header: the desktop owns its whole viewport (the generic
     // title/subtitle bar wasted vertical space). An empty headerTitleKey plus no
     // subtitle hides the header on large screens; the explanation moved into an

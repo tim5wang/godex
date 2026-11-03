@@ -1,4 +1,4 @@
-import { Badge, Button, Card, Space, Tag, Typography } from "antd";
+import { Badge, Button, Card, Segmented, Space, Tag, Typography } from "antd";
 import { ThunderboltOutlined } from "@ant-design/icons";
 import { useI18n } from "../../i18n";
 import { InfoHint } from "./workDesktopHints";
@@ -18,8 +18,11 @@ export function AttentionInbox(props: {
   items: AttentionItem[];
   loading: boolean;
   onOpen: (contextId: string, tab: string) => void;
+  /** Which streams the list covers: everything, or only the open desktop. */
+  scope: "current" | "all";
+  onScopeChange: (scope: "current" | "all") => void;
 }) {
-  const { items, loading, onOpen } = props;
+  const { items, loading, onOpen, scope, onScopeChange } = props;
   const { t } = useI18n();
   const tr = (key: string, vars?: Record<string, string | number>) => t(`workDesktop.${key}`, vars);
 
@@ -50,6 +53,18 @@ export function AttentionInbox(props: {
           {!loading && items.length ? <Badge count={items.length} size="small" /> : null}
           <InfoHint title={tr("showHint")} text={tr("attentionHint")} />
         </Space>
+      }
+      extra={
+        <Segmented
+          size="small"
+          aria-label={tr("attentionScope")}
+          value={scope}
+          onChange={(value) => onScopeChange(value as "current" | "all")}
+          options={[
+            { value: "current", label: tr("attentionScopeCurrent") },
+            { value: "all", label: tr("attentionScopeAll") },
+          ]}
+        />
       }
     >
       {items.length === 0 ? (

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, App as AntApp, Badge, Button, Card, Drawer, Empty, Form, Input, Modal, Select, Space, Spin, Tabs, Tag, Timeline, Tooltip, Typography } from "antd";
-import { ApartmentOutlined, ArrowRightOutlined, CheckCircleOutlined, ClockCircleOutlined, CodeOutlined, CommentOutlined, FileTextOutlined, FolderOutlined, LinkOutlined, MessageOutlined, PlayCircleOutlined, PlusOutlined, ProfileOutlined, SearchOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { ApartmentOutlined, ArrowRightOutlined, CheckCircleOutlined, ClockCircleOutlined, CodeOutlined, CommentOutlined, DesktopOutlined, FileTextOutlined, FolderOutlined, LinkOutlined, MessageOutlined, PlayCircleOutlined, PlusOutlined, ProfileOutlined, SearchOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { useI18n } from "../../i18n";
 import { useSettingsStore } from "../../store/settings";
 import { useNodeContextStore } from "../../store/nodeContext";
@@ -112,6 +112,9 @@ const cardStatusColor: Record<string, string> = { backlog: "default", todo: "blu
 const factStatusColor: Record<string, string> = { candidate: "gold", confirmed: "green", stale: "orange", superseded: "default", rejected: "default" };
 const nonBlank = { required: true, whitespace: true };
 const tabs = ["overview", "plan", "chat", "conversations", "tasks", "knowledge", "files", "timeline"] as const;
+// The attention inbox is cross-stream by design; the switch narrows it to the
+// desktop currently open, which is what you want once you have picked one to work on.
+type AttentionScope = "current" | "all";
 const resourceKinds = ["web", "directory", "repository", "note", "document", "dashboard", "service", "model", "artifact"];
 
 export function WorkDesktopPage() {
@@ -126,6 +129,7 @@ export function WorkDesktopPage() {
   const [recallQuery, setRecallQuery] = useState("");
   const [recallScope, setRecallScope] = useState<RecallScope>("current");
   const [briefOpen, setBriefOpen] = useState(false);
+  const [attentionScope, setAttentionScope] = useState<AttentionScope>("all");
   const [editor, setEditor] = useState<Editor>();
   const [reviewTarget, setReviewTarget] = useState<WorkFact>();
   const [form] = Form.useForm<EditorValues>();
@@ -155,6 +159,7 @@ export function WorkDesktopPage() {
   const contexts = contextsQuery.data ?? [];
   const requestedId = params.get("context") ?? undefined;
   const requestedTab = params.get("tab") ?? "overview";
+  const requestedSession = params.get("session") ?? "";
   const tab = (tabs as readonly string[]).includes(requestedTab) ? requestedTab : "overview";
   // An unknown id must not silently fall through to "the first stream" without saying so;
   // the mismatch is surfaced and the stale query parameter is dropped (below).
@@ -443,6 +448,14 @@ export function WorkDesktopPage() {
     }
   }
 
+  // openSessionInDesktop keeps the conversation inside the desktop (the chat tab),
+  // where the Agent's work_context binding stays visible. openSession below is the
+  // escape hatch to the full Chat page.
+  function openSessionInDesktop(sessionId: string) {
+    setParams({ context: contextId!, tab: "chat", session: sessionId });
+    setBriefOpen(false);
+  }
+
   async function openSession(sessionId: string) {
     try {
       const sessions = await listSessions(token || null);
@@ -477,11 +490,16 @@ export function WorkDesktopPage() {
   const lastSeenAt = focusQuery.data?.last_seen_at ?? "";
   const attentionItems = attentionQuery.data?.items ?? [];
   const unreadByContext = attentionQuery.data?.unread ?? {};
+  const scopedAttention = attentionScope === "all" ? attentionItems : attentionItems.filter((item) => item.context_id === contextId);
   const pendingReview = delegationsNeedingReview(delegations);
   // The chat dock and file browser reuse the stream's linked session and its
   // project directory, so opening either one keeps the working context instead
   // of navigating away to the Chat or Files page.
-  const chatSessionId = sessions[0]?.session_id ?? "";
+  // The linked session the chat tab shows. It is a URL parameter so "open in the
+  // desktop" can target a SPECIFIC topic conversation instead of always the first.
+  const chatSessionId = sessions.some((item) => item.session_id === requestedSession)
+    ? requestedSession
+    : sessions[0]?.session_id ?? "";
   const filesRoot = useMemo(
     () => contextResources.find((resource) => resource.kind === "directory" && resource.locator.trim())?.locator.trim() ?? "",
     [contextResources],
@@ -519,7 +537,6 @@ export function WorkDesktopPage() {
         <Button block icon={<PlusOutlined aria-hidden="true" />} onClick={() => openEditor("create")}>{tr("newContext")}</Button>
       </aside>
       <main className="wd-main">
-        <AttentionInbox items={attentionItems} loading={attentionQuery.isLoading} onOpen={selectContextTab} />
         <header className="wd-context-header">
           <div className="wd-title-row">
             <Space size={8} align="center" wrap>
@@ -533,14 +550,7 @@ export function WorkDesktopPage() {
               <Button size="small" icon={<PlusOutlined aria-hidden="true" />} disabled={readOnly} onClick={() => openEditor("delegate")}>{tr("delegate")}</Button>
             </Space>
           </div>
-          <InlineEdit className="wd-subtitle" rich ariaLabel={tr("goal")} editIconLabel={tr("editGoal")} placeholder={tr("noItems")} value={selected!.goal} disabled={readOnly} onSave={(next) => patchContextMutation.mutateAsync({ id: selected!.id, version: selected!.version, goal: next })} />
         </header>
-        <div className="wd-stat-row">
-          <span><FolderOutlined aria-hidden="true" /> {tr("resourcesCount", { count: contextResources.length })}</span>
-          <span><CommentOutlined aria-hidden="true" /> {tr("sessionsCount", { count: sessions.length })}</span>
-          <span><ProfileOutlined aria-hidden="true" /> {tr("tasksCount", { count: delegations.length })}</span>
-          <span><ClockCircleOutlined aria-hidden="true" /> {tr("savedAt")} · {formatTimestamp(selected!.checkpoint.created_at) || tr("noItems")}</span>
-        </div>
         {readOnly && <Alert className="wd-notice" type="warning" showIcon title={tr("readOnly")} />}
         {detailQuery.isError && <Alert className="wd-notice" type="error" showIcon title={tr("loadFailed")} action={<Button size="small" onClick={() => void detailQuery.refetch()}>{tr("retry")}</Button>} />}
         <Tabs activeKey={tab} onChange={(key) => setParams({ context: selected!.id, tab: key })} items={[
@@ -555,6 +565,7 @@ export function WorkDesktopPage() {
         ]} />
       </main>
       <aside className="wd-sidebar" aria-label={tr("resourcesTitle")}>
+        <AttentionInbox items={scopedAttention} loading={attentionQuery.isLoading} onOpen={selectContextTab} scope={attentionScope} onScopeChange={setAttentionScope} />
         <Card size="small" title={<Space size={6}><LinkOutlined aria-hidden="true" />{tr("resourcesTitle")}<InfoHint title={tr("showHint")} text={tr("resourceHint")} /></Space>} extra={<Button size="small" type="link" disabled={readOnly} onClick={() => openEditor("resource")}>{tr("addResource")}</Button>}>
           <ResourceChips
             resources={contextResources}
@@ -614,22 +625,33 @@ export function WorkDesktopPage() {
   }
 
   // overviewView renders the stream's overview through OverviewPanel, whose every
-  // value is edited in place (that is what retired the checkpoint modal).
+  // value is edited in place (that is what retired the checkpoint modal). The
+  // at-a-glance counts live here rather than in the fixed header: they describe the
+  // stream, not where you are in it, and the header must stay short so the embedded
+  // chat's composer fits on screen.
   function overviewView() {
-    return <OverviewPanel
-      background={selected!.background}
-      goal={selected!.goal}
-      checkpoint={selected!.checkpoint}
-      events={events}
-      focusChanges={focusChanges}
-      lastSeenAt={lastSeenAt}
-      readOnly={readOnly}
-      markSeenPending={markSeenMutation.isPending}
-      onMarkSeen={() => markSeenMutation.mutate()}
-      onPatchContext={(patch) => patchContextMutation.mutateAsync({ id: selected!.id, version: selected!.version, ...patch })}
-      onPatchCheckpoint={(patch) => checkpointMutation.mutateAsync(patch)}
-      tr={tr}
-    />;
+    return <div className="wd-stack">
+      <div className="wd-stat-row">
+        <span><FolderOutlined aria-hidden="true" /> {tr("resourcesCount", { count: contextResources.length })}</span>
+        <span><CommentOutlined aria-hidden="true" /> {tr("sessionsCount", { count: sessions.length })}</span>
+        <span><ProfileOutlined aria-hidden="true" /> {tr("tasksCount", { count: delegations.length })}</span>
+        <span><ClockCircleOutlined aria-hidden="true" /> {tr("savedAt")} · {formatTimestamp(selected!.checkpoint.created_at) || tr("noItems")}</span>
+      </div>
+      <OverviewPanel
+        background={selected!.background}
+        goal={selected!.goal}
+        checkpoint={selected!.checkpoint}
+        events={events}
+        focusChanges={focusChanges}
+        lastSeenAt={lastSeenAt}
+        readOnly={readOnly}
+        markSeenPending={markSeenMutation.isPending}
+        onMarkSeen={() => markSeenMutation.mutate()}
+        onPatchContext={(patch) => patchContextMutation.mutateAsync({ id: selected!.id, version: selected!.version, ...patch })}
+        onPatchCheckpoint={(patch) => checkpointMutation.mutateAsync(patch)}
+        tr={tr}
+      />
+    </div>;
   }
 
   // planView is the stream's plan: first-class items with status/owner/due, edited
@@ -684,6 +706,7 @@ export function WorkDesktopPage() {
       {sessions.length ? <div className="wd-topic-records">{sessions.map((link) => <Card key={link.id} size="small" title={<InlineEdit className="wd-title-edit" ariaLabel={tr("topicName")} editIconLabel={tr("editTopic")} value={link.topic} disabled={readOnly} required render={(value) => <span>{value || tr("topicName")}</span>} onSave={(next) => topicMutation.mutateAsync({ sessionId: link.session_id, topic: next })} />} extra={<Typography.Text type="secondary">{formatTimestamp(link.created_at)}</Typography.Text>}>
         <div className="wd-muted wd-wrap">{link.session_id}</div>
         <Space wrap style={{ marginTop: 12 }}>
+          <Button size="small" icon={<DesktopOutlined aria-hidden="true" />} onClick={() => openSessionInDesktop(link.session_id)}>{tr("openInDesktop")}</Button>
           <Button size="small" icon={<CommentOutlined aria-hidden="true" />} onClick={() => void openSession(link.session_id)}>{tr("openChat")}</Button>
           {!readOnly && <Button size="small" danger onClick={() => { if (window.confirm(tr("unlinkConfirm"))) unlinkSessionMutation.mutate(link.session_id); }}>{tr("unlinkSession")}</Button>}
         </Space>

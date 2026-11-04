@@ -116,6 +116,9 @@
 .wd-recall-tools { display: grid; grid-template-columns: minmax(0, 1fr) 200px; gap: 12px; }
 .wd-knowledge .ant-card-head-title { white-space: normal; padding: 10px 0; overflow-wrap: anywhere; }
 .wd-knowledge .ant-card-head-wrapper { gap: 8px; }
+/* A folded knowledge entry is one click from its full text; keep the toggle flush
+   with the body so an expanded entry does not look like it has a stray footer. */
+.wd-knowledge-toggle { padding: 0; height: auto; }
 .wd-wrap { overflow-wrap: anywhere; word-break: break-word; }
 .wd-mobile-switch { display: none; }
 .wd-page button:focus-visible { outline: 2px solid var(--godex-accent); outline-offset: 3px; }

@@ -54,6 +54,7 @@ import {
 import { MarkdownContent } from "../../components/MarkdownContent";
 import { InfoHint } from "./workDesktopHints";
 import { AttentionInbox } from "./AttentionInbox";
+import { KnowledgeCard } from "./KnowledgeCard";
 import { InlineEdit } from "./workDesktopInline";
 import { LinkSessionPicker } from "./LinkSessionPicker";
 import { OverviewPanel } from "./OverviewPanel";
@@ -750,24 +751,18 @@ export function WorkDesktopPage() {
         <Input prefix={<SearchOutlined aria-hidden="true" />} aria-label={tr("recallPlaceholder")} placeholder={tr("recallPlaceholder")} value={recallQuery} allowClear onChange={(event) => setRecallQuery(event.target.value)} />
         <Select aria-label={tr("recallScope")} value={recallScope} onChange={setRecallScope} options={[{ value: "current", label: tr("scopeCurrent") }, { value: "related", label: tr("scopeRelated") }, { value: "all", label: tr("scopeAll") }]} />
       </div>
-      {recallResult.isLoading ? <Spin /> : facts.length ? facts.map((fact) => <Card key={fact.id} size="small" className="wd-knowledge" title={<Space wrap><Tag>{trLabel("factKind", fact.kind)}</Tag><span>{fact.title}</span></Space>} extra={<Tag color={factStatusColor[fact.status] ?? "default"}>{trLabel("factStatus", fact.status)}</Tag>}>
-        <MarkdownContent content={fact.content} />
-        <div className="wd-muted">{tr("factScopeLabel")} · {fact.scope || tr("noItems")}</div>
-        <div className="wd-muted">{tr("factObserved")} · {formatTimestamp(fact.observed_at) || tr("noItems")}</div>
-        {fact.verified_at && <div className="wd-muted">{tr("verifiedAt")} · {formatTimestamp(fact.verified_at)}</div>}
-        {fact.source && <div className="wd-muted">{tr("factSource")} · <Typography.Text code className="wd-wrap">{fact.source}</Typography.Text></div>}
-        {fact.source_excerpt && <Typography.Paragraph type="secondary">“{fact.source_excerpt}”</Typography.Paragraph>}
-        {fact.supersedes_id && <div className="wd-muted">{tr("factSupersedes")} · {fact.supersedes_id}</div>}
-        <Space wrap style={{ marginTop: 12 }}>
-          {contexts.find((item) => item.id === fact.context_id) && <Tag>{contexts.find((item) => item.id === fact.context_id)!.title}</Tag>}
-          {fact.status === "candidate" && !readOnly && <>
-            <Button size="small" type="primary" onClick={() => reviewMutation.mutate({ fact, status: "confirmed", version: fact.version })}>{tr("accept")}</Button>
-            <Button size="small" danger onClick={() => { setReviewTarget(fact); openEditor("review"); }}>{tr("dismiss")}</Button>
-          </>}
-          {!fact.memory_candidate_id && fact.status === "confirmed" && !readOnly && <Button size="small" icon={<ThunderboltOutlined aria-hidden="true" />} onClick={() => promoteMutation.mutate(fact)}>{tr("promoteMemory")}</Button>}
-          {fact.memory_candidate_id && <Tag color="purple">{tr("memoryCandidate")}</Tag>}
-        </Space>
-      </Card>) : <Empty description={tr("noFacts")} />}
+      {recallResult.isLoading ? <Spin /> : facts.length ? facts.map((fact) => <KnowledgeCard
+        key={fact.id}
+        fact={fact}
+        contextTitle={contexts.find((item) => item.id === fact.context_id)?.title}
+        statusColor={factStatusColor[fact.status] ?? "default"}
+        readOnly={readOnly}
+        tr={tr}
+        trLabel={trLabel}
+        onAccept={(target) => reviewMutation.mutate({ fact: target, status: "confirmed", version: target.version })}
+        onDismiss={(target) => { setReviewTarget(target); openEditor("review"); }}
+        onPromote={(target) => promoteMutation.mutate(target)}
+      />) : <Empty description={tr("noFacts")} />}
     </div>;
   }
 

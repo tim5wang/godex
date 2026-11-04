@@ -514,6 +514,23 @@ UI 侧（解决“对话不能滚动 / 顶部标题栏无用 / 交互割裂 / �
 - `playwright work-desktop` **三端 37 passed / 8 skipped / 0 failed**。
 - 无后端改动，故不重建二进制、不重启服务；仅重建前端产物并只读核验。
 
+### WD3.14 知识与回忆渲染可读性（2026-11-03）
+
+背景：知识/回忆是工作桌面里信息密度最高的地方（长文本、列表、带换行的标题与证据摘录），却是最不可读的一块。分三件事修，每件都有可复现的根因。
+
+- **一、Markdown 不渲染**。`fact.content` 以前走 `MarkdownContent`，但它默认走「看起来像 markdown 才渲染」的启发式——那套启发式的存在理由是**不让工具偶发输出里的 `*` / `_` / 路径被 markdown 误伤**，而**知识条目是人工/有意撰写的文本**（标题、列表本来就是想渲染的）。所以知识条目改用 `forceMarkdown`。这是个语义修正：同一个组件，两种来源，用不同策略。
+- **二、换行丢失（两个字段）**。① 卡片**标题**：`.wd-knowledge .ant-card-head-title { white-space: normal }` 会把标题里的换行**压成一行**，于是带换行的标题变成一句连读的乱句。② **来源证据** `source_excerpt`：原先走 `Typography.Paragraph`，而 Paragraph 默认 `white-space: normal`，同样压掉换行。两处都改成 `pre-wrap` + `break-words`——证据摘录常是从日志/报告里引的，**引文的原始版式本身就是证据**，不能压。
+- **三、长条目折叠**。知识条目字数很多，一屏铺满全文就没法扫。抽出 `KnowledgeCard` 组件（页面已 863/900 行，必须外移），按**行**折叠（`PREVIEW_LINES = 4`），默认只显示开头几行，一次点击展开。折叠一并隐藏 `适用范围/观测时间/来源/证据/替代关系` 这些细节——折叠态就是要简明扼要。
+- **一个实现取舍**：折叠用**按行切片**而不是 CSS `-webkit-line-clamp`。行切片在**渲染前**就决定了内容和 DOM 规模（e2e 能断言列表项数），而且行分割对 markdown 块结构是可预期的；clamp 只是视觉裁剪，DOM 里全长文本仍在，也断不了「到底藏了几行」。
+- **e2e 对准能真失败的断言**：① 折叠态 `li` 数 = 3、展开后 = 5（**断言元素数而非「卡片存在」**，否则折叠被删掉也照样通过）② `h1` 文本 = 根因分析（证明真走了 markdown）③ 标题与证据的 `white-space` 计算值是 `pre-wrap`（**只能比计算样式**：`textContent` 两种情况下都保留 `\n`，只有 `white-space` 能区分「保留」与「塔陷成一行」）④ 能折回去。
+
+验证（2026-11-03）：
+
+- 前端：`pnpm typecheck` 通过；`vitest run` 49 文件 / 492 通过；i18n 中英对齐通过（新增 `expand`/`collapse` 两键）。
+- `playwright work-desktop` **三端 40 passed / 8 skipped / 0 failed**（新增用例 1 条，全项目跑）。
+- arch 门禁两个失败已实测为**既有基线**（`ChatPageView.tsx` 在 HEAD 就是 920 行；`routes_account.go` 本次未触碰）。
+- 无后端改动，故不重建二进制、不重启服务；仅重建前端产物并只读核验。
+
 ### 11.5 后续实现门禁
 
 - 后端：SQLite migrations/reopen/version CAS、同事务事件、租户与来源鉴权、依赖环、幂等补偿、来源删除、事实时间范围；使用实际 modernc SQLite，不只 mock。

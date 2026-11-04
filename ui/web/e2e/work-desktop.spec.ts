@@ -717,6 +717,53 @@ test("recalls facts by scope, reviews a candidate and submits a memory candidate
   expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/facts/fact-1/memory-candidate");
 });
 
+test("renders knowledge as markdown, keeps line breaks and folds long entries", async ({ page }) => {
+  const store = await install(page, seededStore());
+  // A long entry: a heading plus a list, longer than the fold threshold. The handle
+  // is a newline-separated title and a newline-separated excerpt, both of which used
+  // to collapse into one run-on line (the card head is `white-space: normal`, and the
+  // excerpt rendered through a Paragraph that does the same).
+  const body = ["# 根因分析", "- 固定解码参数", "- 单变量对比", "- 复核短句集合", "- 检查后处理", "- 复跑 r12 基线"].join("\n");
+  store.facts[0]!.content = body;
+  store.facts[0]!.title = "退化可能来自解码参数\n（待复核）";
+  store.facts[0]!.source_excerpt = "9.1% → 10.2%\n短句 8.4% → 9.6%";
+  await page.goto("/work-desktop?context=ctx-1&tab=knowledge");
+
+  const card = page.locator(".wd-knowledge").first();
+  await expect(card).toBeVisible();
+
+  // (1) Folded: only the opening lines are shown, and the tail is not rendered.
+  //     Asserting the ITEM COUNT (not "the card exists") is what makes this fail if
+  //     the fold is dropped and the whole entry renders at once.
+  await expect(card.locator("li")).toHaveCount(3);
+  await expect(card.getByText("复跑 r12 基线", { exact: true })).toHaveCount(0);
+  // A folded entry shows the headline only: the details are part of the fold.
+  await expect(card.getByText("适用范围", { exact: false })).toHaveCount(0);
+
+  // (2) Markdown actually renders (the heading becomes a heading element).
+  await expect(card.locator("h1")).toHaveText("根因分析");
+
+  // (3) Expand reveals the rest and brings back the details.
+  await card.getByRole("button", { name: "展开全部" }).click();
+  await expect(card.locator("li")).toHaveCount(5);
+  await expect(card.getByText("复跑 r12 基线", { exact: true })).toBeVisible();
+  await expect(card.getByText("适用范围", { exact: false })).toBeVisible();
+
+  // (4) Line breaks survive in the title and the evidence excerpt. Compared as
+  //     computed style: textContent keeps the \n either way, so only white-space
+  //     distinguishes "preserved" from "collapsed into one line".
+  const titleWrap = card.locator(".ant-card-head-title .whitespace-pre-wrap").first();
+  await expect(titleWrap).toHaveCSS("white-space", "pre-wrap");
+  const excerpt = card.locator(".ant-typography.whitespace-pre-wrap").first();
+  await expect(excerpt).toHaveCSS("white-space", "pre-wrap");
+  await expect(excerpt).toContainText("短句 8.4% → 9.6%");
+
+  // (5) And it folds back.
+  await card.getByRole("button", { name: "收起" }).click();
+  await expect(card.locator("li")).toHaveCount(3);
+  await expect(card.getByRole("button", { name: "展开全部" })).toBeVisible();
+});
+
 test("delegates to a real card without auto-running it, then executes and reviews on demand", async ({ page }, info) => {
   test.skip((page.viewportSize()?.width ?? 0) < 1024);
   const store = await install(page, seededStore());

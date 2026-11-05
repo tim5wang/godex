@@ -151,6 +151,12 @@ export function useChatLayoutState() {
   const v2LeftCollapsed = useConversationLayoutStore((s) => s.leftCollapsed);
   const v2RightCollapsed = useConversationLayoutStore((s) => s.rightCollapsed);
   const v2ActiveDockTab = useConversationLayoutStore((s) => s.activeDockTab);
+  // Which list the left rail shows: the conversation directory, or the work
+  // desktop. Like the rest of the chat layout state it lives for the session
+  // (the store's localStorage helpers are not wired up at runtime), so the view
+  // resets to the directory on reload.
+  const v2LeftView = useConversationLayoutStore((s) => s.leftView);
+  const v2SetLeftView = useConversationLayoutStore((s) => s.setLeftView);
   const v2LeftWidth = useConversationLayoutStore((s) => s.leftWidth);
   const v2RightWidth = useConversationLayoutStore((s) => s.rightWidth);
   const v2ToggleLeft = useConversationLayoutStore((s) => s.toggleLeft);
@@ -368,6 +374,8 @@ export function useChatLayoutState() {
     v2LeftCollapsed,
     v2RightCollapsed,
     v2ActiveDockTab,
+    v2LeftView,
+    v2SetLeftView,
     v2LeftWidth,
     v2RightWidth,
     v2ToggleLeft,

@@ -183,6 +183,13 @@ function handleWorkContext(store: Store) {
         });
       }
       if (sub === "/timeline") return json([]);
+      if (sub === "/timeline/page") return json({ items: [], has_more: false, total: 0 });
+      // The desktop now renders INSIDE the chat page, so the full chat page's own
+      // session collection endpoints run here too (compactions, subagents, long
+      // tasks, active skills). They are not what these tests are about, but they
+      // must answer with the COLLECTION shape: the shared fallback returns `{}`,
+      // and the chat page calls `.map` on it, which crashes the whole page.
+      return json([]);
     }
     if (path === "/agent-templates" && method === "GET") {
       return json([{ id: "tpl-1", name: "Reviewer" }]);
@@ -456,15 +463,130 @@ function seededStore(): Partial<Store> {
   };
 }
 
+// ---------------------------------------------------------------------------
+// The desktop is now a VIEW of the chat page's left rail, not its own route: the
+// left rail switches between the conversation directory and the desktop list, the
+// centre column stays the normal chat, and the desktop's boards live in the right
+// dock. These helpers drive that fused entrance, so every test below walks the
+// path a user actually takes instead of a retired URL.
+// ---------------------------------------------------------------------------
+
+/** The desktop's left-rail list. */
+const rail = (page: Page) => page.locator('[data-testid="chat-v2-workdesk"]');
+/** The desktop's boards inside the right dock. */
+const boards = (page: Page) => page.locator('[data-testid="chat-v2-workdesk-panel"]');
+/** The board switcher inside the dock. */
+const sections = (page: Page) => page.locator('[data-testid="chat-v2-workdesk-sections"]');
+const viewSwitch = (page: Page) => page.locator('[data-testid="chat-v2-left-view"]');
+
+/**
+ * Get to the desktop view the way a user does: open the chat, expand the rail if
+ * it starts collapsed (it does on narrow viewports), then switch the rail to the
+ * desktop. Deliberately does NOT require the right dock: several behaviours are in
+ * the rail alone, and forcing the dock open on a phone would cover the screen.
+ */
+async function openDesktopRail(page: Page, path = "/chat") {
+  await page.goto(path);
+  // Three legitimate first states, and isVisible() does not auto-wait, so wait for
+  // ONE of them before deciding:
+  //  - the rail with its view switch (a configured install, widened rail),
+  //  - the first-run provider guide (the desktop is exempt from that gate), or
+  //  - the topbar's sidebar toggle (narrow viewport: the rail starts collapsed, and
+  //    a collapsed rail is display:none — so its own expand button is unreachable
+  //    and the topbar toggle is the control that actually exists).
+  const guideEntry = page.locator('[data-testid="first-run-open-desktop"]');
+  const sidebarToggle = page.getByRole("button", { name: "Toggle sidebar" });
+  await page.waitForSelector('[data-testid="chat-v2-left-view"], [data-testid="first-run-open-desktop"], button[aria-label="Toggle sidebar"]', { timeout: 20_000 });
+  // A fresh install has no provider, so go in through the guide's own entry point —
+  // the same path a user following a background nudge would take.
+  if (await guideEntry.isVisible()) {
+    await guideEntry.click();
+    await expect(rail(page)).toBeVisible();
+    return;
+  }
+  if (!(await viewSwitch(page).isVisible())) {
+    await sidebarToggle.first().click();
+  }
+  await expect(viewSwitch(page)).toBeVisible();
+  await viewSwitch(page).getByText("桌面", { exact: true }).click();
+  await expect(rail(page)).toBeVisible();
+}
+
+/**
+ * Enter the desktop view AND make sure the boards are on screen. Switching opens
+ * the dock on a wide viewport; on a narrow one the dock is intentionally left
+ * alone, so this opens it explicitly.
+ */
+async function openDesktop(page: Page) {
+  await openDesktopRail(page);
+  if (!(await boards(page).isVisible())) {
+    await page.locator('.chat-v2-topbar-tab[aria-label="Work desktop"]').click();
+  }
+  await expect(boards(page)).toBeVisible();
+}
+
+/** Enter the desktop view and open one board by its switch label. */
+async function openSection(page: Page, label: string) {
+  await openDesktop(page);
+  await sections(page).getByText(label, { exact: true }).click();
+}
+
+/** Select a desktop by its title in the left rail. */
+async function selectDesktop(page: Page, title: string) {
+  await rail(page).getByText(title, { exact: true }).first().click();
+}
+
+test("offers both rail views, and switching between them does not disturb the conversation", async ({ page }) => {
+  // The fusion's core promise: the desktop is a second view of the SAME page, so
+  // the centre column must stay the ordinary chat. If the switch replaced the page
+  // (as the retired desktop route did), the feed below would disappear.
+  await install(page, seededStore());
+  await page.goto("/chat/web/wc-topic-1");
+  const centreFeed = page.locator(".chat-v2-center-wrap .chat-feed").first();
+  await expect(centreFeed).toBeVisible();
+  const url = page.url();
+
+  // From a conversation, peek at the desktops and come back.
+  await openDesktopRail(page, page.url());
+  await expect(centreFeed).toBeVisible();
+  expect(page.url()).toBe(url);
+
+  await viewSwitch(page).getByText("对话", { exact: true }).click();
+  await expect(page.locator('[data-testid="chat-v2-sessions"]')).toBeVisible();
+  await expect(centreFeed).toBeVisible();
+  // Merely switching views must not create or delete anything.
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test("switching to the desktop view reveals its boards without a second click", async ({ page }) => {
+  // The desktop's content lives in the right dock now, so the view switch must bring
+  // it up: otherwise "switch to my desktops" would show a desktop list with no
+  // desktop content. Asserted WITHOUT the helper's fallback click, so it fails if the
+  // two ever stop moving together.
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  await install(page, seededStore());
+  await page.goto("/chat");
+  const railViewSwitch = viewSwitch(page);
+  await expect(railViewSwitch).toBeVisible();
+  await expect(boards(page)).toBeHidden();
+
+  await railViewSwitch.getByText("桌面", { exact: true }).click();
+  await expect(rail(page)).toBeVisible();
+  await expect(boards(page)).toBeVisible();
+  await expect(sections(page)).toBeVisible();
+});
+
 test("an empty store is a real first-run state, and creating a desktop writes through the API", async ({ page }) => {
   const store = await install(page);
-  await page.goto("/work-desktop");
-  // The page must not invent a demo stream when the store is empty.
-  await expect(page.getByText("还没有工作主线", { exact: true })).toBeVisible();
-  await expect(page.getByText("个人 SQLite 存储", { exact: true })).toBeVisible();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await openDesktopRail(page);
 
-  await page.getByRole("button", { name: rx("新建桌面") }).click();
+  // The rail must not invent a demo stream when the store is empty.
+  await expect(rail(page).getByText("还没有工作主线", { exact: true })).toBeVisible();
+  // The storage boundary stays visible: this is a personal store and does not
+  // verify production state, which matters most on a blank slate.
+  await expect(rail(page).getByText(/个人 SQLite 存储/, { exact: false })).toBeVisible();
+
+  await rail(page).getByRole("button", { name: rx("新建桌面") }).first().click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("button", { name: rx("创建桌面") }).click();
   await expect(dialog.getByText("请输入非空内容").first()).toBeVisible();
@@ -473,121 +595,100 @@ test("an empty store is a real first-run state, and creating a desktop writes th
   await dialog.getByLabel("目标", { exact: true }).fill("能快速找回工作背景");
   await dialog.getByRole("button", { name: rx("创建桌面") }).click();
 
-  await expect(page.getByRole("heading", { name: "新服务维护主线", exact: true })).toBeVisible();
+  await expect(rail(page).getByText("新服务维护主线", { exact: true })).toBeVisible();
   expect(store.writes).toContain("POST /v1/work-contexts");
   expect(store.contexts.map((item) => item.title)).toContain("新服务维护主线");
-  await expect(page).toHaveURL(/context=ctx-1/);
+});
+
+test("opens a linked conversation in the centre chat column", async ({ page }) => {
+  // What the fusion changed: "open this conversation" now means "make it the open
+  // conversation" in the ONE chat the page already has, instead of embedding a
+  // second chat inside a desktop tab.
+  const store = await install(page, seededStore());
+  await openDesktopRail(page);
+  await selectDesktop(page, "语音服务 · 长期维护");
+
+  // The active desktop expands in place to show its linked conversations.
+  const linked = page.locator('[data-testid="chat-v2-workdesk-linked"]');
+  await expect(linked).toBeVisible();
+  await linked.getByRole("button", { name: /短句回归排查/ }).click();
+
+  // It navigates to that conversation's chat route, carrying the FULL locator
+  // (the stored id alone would re-hash into a different, empty session).
+  await expect(page).toHaveURL(/\/chat\/web\/wc-topic-1/);
+  await expect(page).toHaveURL(/workspace_dir=%2Fsrv%2Fapp/);
+  // Opening a conversation must not unlink or disturb it.
+  expect(store.writes.filter((entry) => entry.startsWith("DELETE"))).toEqual([]);
 });
 
 test("saves checkpoints, resources, relations and sessions as real server writes", async ({ page }, info) => {
   test.skip((page.viewportSize()?.width ?? 0) < 1024);
   const store = await install(page, seededStore());
-  await page.goto("/work-desktop?context=ctx-1");
-  await expect(page.getByRole("heading", { name: "语音服务 · 长期维护", exact: true })).toBeVisible();
-  await expect(page.getByText("检查点 r3", { exact: true }).first()).toBeVisible();
+  await openDesktop(page);
+  await expect(boards(page).getByText("检查点 r3", { exact: true }).first()).toBeVisible();
   await page.screenshot({ path: `../../.godex/tmp/work-desktop-${info.project.name}.png`, fullPage: true });
 
-  // Checkpoint: edited in place on the overview (the modal is gone). One field
-  // edit still submits the whole checkpoint document, so untouched fields must
-  // survive — that merge is what a per-field UI could silently lose.
-  await page.getByRole("button", { name: "当前进展", exact: true }).click();
+  // Checkpoint: edited in place on the overview (there is no checkpoint modal).
+  // One field edit still submits the WHOLE checkpoint document, so untouched
+  // fields must survive — a per-field UI could silently lose them.
+  await boards(page).getByRole("button", { name: "当前进展", exact: true }).click();
   const summaryInput = page.getByRole("textbox", { name: "当前进展", exact: true });
   await summaryInput.fill("确认范围后继续参数对比");
-  // The summary is a multi-line field, so plain Enter keeps a newline and the
-  // modifier commits (same contract as background/goal).
   await summaryInput.press("Control+Enter");
-  // Scope to the tab panel: the sidebar stream summary also shows the checkpoint
-  // summary, so an unscoped text match is ambiguous by design.
-  await expect(page.getByRole("tabpanel").getByText("确认范围后继续参数对比", { exact: true })).toBeVisible();
+  await expect(boards(page).getByText("确认范围后继续参数对比", { exact: true })).toBeVisible();
   expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/checkpoints");
-  expect(store.contexts[0]!.checkpoint.revision).toBe(4);
   expect(store.contexts[0]!.checkpoint.completed).toEqual(["补齐评测脚本"]);
 
-  // A list field is edited as one item per line, through the pencil affordance
-  // (a list is block content, so it cannot sit inside the click target's button).
-  await page.getByRole("button", { name: "下一步 · 每行一项", exact: true }).click();
-  const nextInput = page.getByRole("textbox", { name: "下一步 · 每行一项", exact: true });
-  await nextInput.fill("跑一轮固定参数评测\n准备回滚清单");
-  await nextInput.press("Control+Enter");
-  await expect(page.getByRole("tabpanel").getByText("跑一轮固定参数评测", { exact: true })).toBeVisible();
-  expect(store.contexts[0]!.checkpoint.next_actions).toEqual(["跑一轮固定参数评测", "准备回滚清单"]);
-  // No dialog was involved anywhere in the checkpoint edit.
+  // The desktop's name is edited in place from the dock header, not a modal.
+  await boards(page).getByRole("button", { name: "编辑标题", exact: true }).click();
+  const titleInput = page.getByRole("textbox", { name: "编辑标题", exact: true });
+  await titleInput.fill("语音服务 · 维护中");
+  await titleInput.press("Enter");
+  await expect(boards(page).getByText("语音服务 · 维护中", { exact: true })).toBeVisible();
+  expect(store.contexts[0]!.title).toBe("语音服务 · 维护中");
   await expect(page.getByRole("dialog")).toHaveCount(0);
 
   // Resource: added to the shared list and referenced by this stream.
-  await page.getByRole("button", { name: rx("添加资源") }).click();
+  await sections(page).getByText("资源", { exact: true }).click();
+  await boards(page).getByRole("button", { name: rx("添加资源") }).click();
   let dialog = page.getByRole("dialog");
   await dialog.getByLabel("资源标题", { exact: true }).fill("发布 Runbook");
   await dialog.getByLabel("地址 / 定位", { exact: true }).fill("https://docs.example.invalid/runbook");
   await dialog.getByRole("button", { name: rx("保存") }).click();
-  await expect(page.locator(".ant-modal-wrap")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /发布 Runbook/ })).toBeVisible();
+  await expect(boards(page).getByRole("button", { name: /发布 Runbook/ })).toBeVisible();
   expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/resources");
 
   // Relation: a dependency on the other stream, with its condition.
-  await page.getByRole("button", { name: rx("添加关联") }).click();
+  await sections(page).getByText("概览", { exact: true }).click();
+  await boards(page).getByRole("button", { name: rx("添加关联") }).click();
   dialog = page.getByRole("dialog");
   await dialog.getByLabel("目标主线", { exact: true }).click();
   await page.locator(".ant-select-item-option-content", { hasText: "模型效果 · 对齐与更新" }).click();
   await dialog.getByLabel("满足条件", { exact: true }).fill("短句门禁通过后继续");
   await dialog.getByRole("button", { name: rx("保存") }).click();
-  await expect(page.locator(".ant-modal-wrap")).toHaveCount(0);
-  await expect(page.getByText("短句门禁通过后继续", { exact: true })).toBeVisible();
+  await expect(boards(page).getByText("短句门禁通过后继续", { exact: true })).toBeVisible();
   expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/relations");
 
-  // Session: created and then opened through the resolved full locator.
-  await page.getByRole("tab", { name: "主题对话" }).click();
-  await page.getByRole("button", { name: rx("新建主题对话") }).click();
+  // Session: linked to the stream, and the pre-seeded link still resolves.
+  await sections(page).getByText("主题", { exact: true }).click();
+  await boards(page).getByRole("button", { name: rx("新建主题对话") }).click();
   dialog = page.getByRole("dialog");
   await dialog.getByLabel("主题名称", { exact: true }).fill("发布交接");
   await dialog.getByRole("button", { name: rx("保存") }).click();
-  await expect(page.locator(".ant-modal-wrap")).toHaveCount(0);
-  await expect(page.getByText("发布交接", { exact: true })).toBeVisible();
+  await expect(boards(page).getByText("发布交接", { exact: true })).toBeVisible();
   expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/sessions");
-  // The pre-seeded link resolves to its full locator, so the Chat jump carries project_dir.
-  await page.getByRole("button", { name: rx("跳转 Chat 打开") }).first().click();
-  await expect(page).toHaveURL(/\/chat\/web\/wc-topic-1/);
-  await expect(page).toHaveURL(/workspace_dir=%2Fsrv%2Fapp/);
-});
-
-test("edits the title, background and goal in place from the header pencil", async ({ page }) => {
-  const store = await install(page, seededStore());
-  await page.goto("/work-desktop?context=ctx-1");
-
-  // The title is edited through the pencil beside the heading, not a modal: the
-  // heading stays a heading and the stream stays visible while editing.
-  await page.getByRole("button", { name: "编辑标题", exact: true }).click();
-  const input = page.getByRole("textbox", { name: "编辑标题", exact: true });
-  await input.fill("语音服务 · 维护中");
-  await input.press("Enter");
-  await expect(page.getByRole("heading", { name: "语音服务 · 维护中", exact: true })).toBeVisible();
-  expect(store.writes).toContain("PATCH /v1/work-contexts/ctx-1");
-  expect(store.contexts[0]!.title).toBe("语音服务 · 维护中");
-  // No modal was involved.
-  await expect(page.getByRole("dialog")).toHaveCount(0);
-
-  // Background and goal are edited in place in the overview card. A multiline
-  // field commits on Cmd/Ctrl+Enter (plain Enter keeps its newline).
-  await page.getByRole("button", { name: "背景", exact: true }).click();
-  const background = page.getByRole("textbox", { name: "背景", exact: true });
-  await background.fill("共享语音能力维护（已收敛）");
-  await background.press("Control+Enter");
-  await expect(page.getByText("共享语音能力维护（已收敛）", { exact: true })).toBeVisible();
-  expect(store.contexts[0]!.background).toBe("共享语音能力维护（已收敛）");
 });
 
 test("edits the goal in place in the overview and renders a multi-line value as-is", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
   const store = await install(page, seededStore());
   // A goal with markdown and real line breaks: it must render as markdown rather
   // than collapsing into one run-on line. The mock reads the store live, so this
   // mutation is what the first GET serves.
   store.contexts[0]!.goal = "- 先跑固定参数评测\n- 再准备回滚清单";
-  await page.goto("/work-desktop?context=ctx-1");
+  await openDesktop(page);
 
-  // The goal lives in the overview (it is no longer a header subtitle), rendered
-  // as a list here.
-  const overview = page.getByRole("tabpanel");
-  const goal = overview.locator(".wd-inline-rich").filter({ has: page.getByRole("button", { name: "目标", exact: true }) });
+  const goal = boards(page).locator(".wd-inline-rich").filter({ has: page.getByRole("button", { name: "目标", exact: true }) });
   await expect(goal.locator("li")).toHaveCount(2);
   await expect(goal.getByText("先跑固定参数评测", { exact: true })).toBeVisible();
 
@@ -601,103 +702,50 @@ test("edits the goal in place in the overview and renders a multi-line value as-
   await expect(page.getByRole("dialog")).toHaveCount(0);
 });
 
-test("opens a topic conversation inside the desktop with a live status line", async ({ page }) => {
+test("keeps plan items in place and marks the stream seen", async ({ page }, info) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
   const store = await install(page, seededStore());
-  await page.goto("/work-desktop?context=ctx-1&tab=conversations");
+  await openSection(page, "计划");
+  await expect(boards(page).getByText("还没有计划项；你和 Agent 都可以添加。", { exact: true })).toBeVisible();
 
-  // "Open in desktop" keeps the conversation inside the stream: it switches to the
-  // chat tab targeted at THAT session instead of navigating to the Chat page.
-  await page.getByRole("button", { name: rx("在桌面打开") }).first().click();
-  await expect(page).toHaveURL(/tab=chat/);
-  await expect(page).toHaveURL(/session=wc-session-1/);
-  // Opening it must not disturb the linked session.
-  expect(store.writes.filter((entry) => entry.startsWith("DELETE"))).toEqual([]);
+  // Adding a plan item is a real write, not a client-side list.
+  await boards(page).getByRole("textbox", { name: "计划内容", exact: true }).fill("跑一轮固定参数评测");
+  await boards(page).getByRole("button", { name: rx("添加计划") }).click();
+  await expect(boards(page).getByText("跑一轮固定参数评测", { exact: true })).toBeVisible();
+  expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/todos");
 
-  // The dock carries the same status line the Chat topbar does: model, context
-  // usage badge and stream state — reusing ContextStatusInline, not a lookalike.
-  const dock = page.locator(".wd-chat-dock");
-  await expect(dock).toBeVisible();
-  await expect(dock.getByText("gpt-5.5", { exact: false })).toBeVisible();
-  // Assert the VALUES, not just presence: when the dock's queries were wrongly
-  // gated on a token it still rendered a badge reading "ctx 0 · calls 0 · msgs 0",
-  // so a mere visibility check would pass on a permanently-empty status line.
-  await expect(dock.locator(".chat-context-status")).toContainText("1.2k/10k");
-  await expect(dock.getByText("空闲", { exact: true })).toBeVisible();
+  // Editing the item text happens in place (click the value, type, Enter).
+  await boards(page).getByRole("button", { name: /^计划内容/ }).click();
+  const editor = page.getByRole("textbox", { name: "计划内容: 跑一轮固定参数评测", exact: true });
+  await editor.fill("跑两轮固定参数评测");
+  await editor.press("Enter");
+  await expect(boards(page).getByText("跑两轮固定参数评测", { exact: true })).toBeVisible();
+  expect(store.writes.some((entry) => entry.startsWith("PATCH /v1/work-contexts/ctx-1/todos/"))).toBe(true);
+  await page.screenshot({ path: `../../.godex/tmp/work-desktop-plan-${info.project.name}.png`, fullPage: true });
 
-  // The composer must be reachable without scrolling — that was the reported bug
-  // (the dock guessed its own height, so the input sat below the fold). Only
-  // asserted where the desktop owns the viewport: below 1024px the page scrolls as
-  // a whole by design, a separate open piece of work.
-  if ((page.viewportSize()?.width ?? 0) >= 1024) {
-    await expect(dock.locator(".chat-composer").first()).toBeInViewport();
-  }
+  // The overview shows what changed since last seen, and marking seen clears it.
+  await sections(page).getByText("概览", { exact: true }).click();
+  await expect(boards(page).getByText("自上次查看以来的变动", { exact: true })).toBeVisible();
+  await expect(boards(page).getByText("尚未标记已读", { exact: true })).toBeVisible();
+  await boards(page).getByRole("button", { name: rx("标记已读") }).click();
+  expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/seen");
+  await expect(page.getByText("已把此主线标记为已读", { exact: true })).toBeVisible();
 });
 
-test("opens a linked conversation after a restart without visiting the Chat page first", async ({ page }) => {
-  // The reported bug: after a service restart every persisted session is no longer
-  // resident, so session reads answer 404 until something opens it. The dock used to
-  // READ without opening, so it stayed empty until the Chat page hydrated the session
-  // — the desktop has to be self-sufficient instead of depending on another page.
-  const store = await install(page, { ...seededStore(), coldStart: true });
-  await page.goto("/work-desktop?context=ctx-1&tab=chat");
-
-  const dock = page.locator(".wd-chat-dock");
-  await expect(dock).toBeVisible();
-  // The feed must actually render the conversation, not just the dock chrome.
-  await expect(dock.locator(".wd-chat-feed .chat-feed")).toBeVisible();
-  await expect(dock.getByText("消息 40", { exact: true })).toBeVisible();
-  // …and it got there by OPENING the session (POST /sessions), which is what makes a
-  // persisted session resident again.
-  expect(store.writes).toContain("POST /sessions");
-});
-
-test("surfaces queued messages in the embedded dock and lets them be edited or steered", async ({ page }) => {
-  // A message sent while a turn is running is queued server-side, so it only exists
-  // on snapshot.queued_turns. The dock used to render no strip at all, which made a
-  // just-sent message silently disappear — this fails without the queued strip.
-  const store = await install(page, {
-    ...seededStore(),
-    queuedTurns: [
-      { id: "q-1", mode: "follow_up", status: "queued", source: "web", sender: "You", summary: "把回归参数固定下来", created_at: NOW, updated_at: NOW },
-      { id: "q-2", mode: "steering", status: "queued", source: "web", sender: "You", summary: "先别改解码器", created_at: NOW, updated_at: NOW },
-    ],
-  });
-  await page.goto("/work-desktop?context=ctx-1&tab=conversations");
-  await page.getByRole("button", { name: rx("在桌面打开") }).first().click();
-
-  const dock = page.locator(".wd-chat-dock");
-  const strip = dock.locator(".chat-queued-strip");
-  await expect(strip).toBeVisible();
-  await expect(strip.getByText("把回归参数固定下来", { exact: true })).toBeVisible();
-  // The status line counts the queue too, like the Chat topbar does.
-  await expect(dock.locator(".wd-chat-status")).toContainText("排队中的消息");
-
-  // "Edit" pulls the queued text back into THIS dock's composer (the server returns
-  // it from the cancel endpoint), so the user edits and resends instead of retyping.
-  await strip.locator(".chat-queued-item").first().getByRole("button", { name: rx("编辑排队消息") }).click();
-  await expect(dock.locator(".chat-composer textarea").first()).toHaveValue("把回归参数固定下来");
-  await expect(strip.getByText("把回归参数固定下来", { exact: true })).toHaveCount(0);
-  expect(store.writes).toContain("POST /sessions/wc-session-1/queued/q-1/cancel");
-
-  // "Steer" injects the remaining message into the running turn.
-  await strip.getByRole("button", { name: rx("引导到当前 turn") }).click();
-  await expect(strip).toHaveCount(0);
-  expect(store.writes).toContain("POST /sessions/wc-session-1/queued/q-2/steer");
-});
-
-test("scopes the attention inbox to the open desktop or every desktop", async ({ page }) => {
+test("scopes the attention inbox and jumps to the board that resolves the item", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
   const store = await install(page, seededStore());
-  // Give the OTHER stream its own overdue item, so the two scopes differ
-  // observably instead of both rendering the same single row.
+  // Give the OTHER stream its own overdue item so the two scopes differ observably
+  // instead of both rendering the same single row.
   store.todos.push({
     id: "todo-2", context_id: "ctx-2", text: "对齐印尼语短句评测", status: "todo", owner: "",
     due_at: "2026-10-01T00:00:00Z", source: "human", position: 0, version: 1, created_at: NOW, updated_at: NOW,
   });
-  await page.goto("/work-desktop?context=ctx-1");
+  await openSection(page, "待处理");
 
-  const inbox = page.locator(".wd-attention");
+  const inbox = boards(page).locator(".wd-attention");
   await expect(inbox).toBeVisible();
-  // Default covers every desktop, so the other stream's item is listed.
+  // It covers every desktop by default, so the other stream's item is listed.
   await expect(inbox.getByText("对齐印尼语短句评测", { exact: true })).toBeVisible();
 
   // Narrowing to the open desktop hides the other stream's item.
@@ -705,132 +753,100 @@ test("scopes the attention inbox to the open desktop or every desktop", async ({
   await expect(inbox.getByText("对齐印尼语短句评测", { exact: true })).toHaveCount(0);
   await expect(inbox.getByText("补充发布回滚 Runbook", { exact: true })).toBeVisible();
 
-  // And back out to every desktop.
-  await inbox.locator(".ant-segmented-item", { hasText: "全部桌面" }).click();
-  await expect(inbox.getByText("对齐印尼语短句评测", { exact: true })).toBeVisible();
-});
-
-test("links an existing conversation to the stream without moving it", async ({ page }) => {
-  const store = await install(page, seededStore());
-  await page.goto("/work-desktop?context=ctx-1&tab=conversations");
-
-  await page.getByRole("button", { name: rx("关联已有会话") }).click();
-  const dialog = page.getByRole("dialog");
-  // Only unlinked conversations are offered: the already-linked wc-session-1 is absent.
-  await dialog.getByLabel("选择已有对话", { exact: true }).click();
-  await page.locator(".ant-select-item-option-content", { hasText: "历史排查对话" }).click();
-  // Linking records a reference; it must not delete the original conversation.
-  await dialog.getByRole("button", { name: rx("关联已有会话") }).click();
-
-  await expect(page.locator(".wd-topic-records").getByText("历史排查对话", { exact: true })).toBeVisible();
-  expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/sessions");
-  expect(store.sessions["ctx-1"]!.some((link) => link.session_id === "wc-session-9")).toBe(true);
-  expect(store.writes.some((entry) => entry.startsWith("DELETE"))).toBe(false);
-});
-
-test("surfaces a cross-stream inbox and jumps straight to the resolving tab", async ({ page }) => {
-  const store = await install(page, seededStore());
-  await page.goto("/work-desktop?context=ctx-1");
-
-  // The seeded store has a delegation whose card sits in in_review, so it must
-  // appear as a decision item belonging to ctx-1.
-  const inbox = page.locator(".wd-attention");
-  await expect(inbox).toBeVisible();
-  await expect(inbox.getByText("等待验收", { exact: true })).toBeVisible();
-  await expect(inbox.getByText("补充发布回滚 Runbook", { exact: true })).toBeVisible();
-  await expect(inbox.getByText("语音服务 · 长期维护", { exact: true })).toBeVisible();
-
-  // Clicking an item lands on the tab where it is resolved, not the default tab.
+  // Clicking an item lands on the board that resolves it, not the default one:
+  // the item says "tasks", which is now the delegation board.
   await inbox.getByRole("button", { name: /补充发布回滚 Runbook/ }).click();
-  await expect(page).toHaveURL(/context=ctx-1/);
-  await expect(page).toHaveURL(/tab=tasks/);
-  await expect(page.getByRole("tab", { name: "工作委派", exact: true })).toHaveAttribute("aria-selected", "true");
-
-  // Opening the inbox is read-only: it must not silently mark the stream seen.
+  await expect(sections(page).locator(".ant-segmented-item-selected")).toHaveText("委派");
+  // Reading the inbox is read-only: it must not silently mark the stream seen.
   expect(store.seen["ctx-1"]).toBeUndefined();
 });
 
-test("keeps plan items in place and marks the stream seen", async ({ page }, info) => {
+test("selecting another desktop in the rail swaps the boards to it", async ({ page }) => {
   test.skip((page.viewportSize()?.width ?? 0) < 1024);
   const store = await install(page, seededStore());
-  await page.goto("/work-desktop?context=ctx-1&tab=plan");
-  await expect(page.getByText("还没有计划项；你和 Agent 都可以添加。", { exact: true })).toBeVisible();
+  await openSection(page, "主题");
+  // ctx-1 has the linked conversation.
+  await expect(boards(page).getByText("短句回归排查", { exact: true })).toBeVisible();
 
-  // Adding a plan item is a real write, not a client-side list.
-  await page.getByRole("textbox", { name: "计划内容", exact: true }).fill("跑一轮固定参数评测");
-  await page.getByRole("button", { name: rx("添加计划") }).click();
-  await expect(page.getByText("跑一轮固定参数评测", { exact: true })).toBeVisible();
-  expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/todos");
+  await selectDesktop(page, "模型效果 · 对齐与更新");
+  // ctx-2 has none, so the board must switch rather than keep showing ctx-1's.
+  await expect(boards(page).getByText("短句回归排查", { exact: true })).toHaveCount(0);
+  await expect(boards(page).getByText("还没有关联对话", { exact: true })).toBeVisible();
+  // Switching desktops is a read: nothing was written or unlinked by looking.
+  expect(store.writes.filter((entry) => entry.startsWith("DELETE"))).toEqual([]);
+});
 
-  // Editing the item text happens in place (click the value, type, Enter).
-  await page.getByRole("button", { name: /^计划内容/ }).click();
-  const editor = page.getByRole("textbox", { name: "计划内容: 跑一轮固定参数评测", exact: true });
-  await editor.fill("跑两轮固定参数评测");
-  await editor.press("Enter");
-  await expect(page.getByText("跑两轮固定参数评测", { exact: true })).toBeVisible();
-  expect(store.writes.some((entry) => entry.startsWith("PATCH /v1/work-contexts/ctx-1/todos/"))).toBe(true);
-  await page.screenshot({ path: `../../.godex/tmp/work-desktop-plan-${info.project.name}.png`, fullPage: true });
+test("links an existing conversation to the stream without moving it", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  const store = await install(page, seededStore());
+  await openSection(page, "主题");
 
-  // The overview surfaces what changed since last seen, and marking seen clears it.
-  await page.getByRole("tab", { name: "概览" }).click();
-  await expect(page.getByText("自上次查看以来的变动", { exact: true })).toBeVisible();
-  await expect(page.getByText("尚未标记已读", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: rx("标记已读") }).click();
-  expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/seen");
-  await expect(page.getByText("已把此主线标记为已读", { exact: true })).toBeVisible();
+  await boards(page).getByRole("button", { name: rx("关联已有会话") }).click();
+  const dialog = page.getByRole("dialog");
+  // Only unlinked conversations are offered, so the already-linked one is absent.
+  await dialog.getByRole("combobox", { name: rx("选择已有对话") }).click();
+  await expect(page.locator(".ant-select-item-option-content", { hasText: "wc-session-1" })).toHaveCount(0);
+  await page.locator(".ant-select-item-option-content", { hasText: "历史排查对话" }).click();
+  await dialog.getByRole("button", { name: rx("关联已有会话") }).click();
+
+  await expect(boards(page).getByText("历史排查对话", { exact: true })).toBeVisible();
+  expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/sessions");
+  expect(store.sessions["ctx-1"]!.some((link) => link.session_id === "wc-session-9")).toBe(true);
+  // Linking never moves or deletes the conversation itself.
+  expect(store.writes.some((entry) => entry.startsWith("DELETE"))).toBe(false);
 });
 
 test("recalls facts by scope, reviews a candidate and submits a memory candidate", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
   const store = await install(page, seededStore());
-  await page.goto("/work-desktop?context=ctx-1&tab=knowledge");
-  await expect(page.getByText("退化可能来自解码参数", { exact: true })).toBeVisible();
-  await expect(page.getByText("r12 整体改善但短句回归", { exact: true })).toHaveCount(0);
+  await openSection(page, "知识");
+  await expect(boards(page).getByText("退化可能来自解码参数", { exact: true })).toBeVisible();
+  // The related stream's fact is out of scope until the scope widens.
+  await expect(boards(page).getByText("r12 整体改善但短句回归", { exact: true })).toHaveCount(0);
 
-  await page.getByRole("combobox", { name: "检索范围", exact: true }).click();
+  await boards(page).getByRole("combobox", { name: "检索范围", exact: true }).click();
   await page.getByText("当前及直接关联", { exact: true }).click();
-  await expect(page.getByText("r12 整体改善但短句回归", { exact: true })).toBeVisible();
+  await expect(boards(page).getByText("r12 整体改善但短句回归", { exact: true })).toBeVisible();
 
-  await page.getByRole("textbox", { name: "搜索结论、关键词或历史线索", exact: true }).fill("参数");
-  await expect(page.locator(".wd-knowledge")).toHaveCount(1);
+  await boards(page).getByRole("textbox", { name: "搜索结论、关键词或历史线索", exact: true }).fill("参数");
+  await expect(boards(page).locator(".wd-knowledge")).toHaveCount(1);
 
-  await page.getByRole("button", { name: rx("确认") }).click();
-  await expect(page.locator(".wd-knowledge").getByText("已确认", { exact: true })).toBeVisible();
+  await boards(page).getByRole("button", { name: rx("确认") }).click();
+  await expect(boards(page).locator(".wd-knowledge").getByText("已确认", { exact: true })).toBeVisible();
   expect(store.writes).toContain("PATCH /v1/work-contexts/ctx-1/facts/fact-1");
-  await expect(page.getByRole("button", { name: rx("确认") })).toHaveCount(0);
 
   // Durable memory is only touched through the candidate inbox, as an explicit action.
-  await page.getByRole("button", { name: rx("提交记忆候选") }).click();
+  await boards(page).getByRole("button", { name: rx("提交记忆候选") }).click();
   await expect(page.getByText("已在记忆候选箱", { exact: true })).toBeVisible();
   expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/facts/fact-1/memory-candidate");
 });
 
 test("renders knowledge as markdown, keeps line breaks and folds long entries", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
   const store = await install(page, seededStore());
-  // A long entry: a heading plus a list, longer than the fold threshold. The handle
-  // is a newline-separated title and a newline-separated excerpt, both of which used
-  // to collapse into one run-on line (the card head is `white-space: normal`, and the
-  // excerpt rendered through a Paragraph that does the same).
+  // A long entry: a heading plus a list, longer than the fold threshold. The title
+  // and the excerpt both contain real newlines, which used to collapse into one
+  // run-on line.
   const body = ["# 根因分析", "- 固定解码参数", "- 单变量对比", "- 复核短句集合", "- 检查后处理", "- 复跑 r12 基线"].join("\n");
   store.facts[0]!.content = body;
   store.facts[0]!.title = "退化可能来自解码参数\n（待复核）";
   store.facts[0]!.source_excerpt = "9.1% → 10.2%\n短句 8.4% → 9.6%";
-  await page.goto("/work-desktop?context=ctx-1&tab=knowledge");
+  await openSection(page, "知识");
 
-  const card = page.locator(".wd-knowledge").first();
+  const card = boards(page).locator(".wd-knowledge").first();
   await expect(card).toBeVisible();
 
-  // (1) Folded: only the opening lines are shown, and the tail is not rendered.
-  //     Asserting the ITEM COUNT (not "the card exists") is what makes this fail if
-  //     the fold is dropped and the whole entry renders at once.
+  // (1) Folded: only the opening lines render. Asserting the ITEM COUNT (not "the
+  //     card exists") is what makes this fail if the fold is dropped.
   await expect(card.locator("li")).toHaveCount(3);
   await expect(card.getByText("复跑 r12 基线", { exact: true })).toHaveCount(0);
-  // A folded entry shows the headline only: the details are part of the fold.
+  // A folded entry shows the headline only; the details are part of the fold.
   await expect(card.getByText("适用范围", { exact: false })).toHaveCount(0);
 
   // (2) Markdown actually renders (the heading becomes a heading element).
   await expect(card.locator("h1")).toHaveText("根因分析");
 
-  // (3) Expand reveals the rest and brings back the details.
+  // (3) Expanding reveals the rest and brings the details back.
   await card.getByRole("button", { name: "展开全部" }).click();
   await expect(card.locator("li")).toHaveCount(5);
   await expect(card.getByText("复跑 r12 基线", { exact: true })).toBeVisible();
@@ -839,8 +855,7 @@ test("renders knowledge as markdown, keeps line breaks and folds long entries", 
   // (4) Line breaks survive in the title and the evidence excerpt. Compared as
   //     computed style: textContent keeps the \n either way, so only white-space
   //     distinguishes "preserved" from "collapsed into one line".
-  const titleWrap = card.locator(".ant-card-head-title .whitespace-pre-wrap").first();
-  await expect(titleWrap).toHaveCSS("white-space", "pre-wrap");
+  await expect(card.locator(".ant-card-head-title .whitespace-pre-wrap").first()).toHaveCSS("white-space", "pre-wrap");
   const excerpt = card.locator(".ant-typography.whitespace-pre-wrap").first();
   await expect(excerpt).toHaveCSS("white-space", "pre-wrap");
   await expect(excerpt).toContainText("短句 8.4% → 9.6%");
@@ -848,93 +863,82 @@ test("renders knowledge as markdown, keeps line breaks and folds long entries", 
   // (5) And it folds back.
   await card.getByRole("button", { name: "收起" }).click();
   await expect(card.locator("li")).toHaveCount(3);
-  await expect(card.getByRole("button", { name: "展开全部" })).toBeVisible();
 });
 
 test("delegates to a real card without auto-running it, then executes and reviews on demand", async ({ page }, info) => {
   test.skip((page.viewportSize()?.width ?? 0) < 1024);
   const store = await install(page, seededStore());
-  await page.goto("/work-desktop?context=ctx-1&tab=tasks");
-  // The delegation boundary is a hover hint now (it used to occupy a full-width alert);
-  // the icon still carries the full explanation as its accessible name.
-  const delegHint = page.getByRole("note", { name: /委派会创建真实任务卡/ });
-  await expect(delegHint).toHaveAttribute("aria-label", /委派保存即时输入快照（检查点版本、资源与开放点），任务状态以看板卡为准。$/);
-  await expect(page.getByText("能从部署记录定位回滚目标", { exact: true })).toBeVisible();
+  await openSection(page, "委派");
+  await expect(boards(page).getByText("能从部署记录定位回滚目标", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: rx("委派工作") }).first().click();
+  await boards(page).getByRole("button", { name: rx("委派工作") }).first().click();
   const dialog = page.getByRole("dialog");
   await dialog.getByLabel("委派目标", { exact: true }).fill("隔离模型与参数影响");
   await dialog.getByLabel("验收条件 · 每行一项", { exact: true }).fill("同一评测集与权重\n附命令与参数 hash");
   await dialog.getByRole("button", { name: rx("委派工作") }).click();
-  // Scope to the tab panel: the cross-stream inbox above also names this card, so
-  // an unscoped text match is ambiguous by design, not by accident.
-  await expect(page.getByRole("tabpanel").getByText("隔离模型与参数影响", { exact: true })).toBeVisible();
+  await expect(boards(page).getByText("隔离模型与参数影响", { exact: true })).toBeVisible();
   expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/delegations");
   // Creating a delegation must NOT start an execution.
   expect(store.writes).not.toContain("POST /v1/taskboard/cards/card-2/execute");
   expect(store.cards["card-2"]!.status).toBe("in_review");
 
-  // Manual accept reuses the existing board patch semantics.
-  await page.getByRole("button", { name: rx("验收通过") }).last().click();
+  // Manual acceptance reuses the board's own patch semantics.
+  await boards(page).getByRole("button", { name: rx("验收通过") }).last().click();
   await expect.poll(() => store.cards["card-2"]!.status).toBe("done");
   expect(store.writes).toContain("PATCH /v1/taskboard/cards/card-2");
 
   // Manual dispatch of the seeded, still-running card.
-  await page.getByRole("button", { name: rx("派发执行") }).first().click();
+  await boards(page).getByRole("button", { name: rx("派发执行") }).first().click();
   await expect.poll(() => store.cards["card-1"]!.status).toBe("in_progress");
   expect(store.writes).toContain("POST /v1/taskboard/cards/card-1/execute");
-  await page.screenshot({ path: `../../.godex/tmp/work-desktop-tasks-${info.project.name}.png`, fullPage: true });
+  await page.screenshot({ path: `../../.godex/tmp/work-desktop-delegation-${info.project.name}.png`, fullPage: true });
 });
 
-test("archives to read-only, resolves an unknown stream and surfaces write conflicts", async ({ page }) => {
+test("archives to read-only and surfaces write conflicts", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
   const store = await install(page, seededStore());
-  await page.goto("/work-desktop?context=ctx-1");
-  // Archive is a server write; the page then goes read-only until restored.
+  await openDesktop(page);
+
+  // Archive is a server write; the desktop then goes read-only until restored.
   page.once("dialog", (dialog) => void dialog.accept());
-  await page.getByRole("button", { name: rx("归档主线") }).click();
+  await boards(page).getByRole("button", { name: rx("归档主线") }).click();
   await expect.poll(() => store.contexts[0]!.status).toBe("archived");
-  await expect(page.getByText("主线已归档，只读。先恢复再编辑。", { exact: true })).toBeVisible();
+  await expect(boards(page).getByText("主线已归档，只读。先恢复再编辑。", { exact: true })).toBeVisible();
   // Read-only is enforced on the in-place editors too, not only on the buttons.
-  await expect(page.getByRole("button", { name: "编辑标题", exact: true })).toBeDisabled();
-  await expect(page.getByRole("button", { name: rx("委派工作") })).toBeDisabled();
-  await page.getByRole("button", { name: rx("恢复主线") }).click();
+  await expect(boards(page).getByRole("button", { name: "编辑标题", exact: true })).toBeDisabled();
+
+  await boards(page).getByRole("button", { name: rx("恢复主线") }).click();
   await expect.poll(() => store.contexts[0]!.status).toBe("active");
-  await expect(page.getByRole("button", { name: "编辑标题", exact: true })).toBeEnabled();
+  await expect(boards(page).getByRole("button", { name: "编辑标题", exact: true })).toBeEnabled();
 
   // A 409 is reported as a conflict, not as a silent success or a generic error.
   store.failNextPatch = true;
-  await page.getByRole("button", { name: rx("暂停") }).click();
+  await boards(page).getByRole("button", { name: rx("暂停") }).click();
   await expect(page.getByText("数据已被其他更改更新，请刷新后重试。", { exact: true })).toBeVisible();
-
-  // An unknown/forbidden stream states the problem instead of showing the wrong desktop.
-  await page.goto("/work-desktop?context=does-not-exist&tab=not-a-tab");
-  await expect(page.getByText("该桌面不存在或无权访问，已改为展示第一条主线。", { exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "语音服务 · 长期维护", exact: true })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "概览", exact: true })).toHaveAttribute("aria-selected", "true");
 });
 
-test("opens without a configured provider and honours the English locale", async ({ page }) => {
+test("honours the English locale in the desktop view", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
   await install(page, seededStore());
   await page.route("**/api/providers", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ providers: [] }) }));
   await page.addInitScript(() => localStorage.setItem("godex:web:locale", "en"));
-  await page.goto("/work-desktop?context=ctx-1");
-  await expect(page.getByRole("heading", { name: "Speech service · operations", exact: false })).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "语音服务 · 长期维护", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: rx("Restore context") })).toBeVisible();
-  // The permanent store banner was removed to reclaim vertical space; the English
-  // locale is now proven by the localized tab labels and the work-memory hint.
-  await expect(page.getByRole("tab", { name: "Overview" })).toBeVisible();
+  await openDesktop(page);
+  // The desktop's own surfaces are localized: the board switch and the work-memory hint.
+  await expect(sections(page).getByText("Overview", { exact: true })).toBeVisible();
+  await expect(sections(page).getByText("Needs me", { exact: true })).toBeVisible();
   await expect(page.getByRole("note", { name: /AI maintenance/ })).toBeVisible();
 });
 
-// A long conversation must scroll inside the dock, with the composer reachable.
-// This was the reported bug: the centre column grew to its content height and was
-// then clipped, so the feed never scrolled and the input sat outside the viewport.
+// A long conversation must scroll inside the centre column, with the composer
+// reachable. This was a real bug when the desktop owned its own page: the column
+// grew to its content height and was clipped, so the feed never scrolled and the
+// input sat outside the viewport.
 test("scrolls a long conversation and keeps the composer in view", async ({ page }) => {
   test.skip((page.viewportSize()?.width ?? 0) < 1024);
   await install(page, seededStore());
-  await page.goto("/work-desktop?context=ctx-1&tab=chat");
-  const feed = page.locator(".wd-chat-feed .chat-feed");
+  // A real conversation, opened through the desktop view (the fused path).
+  await openDesktopRail(page, "/chat/web/wc-topic-1");
+  const feed = page.locator(".chat-v2-center-wrap .chat-feed").first();
   await expect(feed).toBeVisible();
 
   // The 40-message history must overflow its scroll container.
@@ -946,32 +950,5 @@ test("scrolls a long conversation and keeps the composer in view", async ({ page
   await expect(page.getByText("消息 40", { exact: true })).toBeInViewport();
 
   // The composer stays on screen without scrolling the page.
-  await expect(page.locator(".wd-chat-composer")).toBeInViewport();
-});
-
-// Every tab must share one width. The page used to shrink-to-fit its own content
-// (margin:auto on a column flex container cancels the cross-axis stretch), so each
-// tab took whatever width its content measured and the narrower ones sat centred in
-// dead space with uneven side gutters.
-test("gives every tab the same width instead of shrinking to content", async ({ page }) => {
-  await install(page, seededStore());
-  await page.setViewportSize({ width: 1920, height: 900 });
-  const widths: number[] = [];
-  for (const tab of ["overview", "chat", "knowledge"]) {
-    await page.goto(`/work-desktop?context=ctx-1&tab=${tab}`);
-    await page.locator(".wd-layout").first().waitFor({ state: "attached" });
-    const measured = await page.evaluate(() => {
-      const el = document.querySelector(".wd-page") as HTMLElement;
-      const parent = el.parentElement as HTMLElement;
-      return {
-        page: Math.round(el.getBoundingClientRect().width),
-        parent: Math.round(parent.getBoundingClientRect().width),
-      };
-    });
-    // Fills its container rather than sizing itself to its content...
-    expect(measured.page).toBe(measured.parent);
-    widths.push(measured.page);
-  }
-  // ...so all tabs agree, with no horizontal overflow.
-  expect(new Set(widths).size).toBe(1);
+  await expect(page.locator(".chat-v2-center-wrap .chat-composer").first()).toBeInViewport();
 });

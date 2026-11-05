@@ -22,11 +22,12 @@ import { writeClipboardText } from "../../lib/clipboard";
 import { type ComposerSubmission, Composer, type ComposerHandle } from "../../components/Composer";
 import { VoiceBar } from "../../components/VoiceBar";
 import { TaskCenterPanel } from "./TaskCenterPanel";
-import { SessionsRail } from "./layout/SessionsRail";
+import { ChatLeftRail } from "./layout/ChatLeftRail";
 import { VerticalRightOutlined, VerticalLeftOutlined, StopOutlined, CloseOutlined, PlusOutlined, ReloadOutlined, LogoutOutlined, BellOutlined, EditOutlined, EnterOutlined } from "@ant-design/icons";
 import { DOCK_TAB_META } from "./layout/DockRail";
 import { MessageFeedV2 } from "../../components/MessageFeedV2";
 import { FilesPanel } from "../files/FilesPanel";
+import { WorkDesktopPanel } from "../workdesktop/WorkDesktopPanel";
 import { TerminalPanel } from "../terminal/TerminalPanel";
 import { PreviewPanel } from "../preview/PreviewPanel";
 import { BrowserPanel } from "../browser/BrowserPanel";
@@ -395,73 +396,9 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
   return (
     <>
         <div className="chat-v2-layout" style={{ "--chat-v2-left-width": v2LeftCollapsed ? "0px" : `${v2LeftWidth}px`, "--chat-v2-right-width": v2RightCollapsed ? "48px" : `${v2RightWidth}px` } as CSSProperties}>
-          {/* Left rail */}
-          <div className="chat-v2-left" data-collapsed={v2LeftCollapsed ? "true" : "false"}>
-            {!v2LeftCollapsed ? (
-              <div className="chat-v2-left-resize" onPointerDown={beginV2LeftResize} role="separator" aria-label="Resize left panel" />
-            ) : null}
-            <SessionsRail
-              collapsed={v2LeftCollapsed}
-              sessions={filteredSessions}
-              loading={sessionsQuery.isLoading}
-              error={sessionsQuery.isError}
-              // A 403 here is a stable fact, not a hiccup: this credential may not use
-              // this instance's own workspace. Distinguished from a transient load
-              // failure so the rail can explain it instead of offering a retry that
-              // would fail identically forever.
-              refused={sessionsQuery.error instanceof APIError && sessionsQuery.error.status === 403}
-              onPickNode={() => navigate("/nodes")}
-              onUseSharedToken={() => clearToken()}
-              onRetry={() => void queryClient.invalidateQueries({ queryKey: ["sessions", token, remoteNodeID] })}
-              activeSessionId={openQuery.data?.session_id ?? ""}
-              searchQuery={v2SessionSearch ?? ""}
-              deletingSessionId={deleteSessionMutation.variables?.session_id ?? ""}
-              onSearchChange={setV2SessionSearch}
-              skillsCatalog={skillsCatalogQuery.data ?? []}
-              skillsLoading={skillsCatalogQuery.isLoading}
-              templates={templatesQuery.data ?? []}
-              templatesLoading={templatesQuery.isLoading}
-              nodes={nodesQuery.data ?? []}
-              nodesLoading={nodesQuery.isLoading}
-              onCreate={(workspaceDir, template, skills, execMode) => createSession(false, workspaceDir, template, skills, execMode)}
-              onPrefetch={(session) => {
-                // Warm the target session before the click so a cold-session
-                // load (open POST reads session files from disk, multi-second)
-                // happens on hover instead of after navigation. Fire-and-forget:
-                // a failed prefetch is harmless — the real click path retries.
-                const locator = session.locator;
-                const meta = locator.metadata ?? {};
-                const query: Record<string, string> = {};
-                if (locator.user_id) query.user_id = locator.user_id;
-                if (meta.project_dir) query.workspace_dir = meta.project_dir;
-                if (meta.mode) query.mode = meta.mode;
-                if (meta.template) query.template = meta.template;
-                if (meta.requested_skills) query.skills = meta.requested_skills;
-                const warm = async () => {
-                  const opened = await queryClient.fetchQuery({
-                    queryKey: ["session-open", token, locator.channel || "web", locator.key, locator.user_id],
-                    queryFn: () => openSession(token || null, { channel: locator.channel || "web", key: locator.key, ...(locator.user_id ? { user_id: locator.user_id } : {}), ...(Object.keys(query).length > 0 ? { metadata: query } : {}) }),
-                    staleTime: 30 * 1000,
-                  });
-                  if (opened?.session_id) {
-                    await queryClient.prefetchQuery({
-                      queryKey: ["snapshot", token, opened.session_id],
-                      queryFn: () => getSnapshot(token || null, opened.session_id),
-                      staleTime: 10 * 1000,
-                    });
-                  }
-                };
-                void warm().catch(() => {});
-              }}
-              onSelect={(session) => {
-                navigate(buildChatRouteForSession(session));
-              }}
-              onDelete={(session) => deleteSessionMutation.mutate(session)}
-              renamingSessionId={renameSessionMutation.variables?.sessionId ?? ""}
-              onRename={(session, title) => renameSessionMutation.mutate({ sessionId: session.session_id, title })}
-              onToggleCollapsed={() => v2ToggleLeft()}
-            />
-          </div>
+          {/* Left rail: the conversation directory or the work desktop, in the
+              SAME column — only the list changes, the centre column stays the chat. */}
+          <ChatLeftRail controller={controller} />
           {/* Center: topbar + feed + composer */}
           <div className="chat-v2-center-wrap">
             <div className="chat-v2-topbar">
@@ -842,6 +779,11 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
                       onFinalizeLongTask={(workflowId, nodeId) => finalizeLongTaskMutation.mutate({ workflowId, nodeId })}
                       onOpenReviewMergeCenter={openReviewMergeCenter}
                     />
+                  </div>
+                ) : null}
+                {mountedDockTabs.has("workdesk") ? (
+                  <div className="chat-v2-dock-tab-pane" data-active={v2ActiveDockTab === "workdesk" ? "true" : "false"}>
+                    <WorkDesktopPanel />
                   </div>
                 ) : null}
                 {mountedDockTabs.has("preview") ? (

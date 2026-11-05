@@ -45,7 +45,6 @@ const loadSkillsPage = () => import("../pages/SkillsPage");
 const loadAgentTemplatesPage = () => import("../pages/AgentTemplatesPage");
 const loadMemoryPage = () => import("../pages/MemoryPage");
 const loadTaskBoardPage = () => import("../pages/TaskBoardPage");
-const loadWorkDesktopPage = () => import("../pages/WorkDesktopPage");
 const loadOrchestrationPage = () => import("../pages/OrchestrationPage");
 const loadSettingsPage = () => import("../pages/SettingsPage");
 const loadUsagePage = () => import("../pages/UsagePage");
@@ -75,26 +74,6 @@ export const builtinApps: BuiltinAppEntry[] = [
     component: pageComponent(loadChatPage, "ChatPage"),
     isActive: (pathname) => pathname === "/" || pathname.startsWith("/chat"),
     shellClassName: "chat-shell",
-    headerTitleKey: "",
-  }),
-  entry({
-    id: "workDesktop",
-    navPath: "/work-desktop",
-    routePaths: ["/work-desktop"],
-    icon: <DesktopOutlined />,
-    labelKey: "workDesktop.title",
-    load: loadWorkDesktopPage,
-    component: pageComponent(loadWorkDesktopPage, "WorkDesktopPage"),
-    isActive: (pathname) => pathname === "/work-desktop",
-    // chat-shell bounds the page to the viewport instead of letting the whole page
-    // scroll. The desktop embeds a real chat (WorkChatDock); without this the
-    // composer was pushed below the fold by page-level scrolling. This is the same
-    // shell the Chat page uses.
-    shellClassName: "chat-shell",
-    // No shell header: the desktop owns its whole viewport (the generic
-    // title/subtitle bar wasted vertical space). An empty headerTitleKey plus no
-    // subtitle hides the header on large screens; the explanation moved into an
-    // in-page hover hint (workDesktop.subtitle).
     headerTitleKey: "",
   }),
   entry({

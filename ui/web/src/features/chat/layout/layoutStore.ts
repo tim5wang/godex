@@ -5,9 +5,18 @@ import { create } from "zustand";
 // hand-rolled pattern as store/layoutPersistence.ts, kept independent
 // so the global workspace layout is untouched).
 
-export type DockTab = "files" | "terminal" | "tasks" | "preview" | "status" | "browser";
+export type DockTab = "files" | "terminal" | "tasks" | "workdesk" | "preview" | "status" | "browser";
 
-export const DOCK_TABS: ReadonlyArray<DockTab> = ["files", "terminal", "tasks", "preview", "status", "browser"];
+export const DOCK_TABS: ReadonlyArray<DockTab> = ["files", "terminal", "tasks", "workdesk", "preview", "status", "browser"];
+
+/** The chat left rail has two views. "directory" is the original list of
+ *  conversations grouped by workspace; "desktop" replaces it with the work
+ *  desktop list (long-running work streams), which is the fusion of the old
+ *  standalone desktop page into the chat page. Only the LEFT RAIL changes — the
+ *  centre column stays the normal chat. */
+export type LeftView = "directory" | "desktop";
+
+export const LEFT_VIEWS: ReadonlyArray<LeftView> = ["directory", "desktop"];
 
 // Keep the persisted key stable so existing user layouts survive the module rename.
 export const CHAT_LAYOUT_STORAGE_KEY = "godex.web.chatV2.layout.v1";
@@ -19,6 +28,7 @@ export interface ChatLayoutSnapshot {
   leftCollapsed: boolean;
   rightCollapsed: boolean;
   activeDockTab: DockTab;
+  leftView: LeftView;
   leftWidth: number;
   rightWidth: number;
 }
@@ -29,6 +39,7 @@ export interface ChatLayoutActions {
   closeRight: () => void;
   setActiveDockTab: (tab: DockTab) => void;
   activateDockTab: (tab: DockTab) => void;
+  setLeftView: (view: LeftView) => void;
   setLeftWidth: (width: number) => void;
   setRightWidth: (width: number) => void;
   reset: () => void;
@@ -40,6 +51,7 @@ export const DEFAULT_CHAT_LAYOUT_SNAPSHOT: ChatLayoutSnapshot = {
   leftCollapsed: false,
   rightCollapsed: false,
   activeDockTab: "files",
+  leftView: "directory",
   leftWidth: LEFT_RAIL.defaultWidth,
   rightWidth: RIGHT_DOCK.defaultWidth,
 };
@@ -68,6 +80,10 @@ export function defaultChatLayoutSnapshot(): ChatLayoutSnapshot {
 
 function isDockTab(value: unknown): value is DockTab {
   return typeof value === "string" && (DOCK_TABS as ReadonlyArray<string>).includes(value);
+}
+
+function isLeftView(value: unknown): value is LeftView {
+  return typeof value === "string" && (LEFT_VIEWS as ReadonlyArray<string>).includes(value);
 }
 
 function clamp(value: number, min: number, max: number, fallback: number): number {
@@ -113,6 +129,24 @@ export const useConversationLayoutStore = create<ChatLayoutStoreState>((set) => 
   setRightWidth: (width) =>
     set(() => ({ rightWidth: clamp(width, RIGHT_DOCK.min, RIGHT_DOCK.max, DEFAULT_CHAT_LAYOUT_SNAPSHOT.rightWidth) })),
 
+  // Switching the left view must never leave the rail hidden, or the toggle that
+  // switched it would disappear with it and the user could not switch back.
+  //
+  // Switching TO the desktop also reveals the desktop's boards in the right dock:
+  // the desktop's content lives there now (the centre column stays the chat), so
+  // without this the user would switch views and see no desktop content at all.
+  // On a narrow viewport the dock is NOT forced open — an expanded dock would cover
+  // the whole phone screen, and the chat shell's own rule is that panels start
+  // collapsed on narrow screens.
+  // Switching back to the directory deliberately leaves the dock alone — the user
+  // may want to keep reading the desktop boards while browsing conversations.
+  setLeftView: (view) => {
+    if (!isLeftView(view)) return;
+    set(() => view === "desktop" && !isNarrowViewport()
+      ? { leftView: view, leftCollapsed: false, activeDockTab: "workdesk" as DockTab, rightCollapsed: false }
+      : { leftView: view, leftCollapsed: false });
+  },
+
   reset: () => set(() => ({ ...defaultChatLayoutSnapshot() })),
 }));
 
@@ -125,6 +159,7 @@ export function serializeSnapshot(state: ChatLayoutStoreState): ChatLayoutSnapsh
     leftCollapsed: state.leftCollapsed,
     rightCollapsed: state.rightCollapsed,
     activeDockTab: state.activeDockTab,
+    leftView: state.leftView,
     leftWidth: state.leftWidth,
     rightWidth: state.rightWidth,
   };
@@ -141,6 +176,9 @@ export function hydrateSnapshot(raw: string | null): ChatLayoutSnapshot | null {
       leftCollapsed: Boolean(candidate.leftCollapsed),
       rightCollapsed: Boolean(candidate.rightCollapsed),
       activeDockTab: candidate.activeDockTab,
+      // Pre-fusion snapshots have no leftView; they default to the directory view,
+      // which is what those layouts actually showed.
+      leftView: isLeftView(candidate.leftView) ? candidate.leftView : "directory",
       leftWidth: clamp(candidate.leftWidth ?? LEFT_RAIL.defaultWidth, LEFT_RAIL.min, LEFT_RAIL.max, LEFT_RAIL.defaultWidth),
       rightWidth: clamp(candidate.rightWidth ?? RIGHT_DOCK.defaultWidth, RIGHT_DOCK.min, RIGHT_DOCK.max, RIGHT_DOCK.defaultWidth),
     };

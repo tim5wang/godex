@@ -144,6 +144,7 @@ export default function App() {
   const chatDockCollapsed = useConversationLayoutStore((state) => state.rightCollapsed);
   const activeChatDock = useConversationLayoutStore((state) => state.activeDockTab);
   const closeChatDock = useConversationLayoutStore((state) => state.closeRight);
+  const chatLeftView = useConversationLayoutStore((state) => state.leftView);
   const showChatDockBack = activeApp.id === "chat" && !chatDockCollapsed;
   // Memoize route elements so App re-renders do not recreate
   // <PageErrorBoundary> wrappers, which could trigger React Router
@@ -177,9 +178,19 @@ export default function App() {
     enabled: !authRequired || (token.trim().length > 0 && !showLoginGate),
     queryFn: () => listProviders(token || null),
   });
+  // The work desktop does not need an LLM credential: it is where you READ and
+  // maintain work memory (streams, checkpoints, plan, knowledge, delegations), and
+  // all of that is plain data. The retired standalone desktop had this exemption;
+  // now that the desktop is a view of the chat page, the exemption follows the VIEW.
+  //
+  // This is only reachable through the guide below, and that is deliberate: the left
+  // view is session state (it resets to "directory" on reload), so without an entry
+  // point the gate would replace the page before the rail could ever be switched —
+  // leaving a nudge notification with nowhere to land. The chat itself stays gated.
+  const desktopViewOpen = activeApp.id === "chat" && chatLeftView === "desktop";
   const needsProviderSetup =
     activeApp.id !== "settings" &&
-    activeApp.id !== "workDesktop" &&
+    !desktopViewOpen &&
     providersQuery.isSuccess &&
     !providersQuery.data.providers.some((provider) => provider.has_credential || provider.token_present);
   const shellClassName = buildWorkspaceShellClassName(activeApp.shellClassName);
@@ -335,6 +346,7 @@ export default function App() {
                 <FirstRunProviderGuide
                   onOpenSettings={() => navigate("/settings")}
                   onRefresh={() => void queryClient.invalidateQueries({ queryKey: ["providers", token] })}
+                  onOpenDesktop={() => useConversationLayoutStore.getState().setLeftView("desktop")}
                 />
               ) : (
                 <Suspense fallback={<RouteLoadingFallback />}>
@@ -366,7 +378,7 @@ export default function App() {
   );
 }
 
-function FirstRunProviderGuide(props: { onOpenSettings: () => void; onRefresh: () => void }) {
+function FirstRunProviderGuide(props: { onOpenSettings: () => void; onRefresh: () => void; onOpenDesktop: () => void }) {
   return (
     <main className="page-shell">
       <Card>
@@ -382,6 +394,11 @@ function FirstRunProviderGuide(props: { onOpenSettings: () => void; onRefresh: (
               Configure provider
             </Button>
             <Button onClick={props.onRefresh}>Recheck providers</Button>
+            {/* The work desktop is readable without a credential, so a fresh install
+                keeps a way in — it is where background nudges land. */}
+            <Button onClick={props.onOpenDesktop} data-testid="first-run-open-desktop">
+              Open work desktop
+            </Button>
           </Space>
         </Space>
       </Card>

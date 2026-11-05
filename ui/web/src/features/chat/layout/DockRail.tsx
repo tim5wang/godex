@@ -7,6 +7,7 @@ import {
   EyeOutlined,
   FolderOpenOutlined,
   SafetyCertificateOutlined,
+  DesktopOutlined,
 } from "@ant-design/icons";
 import { DOCK_TABS, type DockTab } from "./layoutStore";
 
@@ -14,6 +15,7 @@ export const DOCK_TAB_META: Record<DockTab, { label: string; icon: ReactNode }> 
   files: { label: "Files", icon: <FolderOpenOutlined /> },
   terminal: { label: "Terminal", icon: <CodeOutlined /> },
   tasks: { label: "Tasks", icon: <SafetyCertificateOutlined /> },
+  workdesk: { label: "Work desktop", icon: <DesktopOutlined /> },
   preview: { label: "Preview", icon: <EyeOutlined /> },
   status: { label: "Status", icon: <DashboardOutlined /> },
   browser: { label: "Browser", icon: <ChromeOutlined /> },

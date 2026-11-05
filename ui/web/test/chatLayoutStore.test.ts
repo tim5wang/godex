@@ -139,8 +139,41 @@ describe("layout store", () => {
     expect(useConversationLayoutStore.getState().rightCollapsed).toBe(true);
   });
 
-  it("exposes all six dock tabs in order", () => {
-    expect(DOCK_TABS).toEqual(["files", "terminal", "tasks", "preview", "status", "browser"]);
+  it("exposes all seven dock tabs in order", () => {
+    expect(DOCK_TABS).toEqual(["files", "terminal", "tasks", "workdesk", "preview", "status", "browser"]);
+  });
+
+  it("defaults to the conversation directory and switches the left view", () => {
+    expect(DEFAULT_CHAT_LAYOUT_SNAPSHOT.leftView).toBe("directory");
+    useConversationLayoutStore.getState().setLeftView("desktop");
+    expect(useConversationLayoutStore.getState().leftView).toBe("desktop");
+  });
+
+  it("expands the rail when switching the left view, so the switch stays reachable", () => {
+    // Regression guard: if switching the view left the rail collapsed, the toggle
+    // that switched it would vanish with the rail and the user could not switch back.
+    useConversationLayoutStore.getState().toggleLeft();
+    expect(useConversationLayoutStore.getState().leftCollapsed).toBe(true);
+    useConversationLayoutStore.getState().setLeftView("desktop");
+    expect(useConversationLayoutStore.getState().leftCollapsed).toBe(false);
+  });
+
+  it("persists the left view across a rehydrate", () => {
+    useConversationLayoutStore.getState().setLeftView("desktop");
+    writePersistedSnapshot(useConversationLayoutStore.getState());
+    useConversationLayoutStore.getState().reset();
+    expect(useConversationLayoutStore.getState().leftView).toBe("directory");
+    useConversationLayoutStore.setState(readPersistedSnapshot()!);
+    expect(useConversationLayoutStore.getState().leftView).toBe("desktop");
+  });
+
+  it("treats a pre-fusion snapshot without leftView as the directory view", () => {
+    // Older persisted layouts have no leftView field; they showed the conversation
+    // list, so that is what they must still show rather than failing to hydrate.
+    window.localStorage.setItem(CHAT_LAYOUT_STORAGE_KEY, JSON.stringify({ leftCollapsed: false, rightCollapsed: true, activeDockTab: "files", leftWidth: 264, rightWidth: 420 }));
+    const persisted = readPersistedSnapshot();
+    expect(persisted).not.toBeNull();
+    expect(persisted!.leftView).toBe("directory");
   });
 
   it("reset restores defaults", () => {

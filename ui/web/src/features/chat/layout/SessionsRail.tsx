@@ -23,6 +23,9 @@ import type { WorkspaceGroup, WorkspaceGroupType } from "./sessionGroups";
 
 interface SessionsRailProps {
   collapsed: boolean;
+  /** The directory/desktop view switch, rendered in the rail header so it is
+   *  reachable in both views and from the collapsed rail. */
+  viewSwitcher?: React.ReactNode;
   sessions: ListedSession[];
   loading?: boolean;
   error?: boolean;
@@ -457,6 +460,8 @@ export function SessionsRail(props: SessionsRailProps) {
             <Popover content={t("chat.chatV2Rail.expandSidebar")} trigger="hover" placement="right">
               <Button type="text" icon={<VerticalRightOutlined />} aria-label={t("chat.chatV2Rail.expandSidebar")} onClick={props.onToggleCollapsed} />
             </Popover>
+            {/* The view switch is not repeated in the collapsed rail: 48px cannot fit
+                it. Expanding restores it, so neither view is a dead end. */}
             <NewChatWorkspacePopover sessions={props.sessions} skillsCatalog={props.skillsCatalog} skillsLoading={props.skillsLoading} templates={props.templates} templatesLoading={props.templatesLoading} nodes={props.nodes} nodesLoading={props.nodesLoading} onCreate={props.onCreate}>
               <Button type="text" icon={<PlusOutlined />} aria-label={t("chat.chatV2Rail.newChat")} />
             </NewChatWorkspacePopover>
@@ -469,8 +474,9 @@ export function SessionsRail(props: SessionsRailProps) {
   return (
     <div className="chat-v2-rail" data-testid="chat-v2-sessions">
       <div className="chat-v2-rail-top">
+        {props.viewSwitcher}
         <NewChatWorkspacePopover sessions={props.sessions} skillsCatalog={props.skillsCatalog} skillsLoading={props.skillsLoading} templates={props.templates} templatesLoading={props.templatesLoading} nodes={props.nodes} nodesLoading={props.nodesLoading} onCreate={props.onCreate}>
-          <Button block type="primary" icon={<PlusOutlined />} className="chat-v2-new-chat">
+          <Button size="small" type="primary" icon={<PlusOutlined />} className="chat-v2-new-chat" aria-label={t("chat.chatV2Rail.newChat")}>
             {t("chat.chatV2Rail.newChat")}
           </Button>
         </NewChatWorkspacePopover>

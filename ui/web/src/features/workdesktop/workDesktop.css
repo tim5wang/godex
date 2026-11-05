@@ -340,3 +340,90 @@
   .wd-layout { grid-template-rows: minmax(0, 1fr) auto; }
   .wd-sidebar { max-height: 42vh; }
 }
+
+/* ---------------------------------------------------------------------------
+   Fusion: the work desktop lives inside the chat page, so these styles target
+   the chat's left rail and right dock rather than a page of its own. They are
+   intentionally free of layout/media-query rules — the chat shell already owns
+   collapsing, resizing and the phone layout, which is the whole point of
+   fusing instead of maintaining a second set of mobile workarounds.
+   --------------------------------------------------------------------------- */
+
+/* Left rail: one row per desktop, with the ACTIVE one expanding in place to show
+   its linked conversations. */
+.wd-rail-list { display: flex; flex-direction: column; gap: 6px; padding: 0 8px 8px; }
+.wd-rail-item-wrap { min-width: 0; }
+.wd-rail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 10px;
+  font: inherit;
+  text-align: left;
+  color: var(--godex-text);
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+}
+.wd-rail-item:hover { background: var(--godex-panel-muted); }
+.wd-rail-item-selected { background: var(--godex-panel-muted); box-shadow: inset 3px 0 0 var(--godex-accent); }
+.wd-rail-item-top { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.wd-rail-item-top strong { min-width: 0; overflow-wrap: anywhere; }
+.wd-rail-item-summary {
+  color: var(--godex-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.wd-rail-item-meta { display: flex; gap: 6px; align-items: center; }
+.wd-rail-linked {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 6px 10px;
+  padding-left: 8px;
+  border-left: 2px solid var(--godex-border);
+}
+.wd-rail-linked-row { display: flex; gap: 4px; align-items: center; min-width: 0; }
+.wd-rail-linked-open {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  color: var(--godex-text);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.wd-rail-linked-open:hover { background: var(--godex-panel-muted); color: var(--godex-accent); }
+.wd-rail-linked-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wd-rail-linked-empty { font-size: 12px; padding: 2px 6px; }
+.wd-rail-linked-actions { flex-wrap: wrap; }
+.wd-rail-foot { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px 12px; border-top: 1px solid var(--godex-border); }
+.wd-rail-warn { font-size: 12px; }
+.wd-rail-msg { display: flex; flex-direction: column; gap: 10px; align-items: center; padding: 20px 12px; text-align: center; }
+.wd-rail-empty { display: flex; flex-direction: column; gap: 10px; align-items: center; padding: 18px 12px; text-align: center; }
+.wd-rail-store { font-size: 12px; margin: 0; }
+
+/* Right dock: the desktop's boards, one at a time, under a compact section switch. */
+.wd-dock { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.wd-dock-head { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--godex-border); }
+.wd-dock-titlebar { width: 100%; justify-content: space-between; }
+.wd-dock-title { font-size: 12px; }
+.wd-dock-body { flex: 1; min-height: 0; overflow-y: auto; padding: 10px; }
+.wd-dock-msg { padding: 16px; }
+
+/* Overview's linked-conversation rows. */
+.wd-session-row { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding-bottom: 8px; border-bottom: 1px solid var(--godex-border); }
+.wd-session-row:last-child { padding-bottom: 0; border-bottom: 0; }

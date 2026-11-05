@@ -55,6 +55,17 @@ async function handleAPIRoute(route: Route): Promise<void> {
       });
       return;
 
+    // Center-reachable nodes. The shape matters: the session rail filters this
+    // list to build its execution-node picker, so returning the generic `{}`
+    // fallback crashes the whole chat page (`.filter is not a function`).
+    case path === "/control/nodes" || path.startsWith("/control/nodes?"):
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([]),
+      });
+      return;
+
     case path === "/sessions" || path === "/sessions/":
       if (route.request().method() === "POST") {
         await route.fulfill({

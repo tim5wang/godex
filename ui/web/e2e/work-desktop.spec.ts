@@ -21,6 +21,7 @@ type Card = { id: string; project_id: string; title: string; status: string; urg
 type Event = { id: string; context_id: string; kind: string; title: string; source: string; created_at: string };
 type Delegation = { id: string; request_id: string; card_id: string; project_id: string; title: string; pack: string; state: string; created_at: string };
 type Todo = { id: string; context_id: string; text: string; status: string; owner: string; due_at: string; source: string; position: number; version: number; created_at: string; updated_at: string };
+type Queued = { id: string; mode: string; status: string; source: string; sender: string; summary: string; created_at: string; updated_at: string };
 // The owning stream travels alongside the API shape so the mock can scope a delegation to
 // one context, mirroring the real store's context_id column.
 type StoredDelegation = Delegation & { ctx: string };
@@ -30,6 +31,12 @@ type Store = {
   contexts: Ctx[]; resources: Res[]; relations: Rel[]; facts: Fact[]; sessions: Record<string, Link[]>;
   delegations: StoredDelegation[]; cards: Record<string, Card>; events: Record<string, Event[]>;
   todos: Todo[]; seen: Record<string, string>;
+  queuedTurns: Queued[];
+  // Models a freshly restarted server: a persisted session is NOT resident, so session
+  // reads answer 404 until something opens it (POST /sessions hydrates it). Defaults to
+  // false so only the restart-scenario test is affected.
+  coldStart: boolean;
+  resident: string[];
   checkpointHistory: Record<string, unknown[]>;
   writes: string[];
   failNextPatch: boolean;
@@ -60,7 +67,7 @@ function baseContext(overrides: Partial<Ctx> & { id: string; title: string }): C
 }
 
 function newStore(seed: Partial<Store> = {}): Store {
-  return { contexts: [], resources: [], relations: [], facts: [], sessions: {}, delegations: [], cards: {}, events: {}, todos: [], seen: {}, checkpointHistory: {}, writes: [], failNextPatch: false, ...seed };
+  return { contexts: [], resources: [], relations: [], facts: [], sessions: {}, delegations: [], cards: {}, events: {}, todos: [], seen: {}, queuedTurns: [], coldStart: false, resident: [], checkpointHistory: {}, writes: [], failNextPatch: false, ...seed };
 }
 
 function checkpoint(body: Record<string, unknown>, revision: number) {
@@ -113,6 +120,16 @@ function handleWorkContext(store: Store) {
         { session_id: "wc-session-9", locator: { channel: "web", key: "wc-topic-9", metadata: { project_dir: "/srv/app" } }, title: "历史排查对话", created_at: NOW, updated_at: NOW, last_activity_at: NOW },
       ]);
     }
+    // Opening a session. The real server derives the session id FROM the locator, so
+    // reopening an existing conversation returns its own id (not a new one) — that is
+    // what lets a stored session_id be resolved back into a full locator and opened.
+    if (path === "/sessions" && method === "POST") {
+      const locator = (body().locator ?? {}) as { channel?: string; key?: string; metadata?: Record<string, string> };
+      const key = String(locator.key ?? "");
+      const sessionId = key === "wc-topic-1" ? "wc-session-1" : key === "wc-topic-9" ? "wc-session-9" : key;
+      if (!store.resident.includes(sessionId)) store.resident.push(sessionId);
+      return json({ session_id: sessionId, locator: { channel: locator.channel ?? "web", key, ...(locator.metadata ? { metadata: locator.metadata } : {}) } });
+    }
     // The embedded chat dock reads the linked session directly (snapshot plus the
     // three sources behind the status line), so the status line is asserted for
     // real rather than stubbed away.
@@ -126,7 +143,25 @@ function handleWorkContext(store: Store) {
     const snapMatch = path.match(/^\/sessions\/([^/]+)$/);
     if (snapMatch && method === "GET") {
       const id = decodeURIComponent(snapMatch[1]!);
-      return json({ session_id: id, locator: { channel: "web", key: id }, messages: CHAT_MESSAGES, display_messages: CHAT_MESSAGES, running: false, updated_at: NOW });
+      // A cold (restarted) server answers session reads with 404 until the session has
+      // been opened. Reproducing this is the whole point of coldStart: the bug was a
+      // read-before-open that only worked once something else had hydrated the session.
+      if (store.coldStart && !store.resident.includes(id)) {
+        return json({ error: "session not found" }, 404);
+      }
+      // queued_turns is served from the store (the server owns the queue), so the
+      // dock's queue strip is exercised through the real snapshot field rather than
+      // a stubbed-away list.
+      return json({ session_id: id, locator: { channel: "web", key: id }, messages: CHAT_MESSAGES, display_messages: CHAT_MESSAGES, running: false, queued_turns: store.queuedTurns, updated_at: NOW });
+    }
+    // "Edit" (cancel + return the text) and "steer" on a queued turn.
+    const queuedAction = path.match(/^\/sessions\/([^/]+)\/queued\/([^/]+)\/(cancel|steer)$/);
+    if (queuedAction && method === "POST") {
+      const queueId = decodeURIComponent(queuedAction[2]!);
+      const action = queuedAction[3]!;
+      const queued = store.queuedTurns.find((item) => item.id === queueId);
+      store.queuedTurns = store.queuedTurns.filter((item) => item.id !== queueId);
+      return json({ session_id: decodeURIComponent(queuedAction[1]!), turn_id: queueId, status: action === "cancel" ? "cancelled" : "steered", updated_at: NOW, text: action === "cancel" ? queued?.summary : undefined });
     }
     const sesSub = path.match(/^\/sessions\/([^/]+)(\/.*)?$/);
     if (sesSub && method === "GET" && sesSub[2]) {
@@ -596,6 +631,58 @@ test("opens a topic conversation inside the desktop with a live status line", as
   if ((page.viewportSize()?.width ?? 0) >= 1024) {
     await expect(dock.locator(".chat-composer").first()).toBeInViewport();
   }
+});
+
+test("opens a linked conversation after a restart without visiting the Chat page first", async ({ page }) => {
+  // The reported bug: after a service restart every persisted session is no longer
+  // resident, so session reads answer 404 until something opens it. The dock used to
+  // READ without opening, so it stayed empty until the Chat page hydrated the session
+  // — the desktop has to be self-sufficient instead of depending on another page.
+  const store = await install(page, { ...seededStore(), coldStart: true });
+  await page.goto("/work-desktop?context=ctx-1&tab=chat");
+
+  const dock = page.locator(".wd-chat-dock");
+  await expect(dock).toBeVisible();
+  // The feed must actually render the conversation, not just the dock chrome.
+  await expect(dock.locator(".wd-chat-feed .chat-feed")).toBeVisible();
+  await expect(dock.getByText("消息 40", { exact: true })).toBeVisible();
+  // …and it got there by OPENING the session (POST /sessions), which is what makes a
+  // persisted session resident again.
+  expect(store.writes).toContain("POST /sessions");
+});
+
+test("surfaces queued messages in the embedded dock and lets them be edited or steered", async ({ page }) => {
+  // A message sent while a turn is running is queued server-side, so it only exists
+  // on snapshot.queued_turns. The dock used to render no strip at all, which made a
+  // just-sent message silently disappear — this fails without the queued strip.
+  const store = await install(page, {
+    ...seededStore(),
+    queuedTurns: [
+      { id: "q-1", mode: "follow_up", status: "queued", source: "web", sender: "You", summary: "把回归参数固定下来", created_at: NOW, updated_at: NOW },
+      { id: "q-2", mode: "steering", status: "queued", source: "web", sender: "You", summary: "先别改解码器", created_at: NOW, updated_at: NOW },
+    ],
+  });
+  await page.goto("/work-desktop?context=ctx-1&tab=conversations");
+  await page.getByRole("button", { name: rx("在桌面打开") }).first().click();
+
+  const dock = page.locator(".wd-chat-dock");
+  const strip = dock.locator(".chat-queued-strip");
+  await expect(strip).toBeVisible();
+  await expect(strip.getByText("把回归参数固定下来", { exact: true })).toBeVisible();
+  // The status line counts the queue too, like the Chat topbar does.
+  await expect(dock.locator(".wd-chat-status")).toContainText("排队中的消息");
+
+  // "Edit" pulls the queued text back into THIS dock's composer (the server returns
+  // it from the cancel endpoint), so the user edits and resends instead of retyping.
+  await strip.locator(".chat-queued-item").first().getByRole("button", { name: rx("编辑排队消息") }).click();
+  await expect(dock.locator(".chat-composer textarea").first()).toHaveValue("把回归参数固定下来");
+  await expect(strip.getByText("把回归参数固定下来", { exact: true })).toHaveCount(0);
+  expect(store.writes).toContain("POST /sessions/wc-session-1/queued/q-1/cancel");
+
+  // "Steer" injects the remaining message into the running turn.
+  await strip.getByRole("button", { name: rx("引导到当前 turn") }).click();
+  await expect(strip).toHaveCount(0);
+  expect(store.writes).toContain("POST /sessions/wc-session-1/queued/q-2/steer");
 });
 
 test("scopes the attention inbox to the open desktop or every desktop", async ({ page }) => {

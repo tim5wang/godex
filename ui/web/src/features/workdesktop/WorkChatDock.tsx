@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { App as AntApp, Badge, Button, Empty, Space, Spin, Tooltip, Typography } from "antd";
-import { ReloadOutlined } from "@ant-design/icons";
+import { ReloadOutlined, EditOutlined, EnterOutlined } from "@ant-design/icons";
 import { createChatStore, groupFeedItemsIntoTurns } from "../../store/chat";
-import { getModels, getSessionContextInspector, getSessionContextUsage, getSessionTimeline, getSnapshot, submitMessage } from "../../lib/api";
+import { getModels, getSessionContextInspector, getSessionContextUsage, getSessionTimeline, getSnapshot, submitMessage, cancelQueuedTurn, steerQueuedTurn, listSessions, openSession, APIError } from "../../lib/api";
 import { streamEvents } from "../../lib/sse";
 import { buildContextStatusSummary, collectSubagentJobs, mergeChronologicalFeedItems, pendingSendToFeedItem, pendingSendsForFeed } from "../../lib/timelineUtils";
 import { ContextStatusInline } from "../chat/panels/ContextPanels";
@@ -27,6 +27,18 @@ import { Composer, type ComposerHandle, type ComposerSubmission } from "../../co
  * context usage + stream state). It reuses those exact pieces
  * (ContextStatusInline + buildContextStatusSummary) rather than a lookalike, so
  * "how full is this conversation's context" reads the same in both places.
+ *
+ * It also renders the same queued-turn strip the Chat page does, for the same
+ * reason: a message sent while a turn is running is queued server-side, and
+ * without surfacing `snapshot.queued_turns` the dock silently swallows it.
+ *
+ * It OPENS the session before reading it, which the Chat page always did and this
+ * dock did not. Session reads (snapshot/timeline/context) are served from the
+ * resident in-memory session; a persisted session that is not resident answers
+ * 404. After a service restart every session is persisted-but-not-resident, so a
+ * read-first dock stayed empty until someone opened the conversation on the Chat
+ * page (whose POST /sessions hydrates it). Opening here makes the desktop
+ * self-sufficient instead of depending on a visit to another page.
  */
 export function WorkChatDock(props: {
   sessionId: string;
@@ -45,34 +57,54 @@ export function WorkChatDock(props: {
   const composerRef = useRef<ComposerHandle>(null);
   const [streamConnected, setStreamConnected] = useState(false);
 
+  // Resolve the stored session_id back into its FULL locator and open it, exactly
+  // as the Chat page does before reading. A bare session_id cannot be re-hashed
+  // into the same session, so the locator must come from the server's own list
+  // (the desktop only stores the id). This is what makes the dock work after a
+  // restart: without it, every read 404s until Chat opens the session once.
+  const openQuery = useQuery({
+    queryKey: ["work-chat-open", token, sessionId],
+    enabled: !!sessionId,
+    staleTime: 30_000,
+    queryFn: async () => {
+      const sessions = await listSessions(token || null);
+      const target = sessions.find((item) => item.session_id === sessionId);
+      if (!target) throw new Error("session not found");
+      return openSession(token || null, target.locator);
+    },
+  });
+  // Every session read below is gated on the OPENED session, not the stored id,
+  // so nothing fires before the session is resident.
+  const openSessionId = openQuery.data?.session_id ?? "";
+
   const snapshotQuery = useQuery({
-    queryKey: ["work-chat-snapshot", token, sessionId],
-    queryFn: () => getSnapshot(token, sessionId),
+    queryKey: ["work-chat-snapshot", token, openSessionId],
+    queryFn: () => getSnapshot(token, openSessionId),
     // Gated on the session, not on a token: the desktop's own queries work the
     // same way, and an unauthenticated deployment (auth_required=false) has no
     // token but a perfectly readable session. Requiring one here left the whole
     // dock — feed and status line — permanently empty in that case.
-    enabled: !!sessionId,
+    enabled: !!openSessionId,
     refetchInterval: (q) => (q.state.data?.running ? 2000 : false),
   });
 
   useEffect(() => {
     const snap = snapshotQuery.data;
-    if (!snap || !sessionId) return;
+    if (!snap || !openSessionId) return;
     store.getState().syncSnapshot(snap.display_messages ?? snap.messages ?? [], snap.running, snap.active_turn_id);
-  }, [snapshotQuery.data, sessionId, store]);
+  }, [snapshotQuery.data, openSessionId, store]);
 
   useEffect(() => {
-    if (!sessionId) return;
+    if (!openSessionId) return;
     const controller = new AbortController();
     const connect = async () => {
       try {
         setStreamConnected(false);
-        await streamEvents(sessionId, token, controller.signal, (event) => {
+        await streamEvents(openSessionId, token, controller.signal, (event) => {
           setStreamConnected(true);
           store.getState().handleEvent(event);
           if (event.type === "snapshot_ready") {
-            void queryClient.invalidateQueries({ queryKey: ["work-chat-snapshot", token, sessionId] });
+            void queryClient.invalidateQueries({ queryKey: ["work-chat-snapshot", token, openSessionId] });
           }
           if (event.type === "user_message_accepted" && event.turn_id) {
             store.getState().setRunningTurn(event.turn_id);
@@ -89,32 +121,32 @@ export function WorkChatDock(props: {
     };
     void connect();
     return () => controller.abort();
-  }, [sessionId, token, onTurnEnd, queryClient, store]);
+  }, [openSessionId, token, onTurnEnd, queryClient, store]);
 
   // Status-line data. The inspector is expensive to build server-side, so it is
   // refreshed on load/invalidate (like Chat); provider counters stay live.
   const inspectorQuery = useQuery({
-    queryKey: ["work-chat-inspector", token, sessionId],
-    queryFn: () => getSessionContextInspector(token, sessionId),
-    enabled: !!sessionId,
+    queryKey: ["work-chat-inspector", token, openSessionId],
+    queryFn: () => getSessionContextInspector(token, openSessionId),
+    enabled: !!openSessionId,
     staleTime: 30_000,
   });
   const usageQuery = useQuery({
-    queryKey: ["work-chat-usage", token, sessionId],
-    queryFn: () => getSessionContextUsage(token, sessionId),
-    enabled: !!sessionId,
+    queryKey: ["work-chat-usage", token, openSessionId],
+    queryFn: () => getSessionContextUsage(token, openSessionId),
+    enabled: !!openSessionId,
     refetchInterval: snapshotQuery.data?.running ? 5000 : false,
   });
   const timelineQuery = useQuery({
-    queryKey: ["work-chat-timeline", token, sessionId],
-    queryFn: () => getSessionTimeline(token, sessionId),
-    enabled: !!sessionId,
+    queryKey: ["work-chat-timeline", token, openSessionId],
+    queryFn: () => getSessionTimeline(token, openSessionId),
+    enabled: !!openSessionId,
     refetchInterval: snapshotQuery.data?.running ? 5000 : false,
   });
   const modelsQuery = useQuery({
-    queryKey: ["work-chat-models", token, sessionId],
-    queryFn: () => getModels(token, sessionId),
-    enabled: !!sessionId,
+    queryKey: ["work-chat-models", token, openSessionId],
+    queryFn: () => getModels(token, openSessionId),
+    enabled: !!openSessionId,
   });
   const contextStatus = useMemo(
     () => buildContextStatusSummary(
@@ -138,7 +170,7 @@ export function WorkChatDock(props: {
       const pendingId = `user:${Date.now()}`;
       store.getState().addPendingSend({ id: pendingId, kind: "user", text, sender: "You" });
       try {
-        const result = await submitMessage(token, sessionId, { source: "web", sender: "You", text, content: text });
+        const result = await submitMessage(token, openSessionId, { source: "web", sender: "You", text, content: text });
         if (result.turn_id) store.getState().setRunningTurn(result.turn_id);
       } catch (err) {
         store.getState().removePendingSend(pendingId);
@@ -155,11 +187,46 @@ export function WorkChatDock(props: {
     return pends.length > 0 ? [...grouped, ...pends.map(pendingSendToFeedItem)] : grouped;
   }, [chat.historyItems, chat.overlayItems, chat.pendingSends]);
 
+  // Queued turns live on the snapshot (the server owns the queue), not in the
+  // local store: a send issued while a turn is running becomes a queued turn
+  // rather than a pending bubble, so it is invisible unless it is read here.
+  const queuedTurns = snapshotQuery.data?.queued_turns ?? [];
+  const invalidateQueued = () => Promise.all([
+    queryClient.invalidateQueries({ queryKey: ["work-chat-snapshot", token, openSessionId] }),
+    queryClient.invalidateQueries({ queryKey: ["work-chat-timeline", token, openSessionId] }),
+  ]);
+
+  // "Edit" pulls the queued text back out and drops it in the composer (the
+  // server returns it from the cancel endpoint), so the user edits and resends
+  // instead of retyping.
+  const cancelQueuedMutation = useMutation({
+    mutationFn: (queueId: string) => cancelQueuedTurn(token, openSessionId, queueId),
+    onSuccess: async (result) => {
+      await invalidateQueued();
+      if (result.text) {
+        composerRef.current?.setText(result.text);
+        message.success(t("chat.editQueued"));
+      } else {
+        message.success(t("chat.cancelQueued"));
+      }
+    },
+    onError: (error) => { message.error(error instanceof APIError ? error.message : String(error)); },
+  });
+
+  const steerQueuedMutation = useMutation({
+    mutationFn: (queueId: string) => steerQueuedTurn(token, openSessionId, queueId),
+    onSuccess: async () => {
+      await invalidateQueued();
+      message.success(t("chat.steerQueued"));
+    },
+    onError: (error) => { message.error(error instanceof APIError ? error.message : String(error)); },
+  });
+
   return (
     <div className="wd-chat-dock">
       <div className="wd-chat-head">
         <Space size={6} align="center">
-          <span className="wd-chat-id" title={sessionId}>{sessionId ? sessionId.slice(0, 8) : ""}</span>
+          <span className="wd-chat-id" title={openSessionId}>{openSessionId ? openSessionId.slice(0, 8) : ""}</span>
           {chat.running && <Spin size="small" />}
           {modelLabel && <Typography.Text type="secondary" className="wd-chat-model" title={modelLabel}>{modelLabel}</Typography.Text>}
         </Space>
@@ -170,11 +237,21 @@ export function WorkChatDock(props: {
           </Tooltip>
           <Typography.Text type="secondary" className="wd-chat-status">
             {chat.running ? t("chat.running") : t("chat.idle")}
+            {queuedTurns.length > 0 ? ` · ${queuedTurns.length} ${t("chat.queuedMessage")}` : ""}
           </Typography.Text>
           <Button type="text" size="small" aria-label={t("workDesktop.refresh")} icon={<ReloadOutlined aria-hidden="true" />} onClick={() => { void snapshotQuery.refetch(); void usageQuery.refetch(); }} />
         </Space>
       </div>
-      {snapshotQuery.isLoading ? (
+      {openQuery.isError ? (
+        // Opening failed (session gone, or the locator is no longer listed). Say so
+        // and offer a retry instead of showing an empty conversation as if the
+        // history were empty.
+        <div className="wd-chat-empty">
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("workDesktop.chatOpenFailed")}>
+            <Button size="small" onClick={() => void openQuery.refetch()}>{t("workDesktop.retry")}</Button>
+          </Empty>
+        </div>
+      ) : openQuery.isPending || snapshotQuery.isLoading ? (
         <div className="wd-chat-empty"><Spin /></div>
       ) : v2Items.length === 0 ? (
         <div className="wd-chat-empty"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} /></div>
@@ -193,6 +270,41 @@ export function WorkChatDock(props: {
           </div>
         </div>
       )}
+      {/* Queued strip reuses the Chat page's markup and CSS so "what is waiting"
+          reads identically in both surfaces; the JSON keys (chat.queuedMessage
+          etc.) are shared, not duplicated. Rendered above the composer, which is
+          where a just-sent message would otherwise silently vanish. */}
+      {queuedTurns.length > 0 ? (
+        <div className="chat-queued-strip">
+          {queuedTurns.map((queued) => (
+            <div className="chat-queued-item" key={queued.id}>
+              <Typography.Text ellipsis style={{ flex: 1, minWidth: 0 }}>
+                {queued.summary || t("chat.queuedMessage")}
+              </Typography.Text>
+              <Tooltip title={t("chat.editQueued")}>
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<EditOutlined />}
+                  aria-label={t("chat.editQueued")}
+                  disabled={cancelQueuedMutation.isPending || steerQueuedMutation.isPending}
+                  onClick={() => cancelQueuedMutation.mutate(queued.id)}
+                />
+              </Tooltip>
+              <Tooltip title={t("chat.steerQueued")}>
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<EnterOutlined />}
+                  aria-label={t("chat.steerQueued")}
+                  disabled={cancelQueuedMutation.isPending || steerQueuedMutation.isPending}
+                  onClick={() => steerQueuedMutation.mutate(queued.id)}
+                />
+              </Tooltip>
+            </div>
+          ))}
+        </div>
+      ) : null}
       <div className="wd-chat-composer">
         <Composer ref={composerRef} onSubmit={(s) => sendMutation.mutateAsync(s)} />
       </div>

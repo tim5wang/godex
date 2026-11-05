@@ -531,6 +531,22 @@ UI 侧（解决“对话不能滚动 / 顶部标题栏无用 / 交互割裂 / �
 - arch 门禁两个失败已实测为**既有基线**（`ChatPageView.tsx` 在 HEAD 就是 920 行；`routes_account.go` 本次未触碰）。
 - 无后端改动，故不重建二进制、不重启服务；仅重建前端产物并只读核验。
 
+### WD3.15 重启后内嵌对话打不开（读之前必须先 open）+ 排队消息入内嵌对话（2026-11-06）
+
+两个都是「桌面内嵌对话与 Chat 页行为不一致」的后果：Chat 页会做的事，dock 少做了一步。
+
+- **一、重启后对话一直转圈，去 Chat 页打开一次才恢复**。真根因：**会话读接口只读驻留内存的会话**。`GET /sessions/{id}` → `Snapshot` → `requireSession`（`internal/services/backend/session.go:1080`）只查内存 map，查不到就 `ErrSessionNotFound` → HTTP 404；而 `POST /sessions`（`OpenSession`）才会从磁盘 hydrate 一个已持久化但未驻留的会话。服务重启后所有会话都是「已落盘但未驻留」，所以 dock 一直 404。Chat 页从来是先 `POST /sessions`（用完整 locator 重算 id）再读快照，而 dock **只读不 open** ➜ 只有先去 Chat 页把它 hydrate 一次，dock 才能读。修法不是加重试，而是**把 dock 补上 `openSession` 这一步**：先 `GET /sessions` 把存储的 `session_id` 解回**完整 locator**（裸 id 无法重哈希；桌面只存 id），再 `POST /sessions` 打开，然后把下面所有读都改门控在**已打开**的会话上（`openSessionId`），而不是存储的 id。这样桌面自给自足，不再依赖「先去 Chat 页」。
+- **二、open 失败不再伪装成空会话**。open 报错时显式报错 + 重试（新增 `chatOpenFailed` 键），而不是渲染成「这条对话没有消息」——空会话和打不开是两回事。
+- **三、排队消息接进内嵌对话**。dock 原来只本地拼 `pendingSends`（乐观气泡），**从不消费 `snapshot.queued_turns`** ——而服务端在 turn 运行中收到的消息是进入**服务端队列**、不产生本地 pending 的，于是「运行中发的消息静默消失」。现在 dock 渲染与 Chat 页同款 `.chat-queued-strip` / `.chat-queued-item`（直接复用 `stylesChatContentDetails.css` 与 `chat.queuedMessage/editQueued/cancelQueued/steerQueued` 这批既有 i18n 键，不复制一套），状态行追加 `· N 排队中的消息`，每条带「编辑」（`cancelQueuedTurn`，服务端返回原文 ➜ 回填 `composerRef.setText` 供重发）与「引导」（`steerQueuedTurn`）。
+- **e2e 用真实成因建模**：mock 新增 `coldStart` 状态（会话未驻留时读返回 404、`POST /sessions` 才置为驻留）与 `POST /sessions`（由 locator key 反推回同一 session_id）。断言不是「dock 可见」，而是① 长对话渲染出来（`消息 40` 可见）② 真的发生了 `POST /sessions`。两个用例都**反向验证过非空洞**：去掉各自修复后会真失败（重启用例停在 feed 不可见；队列用例停在 strip 不可见）。
+
+验证（2026-11-06）：
+
+- 前端：`pnpm typecheck` 通过；`vitest run` 49 文件 / 492 通过；i18n 中英对齐通过（新增 `chatOpenFailed` 键）。
+- `playwright work-desktop` **三端 54 跑 46 passed / 8 skipped / 0 failed**（新增「重启后不开 Chat 页也能打开对话」用例；窄屏用例按设计跳过）。
+- 无后端改动（是前端少了一步 open），故不重建二进制；仅重建前端产物并只读核验。
+- arch 门禁两个失败仍为**既有基线**（`ChatPageView.tsx` 920 行、`routes_account.go` 未触碰）。
+
 ### 11.5 后续实现门禁
 
 - 后端：SQLite migrations/reopen/version CAS、同事务事件、租户与来源鉴权、依赖环、幂等补偿、来源删除、事实时间范围；使用实际 modernc SQLite，不只 mock。

@@ -1,8 +1,10 @@
 package historysearch
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -49,7 +51,7 @@ type historySidecarQuery struct {
 	SourceRefs []string
 }
 
-func (s *Service) sessionArchiveEntriesFromSidecar(current history.Current, sessionID, query, role string) ([]searchableEntry, bool, error) {
+func (s *Service) sessionArchiveEntriesFromSidecar(ctx context.Context, current history.Current, sessionID, query, role string) ([]searchableEntry, bool, error) {
 	archive := s.collectSessionArchiveRefs(current, sessionID)
 	if len(archive.normalizedRefs) == 0 {
 		return nil, true, nil
@@ -61,7 +63,7 @@ func (s *Service) sessionArchiveEntriesFromSidecar(current history.Current, sess
 	}
 	defer db.Close()
 
-	if err := s.reconcileTranscriptSidecar(db, archive.normalizedRefs, archive.owner); err != nil {
+	if err := s.reconcileTranscriptSidecar(ctx, db, archive.normalizedRefs, archive.owner); err != nil {
 		return nil, false, nil
 	}
 	entries, err := queryHistorySidecar(db, historySidecarQuery{
@@ -76,14 +78,14 @@ func (s *Service) sessionArchiveEntriesFromSidecar(current history.Current, sess
 	return entries, true, nil
 }
 
-func (s *Service) allArchiveEntriesFromSidecar(query, role string) ([]searchableEntry, bool, error) {
+func (s *Service) allArchiveEntriesFromSidecar(ctx context.Context, query, role string) ([]searchableEntry, bool, error) {
 	db, err := s.openSidecar()
 	if err != nil {
 		return nil, false, nil
 	}
 	defer db.Close()
 
-	if err := s.reconcileAllArchiveSidecar(db); err != nil {
+	if err := s.reconcileAllArchiveSidecar(ctx, db); err != nil {
 		return nil, false, nil
 	}
 	entries, err := queryHistorySidecar(db, historySidecarQuery{Query: query, Role: role})
@@ -91,6 +93,43 @@ func (s *Service) allArchiveEntriesFromSidecar(query, role string) ([]searchable
 		return nil, false, nil
 	}
 	return entries, true, nil
+}
+
+// healHistoryFTSRowAlignment restores the invariant the reconcile delete relies on:
+// history_fts.rowid == history_entries.rowid for every entry.
+//
+// Deletes are routed through the FTS rowid (see deleteHistorySourceRowsTx), so a
+// drifted index would silently leave orphan FTS rows that keep matching searches.
+// The check is bounded (LIMIT 1) and runs on every open; the rebuild only happens
+// when drift is actually found, so a healthy index pays one indexed join.
+func healHistoryFTSRowAlignment(db *sql.DB) error {
+	var drifted string
+	err := db.QueryRow(`
+		SELECT e.id
+		FROM history_entries e
+		LEFT JOIN history_fts f ON f.rowid = e.rowid
+		WHERE f.rowid IS NULL OR f.id != e.id
+		LIMIT 1`).Scan(&drifted)
+	switch {
+	case err == nil:
+	case errors.Is(err, sql.ErrNoRows):
+		return nil
+	default:
+		return err
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM history_fts`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO history_fts(rowid, id, text, session_title) SELECT rowid, id, text, session_title FROM history_entries`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Service) openSidecar() (*sql.DB, error) {
@@ -111,6 +150,10 @@ func (s *Service) openSidecar() (*sql.DB, error) {
 		return nil, err
 	}
 	if err := ensureHistorySidecarSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := healHistoryFTSRowAlignment(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -153,6 +196,9 @@ func ensureHistorySidecarSchema(db *sql.DB) error {
 			text TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_history_entries_source ON history_entries(source_kind, source_ref)`,
+		// source_key is the delete/reconcile key. Without this index the per-source
+		// subquery in deleteHistorySourceRowsTx scans the whole entries table.
+		`CREATE INDEX IF NOT EXISTS idx_history_entries_source_key ON history_entries(source_key)`,
 		`CREATE INDEX IF NOT EXISTS idx_history_entries_role ON history_entries(role)`,
 		`CREATE INDEX IF NOT EXISTS idx_history_entries_timestamp ON history_entries(timestamp DESC)`,
 		`CREATE VIRTUAL TABLE IF NOT EXISTS history_fts USING fts5(
@@ -170,7 +216,7 @@ func ensureHistorySidecarSchema(db *sql.DB) error {
 	return nil
 }
 
-func (s *Service) reconcileAllArchiveSidecar(db *sql.DB) error {
+func (s *Service) reconcileAllArchiveSidecar(ctx context.Context, db *sql.DB) error {
 	current, err := loadHistorySourceState(db)
 	if err != nil {
 		return err
@@ -191,6 +237,11 @@ func (s *Service) reconcileAllArchiveSidecar(db *sql.DB) error {
 			return err
 		}
 		for _, dir := range dirs {
+			// Cancelling mid-reconcile must stop the work instead of holding a write
+			// transaction open until the caller's (much longer) tool timeout.
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if !dir.IsDir() {
 				continue
 			}
@@ -221,6 +272,9 @@ func (s *Service) reconcileAllArchiveSidecar(db *sql.DB) error {
 			return err
 		}
 		for _, file := range files {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if file.IsDir() || !strings.HasPrefix(file.Name(), "transcript_") || !strings.HasSuffix(file.Name(), ".json") {
 				continue
 			}
@@ -257,7 +311,7 @@ func (s *Service) reconcileAllArchiveSidecar(db *sql.DB) error {
 	return tx.Commit()
 }
 
-func (s *Service) reconcileTranscriptSidecar(db *sql.DB, refs []string, owner transcriptOwner) error {
+func (s *Service) reconcileTranscriptSidecar(ctx context.Context, db *sql.DB, refs []string, owner transcriptOwner) error {
 	current, err := loadHistorySourceState(db)
 	if err != nil {
 		return err
@@ -269,6 +323,9 @@ func (s *Service) reconcileTranscriptSidecar(db *sql.DB, refs []string, owner tr
 	defer tx.Rollback()
 
 	for _, ref := range refs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		source, messages, ok, err := s.transcriptIndexSource(ref, owner, current[historySourceKey("transcript", ref)])
 		if err != nil || !ok || messages == nil {
 			continue
@@ -452,7 +509,7 @@ func upsertHistorySourceTx(tx *sql.Tx, source historyIndexSource, entries []sear
 		if entry.timestamp.IsZero() {
 			timestamp = ""
 		}
-		if _, err := tx.Exec(`
+		res, err := tx.Exec(`
 			INSERT INTO history_entries(id, source_key, source_kind, source_ref, session_id, session_title, timestamp, role, ordinal, text)
 			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`,
@@ -466,13 +523,22 @@ func upsertHistorySourceTx(tx *sql.Tx, source historyIndexSource, entries []sear
 			entry.role,
 			i,
 			entry.text,
-		); err != nil {
+		)
+		if err != nil {
+			return err
+		}
+		// Pin the FTS rowid to the entry rowid: deleteHistorySourceRowsTx removes FTS
+		// rows through a rowid subquery (the only indexed handle, since the FTS `id`
+		// column is UNINDEXED), so the two tables must stay row-aligned by
+		// construction rather than by insertion-order coincidence.
+		entryRowID, err := res.LastInsertId()
+		if err != nil {
 			return err
 		}
 		if _, err := tx.Exec(`
-			INSERT INTO history_fts(id, text, session_title)
-			VALUES(?, ?, ?)
-		`, id, entry.text, entry.sessionTitle); err != nil {
+			INSERT INTO history_fts(rowid, id, text, session_title)
+			VALUES(?, ?, ?, ?)
+		`, entryRowID, id, entry.text, entry.sessionTitle); err != nil {
 			return err
 		}
 	}
@@ -480,29 +546,17 @@ func upsertHistorySourceTx(tx *sql.Tx, source historyIndexSource, entries []sear
 }
 
 func deleteHistorySourceRowsTx(tx *sql.Tx, sourceKey string) error {
-	rows, err := tx.Query(`SELECT id FROM history_entries WHERE source_key = ?`, sourceKey)
-	if err != nil {
+	// Set-based delete keyed on the FTS rowid.
+	//
+	// history_fts.id is an UNINDEXED column, so `DELETE ... WHERE id IN (...)` cannot
+	// look it up: SQLite full-scans the FTS table once per matched row, making a
+	// whole-corpus reconcile quadratic. Measured on a real index (101,965 entries):
+	// ~40ms per row -> ~68 minutes for one full rebuild, which is exactly the
+	// "history_search timed out after 1h0m0s" hang. FTS5's rowid IS the primary key,
+	// so the same delete through a rowid subquery is a single indexed operation
+	// (~1.4s for one 562-entry source, ~2s for every row in the corpus).
+	if _, err := tx.Exec(`DELETE FROM history_fts WHERE rowid IN (SELECT rowid FROM history_entries WHERE source_key = ?)`, sourceKey); err != nil {
 		return err
-	}
-	ids := make([]string, 0)
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	rows.Close()
-
-	for _, id := range ids {
-		if _, err := tx.Exec(`DELETE FROM history_fts WHERE id = ?`, id); err != nil {
-			return err
-		}
 	}
 	if _, err := tx.Exec(`DELETE FROM history_entries WHERE source_key = ?`, sourceKey); err != nil {
 		return err

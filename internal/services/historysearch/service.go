@@ -77,7 +77,12 @@ func (r *boundRuntime) SearchHistory(ctx context.Context, sessionID string, runt
 	return r.service.search(ctx, r.current, sessionID, runtimeCtx, req)
 }
 
-func (s *Service) search(_ context.Context, current history.Current, sessionID string, _ automation.SessionContext, req history.SearchRequest) (history.SearchResult, error) {
+// maxSearchLimit caps how many snippets one search may return. MatchCount still
+// reports the true number of matches, so a large corpus stays observable without
+// letting a caller-sized limit turn one search into an unbounded response.
+const maxSearchLimit = 200
+
+func (s *Service) search(ctx context.Context, current history.Current, sessionID string, _ automation.SessionContext, req history.SearchRequest) (history.SearchResult, error) {
 	query := strings.TrimSpace(req.Query)
 	if query == "" {
 		return history.SearchResult{}, fmt.Errorf("missing query")
@@ -86,6 +91,9 @@ func (s *Service) search(_ context.Context, current history.Current, sessionID s
 	limit := req.Limit
 	if limit <= 0 {
 		limit = 5
+	}
+	if limit > maxSearchLimit {
+		limit = maxSearchLimit
 	}
 	role := normalizeSearchRole(req.Role)
 	var entries []searchableEntry
@@ -97,7 +105,7 @@ func (s *Service) search(_ context.Context, current history.Current, sessionID s
 		}
 		entries = items
 	case history.HistorySearchScopeSessionArchive:
-		items, ok, err := s.sessionArchiveEntriesFromSidecar(current, strings.TrimSpace(sessionID), query, role)
+		items, ok, err := s.sessionArchiveEntriesFromSidecar(ctx, current, strings.TrimSpace(sessionID), query, role)
 		if err != nil {
 			return history.SearchResult{}, err
 		}
@@ -105,13 +113,13 @@ func (s *Service) search(_ context.Context, current history.Current, sessionID s
 			entries = items
 			break
 		}
-		fallbackItems, err := s.sessionArchiveEntries(current, strings.TrimSpace(sessionID))
+		fallbackItems, err := s.sessionArchiveEntries(ctx, current, strings.TrimSpace(sessionID))
 		if err != nil {
 			return history.SearchResult{}, err
 		}
 		entries = fallbackItems
 	case history.HistorySearchScopeAllArchives:
-		items, ok, err := s.allArchiveEntriesFromSidecar(query, role)
+		items, ok, err := s.allArchiveEntriesFromSidecar(ctx, query, role)
 		if err != nil {
 			return history.SearchResult{}, err
 		}
@@ -119,7 +127,7 @@ func (s *Service) search(_ context.Context, current history.Current, sessionID s
 			entries = items
 			break
 		}
-		fallbackItems, err := s.allArchiveEntries()
+		fallbackItems, err := s.allArchiveEntries(ctx)
 		if err != nil {
 			return history.SearchResult{}, err
 		}
@@ -167,7 +175,7 @@ func (s *Service) currentSessionEntries(current history.Current, sessionID strin
 	return visibleEntries("current_session", sessionID, title, timestamp, messages), nil
 }
 
-func (s *Service) sessionArchiveEntries(current history.Current, sessionID string) ([]searchableEntry, error) {
+func (s *Service) sessionArchiveEntries(ctx context.Context, current history.Current, sessionID string) ([]searchableEntry, error) {
 	archive := s.collectSessionArchiveRefs(current, sessionID)
 	if len(archive.refs) == 0 {
 		return nil, nil
@@ -175,6 +183,9 @@ func (s *Service) sessionArchiveEntries(current history.Current, sessionID strin
 
 	entries := make([]searchableEntry, 0)
 	for _, ref := range archive.refs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		path := s.transcriptPath(ref)
 		messages, modifiedAt, err := readTranscriptMessages(path)
 		if err != nil {
@@ -185,7 +196,7 @@ func (s *Service) sessionArchiveEntries(current history.Current, sessionID strin
 	return entries, nil
 }
 
-func (s *Service) allArchiveEntries() ([]searchableEntry, error) {
+func (s *Service) allArchiveEntries(ctx context.Context) ([]searchableEntry, error) {
 	entries := make([]searchableEntry, 0)
 	transcriptOwners := make(map[string]transcriptOwner)
 	if strings.TrimSpace(s.sessionsDir) != "" {
@@ -194,6 +205,11 @@ func (s *Service) allArchiveEntries() ([]searchableEntry, error) {
 			return nil, err
 		}
 		for _, dir := range dirs {
+			// This fallback walks every session/transcript on disk (gigabytes on a real
+			// box), so it must stay cancellable instead of running to the tool timeout.
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			if !dir.IsDir() {
 				continue
 			}
@@ -218,6 +234,9 @@ func (s *Service) allArchiveEntries() ([]searchableEntry, error) {
 		return nil, err
 	}
 	for _, file := range files {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if file.IsDir() || !strings.HasPrefix(file.Name(), "transcript_") || !strings.HasSuffix(file.Name(), ".json") {
 			continue
 		}

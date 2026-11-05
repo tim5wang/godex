@@ -307,3 +307,46 @@ OSError: [Errno 86] Bad CPU type in executable: 'tesseract'
 - 需要 OCR 时，不要假设 `tesseract` 可用：要么装 arm64 版
   （上游预编译包 / conda），要么直接改用 `uiautomator dump` 等平台原生手段
   ——对 Android/Wear 场景后者更可靠，且带坐标，本就更适合做点击自动化。
+
+## 2026-11-05 — history_search 宽范围中文查询挂死（跑满全局工具超时 1h0m0s，无法中途取消）
+
+**问题**：在「Godex工作桌面完善」主线里按用户要求，用 `history_search` 从历史档案里捞 `web-c4fa` 会话的内容。
+- 第一次 `query=web-c4fa`，`scope=all_archives` → 返回 `match_count=8326`（命中集极大，中文分词把几乎每个字都当命中）。
+- 第二次 `query=注意力 收件箱 桌面`，`scope=all_archives` → **不返回**，直接报 `{code: tool_timeout, error: tool "history_search" timed out after 1h0m0s}`，会话被这条调用内联阻塞数十分钟（用户手动打断才恢复）。
+- 对照：同一会话里 `query=工作桌面`，`scope=current_session` 是**秒回**的（`match_count=1`）。
+
+**根因（已定位到代码与实测量化，非推测）**：不是索引坏，也不是匹配慢，而是 **=只读检索每次都会跑全库索引重建，而重建的删除循环是 O(N²)**。
+
+1. **读路径触发无界写**。`all_archives` 走 `allArchiveEntriesFromSidecar`（`internal/services/historysearch/sidecar.go:79`），它在查询前**无条件调用 `reconcileAllArchiveSidecar`**（遍历 221 个会话目录 + 331 个 transcript，逐源比对 stat，任何变化的源整源删掉重插），代价与**整个语料库**正比，与 query 无关。
+2. **真正的杀手：per-row FTS 删除**。旧 `deleteHistorySourceRowsTx` 先把 `source_key` 下所有 id 读出来，再**逐行** `DELETE FROM history_fts WHERE id = ?`。而 `history_fts.id` 是 **UNINDEXED 列**，SQLite 无法用索引定位 ➜ 每一行删除都**全扫 FTS 表**一次，于是整库重建变成二次方。
+   - 实测（真实索引，只读探测）：单行删除 ~40ms × 101,965 行 ≈ **68 分钟**；而自带的 1h 工具超时正好是这次挂死的边界。
+   - 同一张库：FTS 匹配 0.026s / LIKE 0.246s。**匹配根本不慢，慢的只有写回。**
+   - 佐证：索引库 `history_search.db`（211 MB，101,965 行）的 mtime 落在挂死当天 —— 一次只读搜索真的重写了整张 211 MB 的库。
+3. **context 被丢弃 → 不可取消**。`func (s *Service) search(_ context.Context, ...)`（`service.go:80`）形参直接丢弃，sidecar 层全用非 `*Context` 的 `db.Query`/`tx.Exec`，所以挂住时 deadline/cancel 都传不进去，只能用 1h 全局超时兵。
+4. **候选集与 limit 无上限**：命中先全量打分+排序再截断，`limit` 也没有上限。
+5. 附带发现：`history_entries` 没有 `source_key` 索引，每次按源删除都全扫 entries 表。
+
+> 中文 FTS 何无效（`unicode61` 对整段中文成单 token）仍然成立，所以中文实际靠 LIKE 兜底 —— 但它**不是**挂死原因（LIKE 只 0.246s）。
+
+**已修复（本次）**：
+- `deleteHistorySourceRowsTx` 改为**基于 rowid 的集式删除**（`DELETE FROM history_fts WHERE rowid IN (SELECT rowid FROM history_entries WHERE source_key = ?)`）。FTS5 的 rowid 就是主键，可直接索引定位：单源 562 行从 22.6s → 1.4s，**全库 101,965 行重建从 ~68 分钟 → 4.9 秒**。
+- 新增 `idx_history_entries_source_key` 索引（idx_probe 实测 1.3s 建好）。
+- 新增 `healHistoryFTSRowAlignment`：开放时用一条有界 join 检查 `history_fts.rowid == history_entries.rowid`，发现偏差就重建 FTS；写路径用 `LastInsertId()` 显式对齐 rowid（不依赖插入顺序巧合）。这是 rowid 删除方案必须自洽的不变量。
+- `context` 从 `search` 贯穿到 reconcile 的目录/文件循环与 fallback 全盘遍历，任一轮查到 `ctx.Err()` 就中止（不再把一个写事务拖到工具超时）。
+- `limit` clamp 到 `maxSearchLimit = 200`，`MatchCount` 仍报真实命中数（大语料仍可观测，但不会一次吐十万条）。
+- FTS 不再重复写双重事务：每次回写前一次性删干净该源 → 无孤儿 FTS 行。
+
+**验证**：`go build ./...`、`gofmt`、`go vet` 通过；`go test ./internal/services/historysearch/... ./internal/tools/... ./internal/domain/history/...` 全过。新增 4 个回归测试（`sidecar_drift_test.go`）并**反向验证过非空洞**：去掉修复后 `TestHistorySearchHealsDriftedFTSIndex` 真失败（`entries=2 fts=1 orphans=1`）。
+
+**仍未做（有意）**：中文 FTS 预分词（需改索引语义，另行评估）；把 reconcile 从读路径完全解耦到后台（当前已从 68 分钟降到秒级，不再阻塞）。
+
+**当时（未修复前）的绕过手法**：
+- 检索只用窄查询：`scope=current_session` / `session_archive` + **单关键词** + `limit<=10`；避免 `all_archives` + 中文多词。
+- 需要跨会话原文时，改**直接读该会话的 state/transcript 文件**，而不是靠 `history_search` 全档案扫描。
+- 别指望 `list_streams` 做精确 ID 定位：它也是关键词模糊匹配。要定位会话就按**标题片段**找。
+
+**通用教训**：
+- FTS5 的 `id UNINDEXED` 列不能当删除键；删除关键词用 `rowid`。一且出现「查询 0.03s 但调用挂 1 小时」，先怀疑**读路径里的写**，不要怀疑扫描。
+- 只读工具不应隐式触发全库重建；重建应与读路径解耦或至少可取消。
+- 形参里把 `context.Context` 命名成 `_` 就是交出取消权：这是「挂住一小时无法中断」能发生的先决条件。
+- 量化优先：本次关键是先量出「单行 40ms × 10万行」，才把「候选集太大」这个看似合理的假设证伪。

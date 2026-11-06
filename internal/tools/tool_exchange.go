@@ -274,6 +274,8 @@ func bundleAliases(name string) []string {
 		return []string{"acp", "外部agent", "其它agent", "codex", "claude", "external agent", "agent client protocol"}
 	case "task_board":
 		return []string{"任务板", "计划", "todo", "task", "kanban"}
+	case "work_context":
+		return []string{"台账", "工作桌面", "工作主线", "检查点", "计划", "事实", "ledger", "work desktop", "work stream", "checkpoint", "plan", "facts"}
 	case "team":
 		return []string{"团队", "收件箱", "teammate", "inbox", "approval"}
 	case "mcp":

@@ -395,6 +395,8 @@ ui/web/src/pages/WorkDesktopPage.tsx    # 与既有页面同样的 re-export
 - **计划是一等实体，不是检查点的自由文本**。新增 `wc_todos`（migration v3）+ `Todo{status todo|doing|done|blocked, owner, due_at}`，`CreateTodo`/`PatchTodo`（`if_version` CAS）/`DeleteTodo`，每次变更都写 `wc_events`，因而计划变更会自动进入“自上次以来的变动”。
 - **焦点 = 计划 + 变动**。新增 `wc_seen`（migration v3）与 `Focus{last_seen_at, changes, todos}`；`GET .../focus` 只读，`POST .../seen` 才推进水位（查看不是编辑，不动 context version）。`ack`（工具）/`seen`（HTTP）都是显式动作，避免“打开桌面即静默清掉变动高亮”。
 - **工具 action 扩展**：`work_context` 增加 `focus` / `ack` / `plan` / `todo_patch`（`get` 的 detail 已带 `todos`）；`todo_patch` 支持 status/owner/due_at/text，允许 Agent 边工作边维护计划。
+- **`if_version` 是按 action 分实体的，工具必须说清**。同一个字段在 `checkpoint` 上指主线（stream）版本，在 `todo_patch` 上指**该条计划自己的版本**（通常 1-2，永远不是主线版本）——传错实体的版本必然冲突。因此：① `todo_patch` 的 `if_version=0`（省略）表示无前置校验（与 `SaveCheckpoint` 一致，仍由事务内 `WHERE version=?` 防并发覆盖）；② 冲突错误必须可行动——报出实体（plan item）、id、你传的版本与**当前版本**，并给出重试指引，而不是裸的 "version conflict"；③ schema/描述显式写明 per-action 语义。此前 `PatchTodo` 无条件比较版本且报错不可行动，导致「想标一条计划完成却被无解地挡回」。
+- **台账工具是可装卸的 bundle，不是 always_on 成员**。`work_context` 注册为 `ToolMeta{Bundle: "work_context", DefaultActive: true}`（原为 `AlwaysActive: true`）：`always_on` 是**模板固定**束，`tool_exchange` 明确拒绝开关，所以旧注册方式使台账工具无法按需激活。改为独立 bundle 后既保持绑定会话默认可用（注册后显式 `ActivateBundles`，因为 `RegisterTools` 已跑过 `ActivateDefaults`），又能被 `tool_exchange` 开/关；并在 `bundleAliases` 补「台账/工作桌面/工作主线/检查点/计划/事实」等别名，使自然语言查询能发现它。
 - **会话注入追加**：`renderWorkContextFeedback` 现在同时注入「计划（受阻/进行中优先，含负责人与截止）」与「自上次查看以来的变动（最新在前）」以及 `ack` 提示，Agent 在任意轮次都能看到桌面焦点而不必再查询。
 - **内置模板按入口注入**：`work-desk` 内置模板（`internal/core/templates/builtin/work-desk.yaml`，`scenarios: [workdesk]`）只授予桌面会话；`work_context` 工具本身仍由后端按“模板=work-desk 或已绑定主线”门控（`load.go`），不是仅靠模板文本。二者是双保险：模板是场景提示，门控是权限边界。
 

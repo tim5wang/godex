@@ -129,8 +129,15 @@ func (s *Store) PatchTodo(ctx context.Context, scope Scope, contextID, todoID st
 	if err != nil {
 		return Todo{}, err
 	}
-	if current.Version != patch.IfVersion {
-		return Todo{}, ErrConflict
+	// IfVersion 0 means "no explicit precondition", matching SaveCheckpoint, so a
+	// caller that has not read the item can still patch it; the UPDATE below still
+	// guards on the version we just read, so a concurrent write can never be lost
+	// silently. A non-zero value that does not match reports the item's real
+	// version, because if_version is overloaded across actions (stream version for
+	// checkpoint vs item version here) and a bare "version conflict" left the
+	// caller unable to tell which entity to re-read.
+	if patch.IfVersion != 0 && current.Version != patch.IfVersion {
+		return Todo{}, fmt.Errorf("%w: plan item %s is at version %d but if_version=%d (todo_patch guards on the PLAN ITEM's own version, not the stream version); re-read it with action=plan and use its \"version\" field, or omit the version to patch without a precondition", ErrConflict, todoID, current.Version, patch.IfVersion)
 	}
 	next := current
 	if patch.Text != nil {
@@ -165,14 +172,14 @@ func (s *Store) PatchTodo(ctx context.Context, scope Scope, contextID, todoID st
 		UPDATE wc_todos SET text=?, status=?, assignee=?, due_at=?, position=?, version=?, updated_at=?
 		WHERE tenant_id=? AND context_id=? AND id=? AND version=?`,
 		next.Text, next.Status, next.Owner, next.DueAt, next.Position, next.Version, now,
-		tenantID, contextID, todoID, patch.IfVersion)
+		tenantID, contextID, todoID, current.Version)
 	if err != nil {
 		return Todo{}, err
 	}
 	if affected, err := res.RowsAffected(); err != nil {
 		return Todo{}, err
 	} else if affected == 0 {
-		return Todo{}, ErrConflict
+		return Todo{}, fmt.Errorf("%w: plan item %s changed while patching; re-read it with action=plan and retry", ErrConflict, todoID)
 	}
 	title := "更新计划：" + next.Text
 	if next.Status == "done" {

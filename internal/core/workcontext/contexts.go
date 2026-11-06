@@ -267,7 +267,7 @@ func (s *Store) SaveCheckpoint(ctx context.Context, scope Scope, id string, ifVe
 		return Context{}, ErrArchived
 	}
 	if ifVersion != 0 && ifVersion != current.Version {
-		return Context{}, ErrConflict
+		return Context{}, fmt.Errorf("%w: stream %s is at version %d but if_version=%d; re-read it with action=get and retry, or omit the version to overwrite", ErrConflict, id, current.Version, ifVersion)
 	}
 	var maxRevision int
 	if err := tx.QueryRowContext(ctx, `

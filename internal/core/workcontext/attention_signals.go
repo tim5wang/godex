@@ -1,0 +1,135 @@
+package workcontext
+
+import (
+	"context"
+)
+
+// This file extends the cross-stream attention read models beyond cards and due
+// dates. The original attention.go covered "a delegated card awaits acceptance"
+// and "a plan item is due"; an inbox built only from those two sources forces
+// the user to still scan the rest of the desktop by hand, which defeats the
+// point of a single triage list.
+//
+// Two rules hold for every projection here:
+//
+//  1. It is stream-scoped. Each query joins wc_contexts and filters on
+//     owner_id, so a cross-stream inbox can never surface one owner's work to
+//     another. Signals that cannot be attributed to an owner are deliberately
+//     NOT collected (see the flow-run note in the design doc §AE1).
+//  2. It reuses existing tables. No new schema: candidate facts, blocked plan
+//     items, checkpoint blockers/questions and dependency edges all already
+//     have a home.
+
+// CandidateFact is a fact awaiting human review, carried with its stream title
+// so one row can be labelled without a second lookup.
+type CandidateFact struct {
+	Fact
+	ContextTitle string `json:"context_title"`
+}
+
+// ListCandidateFacts returns facts in the "candidate" state across this owner's
+// streams, newest first. A candidate is the one fact state that needs a person:
+// confirmed/stale/superseded/rejected are all terminal for triage purposes.
+func (s *Store) ListCandidateFacts(ctx context.Context, scope Scope, limit int) ([]CandidateFact, error) {
+	tenantID, ownerID := scopeArgs(scope)
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT f.id, f.context_id, f.title, f.content, f.kind, f.status, f.scope, f.subject,
+		       f.predicate, f.source, f.source_excerpt, f.source_revision, f.observed_at,
+		       f.verified_at, f.provenance, f.supersedes_id, f.memory_candidate_id, f.version,
+		       f.created_at, c.title
+		FROM wc_facts f
+		JOIN wc_contexts c ON c.tenant_id = f.tenant_id AND c.id = f.context_id
+		WHERE f.tenant_id = ? AND c.owner_id = ? AND c.status <> 'archived'
+		  AND f.status = 'candidate'
+		ORDER BY f.created_at DESC, f.id
+		LIMIT ?`, tenantID, ownerID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []CandidateFact{}
+	for rows.Next() {
+		var item CandidateFact
+		if err := rows.Scan(&item.ID, &item.ContextID, &item.Title, &item.Content, &item.Kind,
+			&item.Status, &item.Scope, &item.Subject, &item.Predicate, &item.Source,
+			&item.SourceExcerpt, &item.SourceRevision, &item.ObservedAt, &item.VerifiedAt,
+			&item.Provenance, &item.SupersedesID, &item.MemoryCandidateID, &item.Version,
+			&item.CreatedAt, &item.ContextTitle); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+// ListBlockedPlanTodos returns plan items explicitly marked "blocked", across
+// this owner's streams. ListOpenPlanTodos cannot serve this: it filters on
+// due_at <> ” because it exists for deadlines, while a blocked item is stuck
+// whether or not anyone gave it a date — which is exactly the case a person
+// needs reminded about.
+func (s *Store) ListBlockedPlanTodos(ctx context.Context, scope Scope, limit int) ([]PlanTodo, error) {
+	tenantID, ownerID := scopeArgs(scope)
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT t.id, t.context_id, t.text, t.status, t.assignee, t.due_at, t.source,
+		       t.position, t.version, t.created_at, t.updated_at, c.title
+		FROM wc_todos t
+		JOIN wc_contexts c ON c.tenant_id = t.tenant_id AND c.id = t.context_id
+		WHERE t.tenant_id = ? AND c.owner_id = ? AND c.status <> 'archived'
+		  AND t.status = 'blocked'
+		ORDER BY t.created_at, t.id
+		LIMIT ?`, tenantID, ownerID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []PlanTodo{}
+	for rows.Next() {
+		var item PlanTodo
+		if err := rows.Scan(&item.ID, &item.ContextID, &item.Text, &item.Status, &item.Owner,
+			&item.DueAt, &item.Source, &item.Position, &item.Version, &item.CreatedAt,
+			&item.UpdatedAt, &item.ContextTitle); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+// DownstreamBlockedCounts returns, per stream, how many OTHER streams declare a
+// depends_on edge onto it — i.e. how many streams are waiting on this one. This
+// is the leverage dimension the inbox previously lacked: a stalled one-item
+// stream nobody depends on, and a stalled stream three others are blocked on,
+// are not worth the same attention.
+//
+// Direction: AddRelation(contextID -> toID) means "contextID depends on toID",
+// so the count for a stream X is the number of rows whose to_id is X.
+func (s *Store) DownstreamBlockedCounts(ctx context.Context, scope Scope) (map[string]int, error) {
+	tenantID, ownerID := scopeArgs(scope)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT r.to_id, COUNT(*)
+		FROM wc_relations r
+		JOIN wc_contexts c ON c.tenant_id = r.tenant_id AND c.id = r.to_id
+		WHERE r.tenant_id = ? AND c.owner_id = ? AND c.status <> 'archived'
+		  AND r.kind = 'depends_on' AND r.from_id <> r.to_id
+		GROUP BY r.to_id`, tenantID, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var id string
+		var count int
+		if err := rows.Scan(&id, &count); err != nil {
+			return nil, err
+		}
+		out[id] = count
+	}
+	return out, rows.Err()
+}

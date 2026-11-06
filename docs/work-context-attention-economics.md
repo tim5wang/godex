@@ -1,0 +1,215 @@
+# 工作桌面的注意力经济学（Attention Economics）：现状核查与增强方案
+
+> 状态：Partial（§3 为代码实证基线；**AE1 已实施**，见 §6.1；AE2–AE5 仍为待评审方案）
+> 日期：2026-11-07
+> 关联：[work-context-desktop-design.md](./work-context-desktop-design.md)（工作桌面主设计）、[taskboard-plugin-design.md](./taskboard-plugin-design.md)（委派执行器）、[memory-design-principles.md](./memory-design-principles.md)（记忆治理）、[agent-role-and-bundle-design.md](./agent-role-and-bundle-design.md)（Agent 模板/多入口）
+> 定位：解释「工作桌面」这一层在注意力经济中的位置，指出现有实现的杠杆缺口，并给出可分期落地的增强方案。本文不引入第二套 Agent Runtime，不改变既有权限与执行边界。
+
+## 1. 命题
+
+> 「AI 时代，人的注意力是最珍贵稀缺的资源，用你有限的注意力能撬动越多的 AI Agent 高质量工作，收获越多。」
+
+这句话常被读成「多开 Agent 就多收获」，那是误读。准确的形式是：
+
+**AI 没有消耗人的注意力，它把「可选工作量」放大了十倍。分母不变、分子暴增，于是注意力的相对价值上升。** 稀缺不是 AI 造成的，是供给爆炸造成的。
+
+由此得到一个反直觉推论：**杠杆不在「让更多 Agent 跑」，而在「每个注意力片段撬动的 Agent 工作更多」**——即提高**注意力收益率**：
+
+```
+注意力收益率 = 已完成的有效 Agent 工作 / 人投入的注意力片段
+```
+
+### 1.1 注意力有三种消耗，成本量级不同
+
+| 类型 | 内容 | 相对成本 | 可否工程化消除 |
+|---|---|---|---|
+| A 上下文加载 | 回到这条主线「现在到哪了」 | 低 | 高（可注入、可投影） |
+| B 决策判断 | 要不要继续、往哪走、要不要收 | 中 | 中（信息密度） |
+| C 结果验收 | 产物对不对、能不能收 | **高** | 中（重构产物形态） |
+
+**杠杆顺序是 C > B > A**，而目前绝大多数 AI 工具（含本产品此前的重心）都在优化 A。本文的核心判断是：工作桌面已经把 A 做得不错，**B 只做了一半，C 基本没做**。
+
+## 2. 三种实践的坐标系
+
+工作桌面、任务看板、Agent Team 不是三个并列做法，它们各自降低**不同类型**的成本：
+
+| 实践 | 主要降低 | 本质 |
+|---|---|---|
+| 工作桌面 | A 上下文加载（**注意力税**） | 让状态常驻，把「重新进入」从 O(N) 扫描变成一次注入 |
+| 任务看板 | B 决策的一次性开销 | 把连续注意力切成可异步调度、可批处理的离散任务（**解耦决策与执行**） |
+| Agent Team | 串行依赖（提高并行度） | 代价：验收量线性上升，人从执行者变为 lead |
+
+**这解释了 Agent Team 近期的退潮**：它把人的角色从执行者搬到**评审者**，而评审正是成本最高的 C 类注意力。多一个 Agent 就多一条串行审批链，监督成本往往大于并行收益。方向不错，但把成本搬到了更贵的地方——**不是「多 Agent」错了，是「靠人盯每一个 Agent」错了**。
+
+## 3. 当前实现的实证基线（2026-11-07 代码核查）
+
+> 以下为对当前工作树代码的核查结论。**代码快照不代表生产在跑什么**，也不构成运行时承诺。
+
+### 3.1 已经做对的部分
+
+| 能力 | 落点 |
+|---|---|
+| 检查点是一份带版本的、人是作者的显式文档（不是聊天摘要） | `internal/core/workcontext/types.go`（Checkpoint: summary/in_progress/next_actions/completed/blockers/open_questions/evidence_refs） |
+| 「自上次查看以来的变动」水位 + 未读数 | `internal/core/workcontext/attention.go:238` `UnreadCounts`；前端 `workDesktopStore` 的 `revealChanges` |
+| 跨主线收件箱 + 一键跳主线与页签 | `GET /v1/work-attention`（`internal/runtime/httpapi/routes_work_contexts.go:60`）→ `internal/services/backend/work_context_attention.go:104` `AttentionInbox` |
+| 后台巡检，进展不依赖用户打开桌面 | `work_context_attention.go:252` `runAttentionSweep`（挂在 Service 独占进程锁与 runCtx） |
+| 提醒纪律：去重 / 静默时段 / 日上限 / 纪律检查先于写事件 | `pushNudge`（:360）、`pushAllowed`（:382）、`inQuietHours`（:397） |
+| 推送按 owner 隔离，订阅跨重启持久化 | `internal/services/webpush`（`SubscribeFor`/`NotifyOwner`），归属键 `workcontext.ScopeKey` |
+| 知识条目默认折叠只留标题行（可扫），未读气泡可点且指向它计数的内容 | `ui/web/src/features/workdesktop/KnowledgeCard.tsx`、`WorkDesktopRail.tsx` |
+
+其中两条设计原则值得保留并推广：
+
+- **「纪律检查在写事件之前」**——否则被静默时段拦下的提醒会被记成「已发」而永久丢失（`pushNudge` 注释明确写了这一点）。这是提醒功能不能有一丝含糊的地方。
+- **「错的提醒比漏的提醒更贵」**——收件箱因此刻意用确定性规则而非 LLM 判断重要性。
+
+### 3.2 结构性缺口（五条，均有代码依据）
+
+**缺口 1｜收件箱不完整，用户仍须去别处扫。**
+`AttentionInbox` 只产出三类：`delegation_review`（taskboard 卡 `in_review`，恒 high）、`todo_overdue`、`todo_soon`（`work_context_attention.go:133-165`）。而库中**已经存在**、同样值得人看一眼的信号没有进入同一份清单：
+
+- 待审核的 candidate 事实（`wc_facts.status='candidate'`，前端 `KnowledgeCard` 有 accept/dismiss 按钮）
+- 检查点的 `open_questions` / `blockers`（`types.go:36-37`，`OverviewPanel` 有板块）
+- 计划项 `status='blocked'`（`internal/core/workcontext/todos.go:12` 合法状态含 blocked）
+- 委派卡丢失（`source_missing`，前端有显式状态 `delegationState === "missing"`）
+- Flow 失败 run（`internal/agent/flow_inspect.go` 已具备巡检与卡片渲染能力）
+
+**只要还有一类在别处，O(1) 就退化回 O(N)**：注意力又被花在「发现该做什么」而不是「决定怎么做」。
+
+**缺口 2｜排序缺「杠杆」维度。**
+`sortAttention`（:183）只按 `priority → due_at → context_title`。一张 `in_review` 的卡可能挡着三件下游；一条过期计划项可能只是忘了删。当前对两者投入等量注意力，没有区分「解阻杠杆」。
+
+**缺口 3｜收件箱是只读清单，不是队列。**
+`AttentionInbox` 的每条只有「打开」一个动作。没有 claim（我接管了）/ snooze（三天后再来）/ 「交回 Agent 继续」/ dismiss-with-reason。**提醒疲劳的根源不是频率，是不可行动。**
+
+**缺口 4｜提醒有纪律，没有经济性。**
+`attentionDailyCap = 12` 与静默时段 22:00–08:00 是 **owner 级常量**（`work_context_attention.go:32-47`），不是按主线配额，也不按价值分配。7 条主线同时到关键时刻时，先到者占满当日额度。
+
+**缺口 5｜未读数是「事件数」，不是「我关心的事数」。**
+`UnreadCounts` 统计 `created_at > last_seen_at` 的事件；一条主线动 5 次就是 5。**多条同类噪音应压缩成一行**（「这条主线动了 5 次，其中 1 条需要决策」）。
+
+### 3.3 与另两种实践尚未打通的点
+
+`internal/services/metering`、`internal/services/usage` 与 `workcontext` **无任何挂钩**：今天无法回答「这条主线至今烧了多少 token、产出多少、注意力投入多少」。度量缺失使得「注意力收益率」只能靠感觉。
+
+## 4. 设计原则（本文提出的判据）
+
+以下六条作为后续所有桌面增强的评审判据，可直接用于代码评审。
+
+- **P1 默认呈现变化，状态按需展开。** 人脑对 delta 的感知远强于对状态的感知。「自上次查看以来的变动」已是此原则，应推广到委派结果、知识条目、计划。
+- **P2 提醒的经济性优先于纪律。** 纪律（去重/静默/上限）保证「不烦人」；经济性保证「值得看」。两者都要，但经济性决定功能是帮忙还是添乱。
+- **P3 每条提醒必须可行动。** 人做出的动作本身成为学习信号（哪类提醒常被处理、哪类总被忽略）。无动作的提醒是纯负债。
+- **P4 默认动作 + 事后否决。** 把「等人」从无限期阻塞变成「有超时的委托」。注意力不足时系统仍前进，人只处理**异常与不可逆决策**。这是修 Agent Team 的正确方式：不靠多开 Agent，靠 Agent 之间用默认动作协作，人只做否决。
+- **P5 注意力预算显式化。** 每条主线有配额；Agent 想要更多注意力必须给出理由、合批、提高信息密度。此时 Agent 竞争的不是算力，是**主人的注意力配额**。
+- **P6 只在切换时刻并置，深工作时只看见一条。** 把 7 条主线常驻在眼前会提高「并置干扰」，收件箱会退化成焦虑仪表盘。跨主线视图应只在打开桌面、每 N 小时、主动呼出时出现。
+- **P7 采样用确定性规则，不用 LLM 猜重要性。** 延续既定原则：错的提醒比漏的提醒贵。（LLM 生成「验收摘要」是另一件事：那是压缩已有证据，不是判断重要性。）
+
+## 5. 增强方案
+
+按「杠杆/成本比」排序。**L1 是唯一建议立即做的**，其余按需。
+
+### L1｜把收件箱从「只读清单」升级为「注意力队列」（改动最小、收益最大）
+
+1. **完整化**：把 §3.2 缺口 1 的五类信号并入同一 `AttentionItem` 投影。**不新增采集，只补投影**；`AttentionItem{kind, priority, context_id, context_title, title, detail, due_at, tab}` 已是合适的统一契约。
+2. **合批压缩**：同一主线 + 同一 kind 的多条折叠为一行，行内标注「N 条」可下钻。注意力成本对条目数近似对数增长——这是「降低理解负担」的第一性形式，也直接修缺口 5。
+3. **杠杆排序**：在 `sortAttention` 的 key 中加入确定性杠杆项：`阻塞下游数`（依赖关系可从 `wc_relations` / 卡依赖取）× `停滞天数` × `是否卡验收`。**规则可解释、可测试**，不引入模型判断。
+4. **加动词**：每条支持 claim / snooze / delegate-to-agent / dismiss-with-reason。有了动词它才是队列，也顺带产出「注意力账本」（每天处理几条、每条多久），使 L4 的度量成为可能。
+5. **按主线配额替代全局配额**：`attentionDailyCap` 由 owner 级常量改为「owner 总量 + 每主线上限」，在同样 12 条的预算下优先保证「只有一两条主线在关键时刻」的场景不被别人挤掉。
+
+验收：新增测试覆盖「同一主线同类多条压缩为一行且可下钻」「杠杆排序稳定且可解释」「snooze 期间不再出现且到期复现」「dismiss-with-reason 记录动作」；e2e 覆盖「收件箱出现五类信号」「打开收件箱仍不推进 seen 水位」。
+
+### L2｜让 Agent 输出「一眼可验收」的产物（补上 C 类注意力）
+
+1. **验收包（最高单点杠杆）**：`in_review` 的卡不应只给标题 + 两个按钮，应给结构化自查——做了什么 / 动了哪些文件 / **怎么验证的（命令 + 输出摘要）** / 没做什么与风险 / 待确认项。taskboard 卡已具备 Execution / Checklist / Research 结构，**只差渲染形态**，不需要新的执行能力。
+2. **证据徽章**：把「有命令输出/有证据」「推测」「未核实」做成通用 UI 原子（检查点已有 `evidence_refs` 语义、事实已有 source/source_excerpt）。这样「我该信到什么程度」不必每次重新判断。
+3. **复用既有巡检渲染**：`flow_inspect.go:150` `InspectionCardMarkdown()` 已是「报告 → 紧凑卡片」的现成形态，可作为验收包与每日 digest 的渲染范式，避免另起一套。
+
+### L3｜把「注意力预算」显式化（把命题变成产品机制）
+
+1. **每日一页 digest**：跨主线 delta 合批成一页、按杠杆排序、一行一条可下钻。静默时段的提醒不再丢弃而是**攒到次日 08:00 一次性给出**（注意保持既有不变量：纪律检查仍在写事件之前）。
+2. **配额制**：每主线每日注意力配额；超出需「理由 + 合批 + 提高密度」才占额度。
+3. **红点老化降级**：清不掉的未读自动 aging，降级为摘要行，避免红点变成长期欠债感。
+
+### L4｜打通度量（让「收益率」可观测）
+
+现成数据即可计算，无需新采集：
+
+| 指标 | 定义 | 数据来源 |
+|---|---|---|
+| 注意力收益率 | 完成的有效工作 / 人做出的决策数 | taskboard 卡完成数 ÷ 收件箱动作数 |
+| 提醒可行动率 | 收到提醒后 X 分钟内产生动作的比例 | 收件箱动作时间戳 vs 事件时间 |
+| 默认动作否决率 | 自主执行被否决的比例（Agent 自主度的直接旋钮） | P4 机制的否决记录 |
+| 上下文重建耗时 | 打开主线 → 发出第一条指令的时间 | 前端交互埋点 |
+
+### L5｜三者的有机结合：桌面是调度器，另两者是生产者
+
+统一抽象**已经存在**——就是 `AttentionItem`。今天它只是「来源太少（3 类）」。把它提升为一等契约后：
+
+```
+任务看板  = 条目的生产者 + 执行器（卡状态、验收）
+Agent     = 条目的生产者（delegate / executor / flow_inspect / 记忆候选）
+工作桌面  = 条目的调度器（排序、合批、配额、配额内动作）
+```
+
+「有机结合」最具体的一步：**让 Agent 能主动向上申请注意力，且必须守格式**——
+
+> 一句话结论 · 要什么决策 · 我的建议 · 证据 · **如果你 5 分钟不看，我的默认动作是什么**
+
+最后一项即 P4。它把「解耦决策与执行」补完整：解耦了但没给默认值，注意力不足时系统整体停摆；有了默认值，注意力不足时系统仍前进。
+
+## 6. 分期与验收门禁
+
+| 期 | 内容 | 依赖 | 门禁 |
+|---|---|---|---|
+| AE1 | L1 完整化 + 合批 + 杠杆排序 | 无新采集 | ✅ 已实施（2026-11-07），见 §6.1 |
+| AE2 | L1 动词（claim/snooze/dismiss/委托） | 需新增少量接口（动作本身要落审计） | 动作幂等 + owner 隔离 + 不推进 seen 水位 |
+| AE3 | L2 验收包 + 证据徽章 | 复用卡 Execution/Checklist | 无新执行能力；渲染层改动 |
+| AE4 | L3 digest + 配额 + 老化降级 | 依赖 AE1 排序 | 静默时段不烧提醒的不变量仍成立 |
+| AE5 | L4 度量 | 依赖 AE2 动作记录 | 指标可复算；不引入新的埋点隐私面 |
+
+通用门禁（延续既有约定）：
+
+- 后端：SQLite 事务/CAS/幂等、租户与来源鉴权、同事务事件；用真实 modernc SQLite 而非 mock。
+- 前端：i18n 中英全量对齐、视图模型测试、真实 `pnpm build`。
+- 文档：`make docs-check` 通过。
+
+### 6.1 AE1 实施记录（2026-11-07）
+
+只做**读模型**：收件箱投影 + 合批 + 杠杆排序。不碰巡检、推送、纪律常量，不新增 migration。
+
+- **新增信号采集**（`internal/core/workcontext/attention_signals.go`）：`ListCandidateFacts`（待审事实）、`ListBlockedPlanTodos`（阻塞计划项，**不要求有截止时间**——`ListOpenPlanTodos` 因服务于截止日而过滤 `due_at <> ''`，恰恰看不见「卡住但没定日期」这一类）、`DownstreamBlockedCounts`（每条主线被多少条其它主线 `depends_on`，即被依赖数）。三者都 JOIN `wc_contexts` 并过滤 `owner_id`，跨主线也绝不越所有者。
+- **收件箱重构**（`work_context_attention.go`）：`AttentionInbox` 拆成 `delegationAttention` / `factAttention` / `planAttention` / `checkpointAttention` 四个投影 + `groupAttention` 合批 + `sortAttention` 排序。新增 kind：`delegation_missing`（卡被删，原来是静默跳过：一条无人能解析的链接本身就是待决事项）、`fact_review`、`todo_blocked`、`checkpoint_blocker`、`checkpoint_question`；kind 常量集中在文件头，前端按 kind 出标签，不再由后端写展示文案。
+- **合批**：同一主线 + 同一 kind 折叠为一行，带 `count`（用户读的是行数，不是事实数）+ `also`（折叠标题，上限 4）；折叠行的 `due_at` 取组内**最早**那个。行数上限 50（检查点类），因为这两份清单会随主线年龄无限增长。
+- **杠杆排序**：`priority → 被依赖数(降序) → 最早截止 → 稳定 tiebreak`。一条卡住但有 3 条主线在等的主线，排在一条同样紧急但无人依赖的主线之前。
+- **修掉一个我自己引入的重复**：阻塞项若带截止时间，会同时命中「过期」与「受阻」两条投影；`planAttention` 显式跳过 `status == blocked`，保证一项只出现一次。
+- **隔离边界（范围变更，重要）**：原计划把「flow 失败 run」并入收件箱，实施前核对发现 **`flowRunRecord`（`internal/agent/flow_store.go`）没有任何 tenant/owner 字段**，且 flow 与 work stream 之间不存在数据模型关联。按 owner 隔离面投影一个无归属的信号 = 跨用户泄露，直接违反既有红线（`NotifyOwner("")` 宁可返回 0 也不退化成广播）。故**不做**，作为阻塞项记录在案；要做的前提是先给 flow run 建立 (tenant, owner) 归属。
+- **前端**：`AttentionInbox` 按新 kind 出标签、显示「共 N 条」与「阻塞 N 条主线」标签、并列出折叠标题；`apiWorkContext.ts` 的 `AttentionItem` 增补 `count`/`blocked_count`/`also`；i18n 中英新增 8 键。
+
+验证（2026-11-07）：
+
+- `go build ./...`、`go vet` 通过；`go test ./internal/core/workcontext/... ./internal/runtime/httpapi/...` 通过；`internal/services/backend` 除既有 TempDir 清理 flake 外通过（隔离复跑通过）。
+- 新增后端测试：`TestAttentionInboxSurfacesFactsBlockersAndQuestions`（五类新信号 + 正确页签）、`TestAttentionInboxGroupsRepeatedNoise`（3 条过期 → 1 行 count=3 且 due 取最早）、`TestAttentionInboxRanksLeverageAboveDueTime`（下游更过期但上游因被依赖仍排第一）、`TestAttentionInboxReportsLostDelegationCard`、`TestAttentionInboxNeverCrossesOwnersOnNewSignals`（隔离面扩到新信号）。
+- 前端：`pnpm typecheck` 通过；`vitest run` 49 文件 / 497 通过；i18n 中英对齐通过。
+- `playwright work-desktop` **三端 27 passed / 36 skipped / 0 failed**（新增「同一主线多条提醒合批 + 展示被依赖数」用例，含严格模式下的杠杆标签断言）。
+- arch 门禁两个失败仍为**既有基线**（`routes_account.go:registerMemberRoutes` 复杂度 45、`ChatPageView.tsx` 行数），本轮未触碰这两个文件（stash 后复现证实）。
+
+## 7. 非目标与风险
+
+- **不做** LLM 判断「什么时候该提醒」（不确定、要定时起模型、会幻觉）——沿用既有决策。
+- **不做** 通用 IM 集成；不新建提醒实体（复用 `wc_todos.due_at` 与 `wc_events`，维持「无新 migration」的既有约束）。
+- **不以** 桌面的关联关系扩大 sandbox / 节点 / 工具权限（既有非目标，见主设计 §1.3）。
+- **风险 R1（并置干扰）**：收件箱越完整，一次看到的条数越多，反而提高上下文抖动成本。缓解：P6（聚焦模式 / 只在切换时刻并置）+ 合批压缩。
+- **风险 R2（红点债务感）**：未读可视化的副作用是欠债感。缓解：老化降级 + 只对「能当场清掉」的项打红点。
+- **风险 R3（默认动作误伤）**：P4 给 Agent 默认动作会引入不可逆错误的风险。缓解：**默认动作只允许可逆动作**；不可逆动作（发布、删除、外部副作用）永不设默认值，必须人来。
+- **风险 R4（配额引发漏报）**：配额过严会漏掉真紧急项。缓解：决策类恒为 high 且不受 cap 限制（既有设计），配额只约束非决策类。
+
+## 8. 待确认问题
+
+1. L1 的「动词」是否需要落审计（谁在什么时候 claim/snooze），还是纯前端会话态即可？
+2. 杠杆排序里的「阻塞下游数」以 `wc_relations`（主线依赖）还是 taskboard 卡依赖为准？两者今天不是同一套模型。
+3. 每日 digest 的投递渠道：仅站内卡片，还是复用已有 webpush？
+4. 「注意力配额」的默认值按什么定：主线数量自适应，还是固定每主线 2 条？
+5. 是否把「久未触碰的主线」本身作为一种注意力信号（沉寂主线提醒），还是保持「不主动催」？
+
+## 9. 一句话结论
+
+工作桌面已经解决了**注意力税**（进入成本 A），尚未解决**注意力经济**（B 与 C：配额、合批、杠杆、默认动作）。下一步最值得做的不是再加板块，而是**把收件箱从「只读清单」变成「带动词的队列」**，并**给每条待决策项一个「默认动作 + 超时」**——这两件事同时降低 B 与 C 两类消耗，杠杆最高。

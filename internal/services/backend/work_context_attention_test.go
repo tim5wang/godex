@@ -353,3 +353,215 @@ func hasEventKind(events []workcontext.Event, kind string) bool {
 	}
 	return false
 }
+
+// TestAttentionInboxSurfacesFactsBlockersAndQuestions pins the coverage that made
+// the inbox worth opening: the signals that used to live only inside one stream's
+// boards (a fact awaiting review, a blocked plan item, the stream's own recorded
+// blockers and open questions) must reach the single triage list, each routing to
+// the tab that resolves it.
+func TestAttentionInboxSurfacesFactsBlockersAndQuestions(t *testing.T) {
+	base := time.Date(2026, 10, 31, 12, 0, 0, 0, time.Local)
+	service, _, scope := newAttentionService(t, base)
+	store, _ := service.WorkContexts()
+	stream := mustStream(t, service, scope, "多源信号")
+
+	if _, err := store.CreateFact(context.Background(), scope, stream.ID, workcontext.FactInput{
+		Title: "待审事实", Content: "内容", Scope: `{"service":"api"}`,
+	}); err != nil {
+		t.Fatalf("CreateFact: %v", err)
+	}
+	// A blocked item with NO due date: exactly the case the deadline query cannot
+	// see, and the one a person most needs told about.
+	if _, err := store.CreateTodo(context.Background(), scope, stream.ID, workcontext.TodoInput{
+		Text: "受阻计划", Status: "blocked",
+	}); err != nil {
+		t.Fatalf("CreateTodo blocked: %v", err)
+	}
+	if _, err := store.SaveCheckpoint(context.Background(), scope, stream.ID, stream.Version, workcontext.Checkpoint{
+		Blockers: []string{"缺凭据"}, OpenQuestions: []string{"走哪条链路"},
+	}); err != nil {
+		t.Fatalf("SaveCheckpoint: %v", err)
+	}
+
+	view, err := service.AttentionInbox(context.Background(), scope)
+	if err != nil {
+		t.Fatalf("AttentionInbox: %v", err)
+	}
+	tabs := map[string]string{}
+	for _, item := range view.Items {
+		tabs[item.Kind] = item.Tab
+	}
+	for kind, wantTab := range map[string]string{
+		"fact_review":         "knowledge",
+		"todo_blocked":        "plan",
+		"checkpoint_blocker":  "overview",
+		"checkpoint_question": "overview",
+	} {
+		got, ok := tabs[kind]
+		if !ok {
+			t.Fatalf("inbox is missing kind %q: %+v", kind, view.Items)
+		}
+		if got != wantTab {
+			t.Fatalf("kind %q routes to tab %q, want %q", kind, got, wantTab)
+		}
+	}
+}
+
+// TestAttentionInboxGroupsRepeatedNoise is the "attention cost tracks rows, not
+// facts" guarantee: several same-kind entries from one stream collapse into ONE
+// row that says how many, still readable without opening the stream.
+func TestAttentionInboxGroupsRepeatedNoise(t *testing.T) {
+	base := time.Date(2026, 10, 31, 12, 0, 0, 0, time.Local)
+	service, _, scope := newAttentionService(t, base)
+	store, _ := service.WorkContexts()
+	stream := mustStream(t, service, scope, "重复噪音")
+
+	first := base.Add(-5 * time.Hour)
+	for i, offset := range []time.Duration{0, time.Hour, 2 * time.Hour} {
+		texts := []string{"过期项 A", "过期项 B", "过期项 C"}
+		if _, err := store.CreateTodo(context.Background(), scope, stream.ID, workcontext.TodoInput{
+			Text: texts[i], DueAt: first.Add(offset).Format(time.RFC3339),
+		}); err != nil {
+			t.Fatalf("CreateTodo: %v", err)
+		}
+	}
+
+	view, err := service.AttentionInbox(context.Background(), scope)
+	if err != nil {
+		t.Fatalf("AttentionInbox: %v", err)
+	}
+	if len(view.Items) != 1 {
+		t.Fatalf("three overdue items in one stream must collapse to one row, got %d: %+v", len(view.Items), view.Items)
+	}
+	row := view.Items[0]
+	if row.Kind != "todo_overdue" || row.Count != 3 {
+		t.Fatalf("grouped row = %+v, want kind todo_overdue with count 3", row)
+	}
+	if len(row.Also) != 2 {
+		t.Fatalf("grouped row should spell out the collapsed titles, got %+v", row.Also)
+	}
+	// The row must carry the most urgent due time of the group, not an arbitrary one.
+	if parsed, ok := workcontext.ParseDueAt(row.DueAt); !ok || !parsed.Equal(first) {
+		t.Fatalf("grouped row due = %q, want the earliest %s", row.DueAt, first.Format(time.RFC3339))
+	}
+	// The count is what the user reads, so it must not be inflated by blank entries.
+	if view.Counts["todo_overdue"] != 1 {
+		t.Fatalf("counts should count rows, got %+v", view.Counts)
+	}
+}
+
+// TestAttentionInboxRanksLeverageAboveDueTime covers the leverage dimension: a
+// stream other work is blocked on outranks an equally urgent stream nobody
+// depends on. The dependent stream's item is deliberately MORE overdue, so only
+// leverage can explain the order.
+func TestAttentionInboxRanksLeverageAboveDueTime(t *testing.T) {
+	base := time.Date(2026, 10, 31, 12, 0, 0, 0, time.Local)
+	service, _, scope := newAttentionService(t, base)
+	store, _ := service.WorkContexts()
+	upstream := mustStream(t, service, scope, "被依赖的主线")
+	downstream := mustStream(t, service, scope, "依赖方")
+
+	if _, err := store.CreateTodo(context.Background(), scope, upstream.ID, workcontext.TodoInput{
+		Text: "上游过期", DueAt: base.Add(-time.Hour).Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("CreateTodo upstream: %v", err)
+	}
+	if _, err := store.CreateTodo(context.Background(), scope, downstream.ID, workcontext.TodoInput{
+		Text: "下游过期", DueAt: base.Add(-5 * time.Hour).Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("CreateTodo downstream: %v", err)
+	}
+	// downstream depends_on upstream, so upstream is the one others wait for.
+	if _, err := store.AddRelation(context.Background(), scope, downstream.ID, workcontext.RelationInput{
+		ToID: upstream.ID, Kind: "depends_on", Condition: "上游不完成则无法开工",
+	}); err != nil {
+		t.Fatalf("AddRelation: %v", err)
+	}
+
+	view, err := service.AttentionInbox(context.Background(), scope)
+	if err != nil {
+		t.Fatalf("AttentionInbox: %v", err)
+	}
+	if len(view.Items) != 2 {
+		t.Fatalf("expected two items, got %+v", view.Items)
+	}
+	if view.Items[0].ContextID != upstream.ID {
+		t.Fatalf("the stream others depend on should sort first, got %+v", view.Items)
+	}
+	if view.Items[0].BlockedCount != 1 || view.Items[1].BlockedCount != 0 {
+		t.Fatalf("leverage counts wrong: %+v", view.Items)
+	}
+}
+
+// TestAttentionInboxReportsLostDelegationCard: a delegation whose card has
+// vanished is an unresolvable link, which is itself something the user must
+// decide about, so it appears as its own state instead of silently disappearing.
+func TestAttentionInboxReportsLostDelegationCard(t *testing.T) {
+	base := time.Date(2026, 10, 31, 12, 0, 0, 0, time.Local)
+	service, _, scope := newAttentionService(t, base)
+	stream := mustStream(t, service, scope, "委派丢失")
+	ledger := service.TaskboardLedger()
+	project := ledger.ListProjects()[0]
+	delegated, err := service.DelegateWork(context.Background(), scope, stream.ID, WorkDelegationInput{
+		RequestID: "req-lost", Title: "会被删掉的卡", ProjectID: project.ID,
+		Acceptance: []string{"产物可验证"},
+	})
+	if err != nil {
+		t.Fatalf("DelegateWork: %v", err)
+	}
+	if _, err := ledger.SoftDeleteCard(delegated.Card.ID, delegated.Card.Version, "human"); err != nil {
+		t.Fatalf("SoftDeleteCard: %v", err)
+	}
+
+	view, err := service.AttentionInbox(context.Background(), scope)
+	if err != nil {
+		t.Fatalf("AttentionInbox: %v", err)
+	}
+	if len(view.Items) != 1 || view.Items[0].Kind != "delegation_missing" {
+		t.Fatalf("a lost card should surface as delegation_missing, got %+v", view.Items)
+	}
+	if view.Items[0].Tab != "delegations" {
+		t.Fatalf("a lost card routes to the delegations board, got %q", view.Items[0].Tab)
+	}
+}
+
+// TestAttentionInboxNeverCrossesOwnersOnNewSignals extends the isolation guarantee
+// to the newly collected signals. Facts, blocked items and checkpoint text are all
+// owner data, so a second owner's inbox must not see any of it.
+func TestAttentionInboxNeverCrossesOwnersOnNewSignals(t *testing.T) {
+	base := time.Date(2026, 10, 31, 12, 0, 0, 0, time.Local)
+	service, _, alice := newAttentionService(t, base)
+	store, _ := service.WorkContexts()
+	bob := workcontext.Scope{OwnerID: "bob"}
+
+	aliceStream := mustStream(t, service, alice, "Alice 的主线")
+	bobStream := mustStream(t, service, bob, "Bob 的主线")
+	if _, err := store.CreateFact(context.Background(), alice, aliceStream.ID, workcontext.FactInput{
+		Title: "Alice 的待审事实", Content: "内容", Scope: `{"service":"api"}`,
+	}); err != nil {
+		t.Fatalf("CreateFact alice: %v", err)
+	}
+	if _, err := store.CreateFact(context.Background(), bob, bobStream.ID, workcontext.FactInput{
+		Title: "Bob 的待审事实", Content: "内容", Scope: `{"service":"api"}`,
+	}); err != nil {
+		t.Fatalf("CreateFact bob: %v", err)
+	}
+	if _, err := store.CreateTodo(context.Background(), alice, aliceStream.ID, workcontext.TodoInput{
+		Text: "Alice 的受阻项", Status: "blocked",
+	}); err != nil {
+		t.Fatalf("CreateTodo alice: %v", err)
+	}
+
+	view, err := service.AttentionInbox(context.Background(), alice)
+	if err != nil {
+		t.Fatalf("AttentionInbox: %v", err)
+	}
+	if len(view.Items) != 2 {
+		t.Fatalf("Alice should see exactly her own two items, got %+v", view.Items)
+	}
+	for _, item := range view.Items {
+		if item.ContextID != aliceStream.ID {
+			t.Fatalf("Alice's inbox leaked another owner's stream: %+v", item)
+		}
+	}
+}

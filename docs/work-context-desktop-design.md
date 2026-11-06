@@ -550,6 +550,16 @@ UI 侧（解决“对话不能滚动 / 顶部标题栏无用 / 交互割裂 / �
 - 无后端改动（是前端少了一步 open），故不重建二进制；仅重建前端产物并只读核验。
 - arch 门禁两个失败仍为**既有基线**（`ChatPageView.tsx` 920 行、`routes_account.go` 未触碰）。
 
+### WD3.16 注意力收件箱完整化 + 合批 + 杠杆排序（AE1，2026-11-07）
+
+WD3.8 之后，收件箱只覆盖三类信号（待验收委派、过期/即将到期的计划项），用户仍须去别的板块手工扫一遍——这正是收件箱要消除的 O(N) 行为。本轮按 [work-context-attention-economics.md](./work-context-attention-economics.md) §AE1 把它补齐。
+
+- **新增信号**（`internal/core/workcontext/attention_signals.go`）：待审 candidate 事实、`blocked` 计划项（**不要求有截止时间**——`ListOpenPlanTodos` 服务于截止日故过滤 `due_at <> ''`，恰好看不见「卡住但没定日期」）、每条主线被多少其它主线 `depends_on`（被依赖数）。三者都 JOIN `wc_contexts` 过滤 `owner_id`，跨主线也绝不越所有者。
+- **新 kind**：`delegation_missing`（委派卡被删，原来静默跳过——一条无人能解析的链接本身就是待决事项）、`fact_review`、`todo_blocked`、`checkpoint_blocker`、`checkpoint_question`。
+- **合批与杠杆**：同主线同 kind 折叠为一行（`count` + `also`），排序改为 `priority → 被依赖数 → 最早截止 → 稳定 tiebreak`。
+- **隔离边界（范围变更）**：「flow 失败 run」原计划并入，实施前核对发现 `flowRunRecord`（`internal/agent/flow_store.go`）**无 tenant/owner 字段**、且 flow 与 work stream 无数据模型关联；按 owner 隔离面投影无归属信号 = 跨用户泄露，故**不做**（前提是先给 flow run 建归属）。
+- 无新 migration；不碰巡检/推送/静默时段/日上限。细节与验证见 [work-context-attention-economics.md](./work-context-attention-economics.md) §6.1。
+
 ### 11.5 后续实现门禁
 
 - 后端：SQLite migrations/reopen/version CAS、同事务事件、租户与来源鉴权、依赖环、幂等补偿、来源删除、事实时间范围；使用实际 modernc SQLite，不只 mock。

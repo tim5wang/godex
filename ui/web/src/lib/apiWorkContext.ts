@@ -482,6 +482,12 @@ export interface AttentionItem {
   detail: string;
   due_at?: string;
   tab: string;
+  /** How many same-kind entries this row stands for; omitted means one. */
+  count?: number;
+  /** Other streams waiting on this one (dependency leverage). */
+  blocked_count?: number;
+  /** Collapsed titles of the grouped entries, capped by the server. */
+  also?: string[];
 }
 
 // WorkAttention is the inbox plus per-stream unread counts, so the desktop wall

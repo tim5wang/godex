@@ -29,8 +29,13 @@ export function AttentionInbox(props: {
   const label = (item: AttentionItem) => {
     switch (item.kind) {
       case "delegation_review": return tr("attentionReview");
+      case "delegation_missing": return tr("attentionMissing");
+      case "fact_review": return tr("attentionFactReview");
       case "todo_overdue": return tr("attentionOverdue");
       case "todo_soon": return tr("attentionSoon");
+      case "todo_blocked": return tr("attentionBlocked");
+      case "checkpoint_blocker": return tr("attentionBlocker");
+      case "checkpoint_question": return tr("attentionQuestion");
       default: return tr("attention");
     }
   };
@@ -74,9 +79,17 @@ export function AttentionInbox(props: {
           {items.map((item, index) => (
             <li key={`${item.kind}-${item.context_id}-${index}`} className={`wd-attention-item wd-attention-${item.priority}`}>
               <Tag color={color(item)}>{label(item)}</Tag>
+              {/* A grouped row must SAY it stands for several entries, otherwise the
+                  collapsed line silently hides work. */}
+              {item.count && item.count > 1 ? <Tag>{tr("attentionGrouped", { count: item.count })}</Tag> : null}
+              {/* Leverage: other streams waiting on this one. It is why this row sorts
+                  above an equally urgent row nobody depends on. */}
+              {item.blocked_count ? <Tag color="geekblue">{tr("attentionLeverage", { count: item.blocked_count })}</Tag> : null}
               <button type="button" className="wd-attention-main" onClick={() => onOpen(item.context_id, item.tab)}>
                 <strong>{item.title}</strong>
                 <span className="wd-muted">{item.context_title}</span>
+                {/* The collapsed titles stay readable without opening the stream. */}
+                {item.also?.length ? <span className="wd-muted wd-wrap">{item.also.join(" · ")}</span> : null}
               </button>
               {item.due_at ? <span className="wd-muted wd-attention-due">{formatTimestamp(item.due_at)}</span> : null}
               <Button size="small" type="link" onClick={() => onOpen(item.context_id, item.tab)}>

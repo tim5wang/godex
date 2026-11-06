@@ -202,26 +202,78 @@ function handleWorkContext(store: Store) {
     // Cross-stream attention inbox: decisions (cards awaiting acceptance) plus
     // overdue/soon plan items, each pointing at the tab that resolves it.
     if (path === "/v1/work-attention" && method === "GET") {
-      const items: Record<string, string>[] = [];
+      // Mirrors the server projection closely enough for the UI contract: the signals
+      // it collects (cards awaiting acceptance, candidate facts, blocked and due plan
+      // items, the stream's own blockers/open questions), the same-kind grouping, and
+      // the dependency leverage count.
+      const raw: Record<string, unknown>[] = [];
+      const titleOf = (id: string) => store.contexts.find((item) => item.id === id)?.title ?? "";
       for (const delegation of store.delegations) {
+        const ctx = delegationCtx(delegation);
         const card = store.cards[delegation.card_id];
-        if (!card || card.status !== "in_review") continue;
-        items.push({
-          kind: "delegation_review", priority: "high", context_id: delegationCtx(delegation),
-          context_title: store.contexts.find((item) => item.id === delegationCtx(delegation))?.title ?? "",
-          title: card.title, detail: "等待验收", tab: "tasks",
-        });
+        if (!card) {
+          raw.push({ kind: "delegation_missing", priority: "normal", context_id: ctx, context_title: titleOf(ctx), title: delegation.title, detail: "委派卡已丢失", tab: "delegations" });
+          continue;
+        }
+        if (card.status !== "in_review") continue;
+        raw.push({ kind: "delegation_review", priority: "high", context_id: ctx, context_title: titleOf(ctx), title: card.title, detail: "等待验收", tab: "tasks" });
+      }
+      for (const fact of store.facts) {
+        if (fact.status !== "candidate") continue;
+        raw.push({ kind: "fact_review", priority: "normal", context_id: fact.context_id, context_title: titleOf(fact.context_id), title: fact.title, detail: "待审核事实", tab: "knowledge" });
       }
       for (const todo of store.todos) {
+        if (todo.status === "blocked") {
+          raw.push({ kind: "todo_blocked", priority: "normal", context_id: todo.context_id, context_title: titleOf(todo.context_id), title: todo.text, detail: "计划项受阻", due_at: todo.due_at, tab: "plan" });
+          continue;
+        }
         if (!todo.due_at || todo.status === "done") continue;
         const due = Date.parse(todo.due_at);
         if (Number.isNaN(due) || due > Date.now() + 24 * 3600 * 1000) continue;
-        items.push({
+        raw.push({
           kind: due <= Date.now() ? "todo_overdue" : "todo_soon",
           priority: due <= Date.now() ? "normal" : "low", context_id: todo.context_id,
-          context_title: store.contexts.find((item) => item.id === todo.context_id)?.title ?? "",
+          context_title: titleOf(todo.context_id),
           title: todo.text, detail: due <= Date.now() ? "已过期" : "即将到期", due_at: todo.due_at, tab: "plan",
         });
+      }
+      for (const ctx of store.contexts) {
+        const groups: [string, string, string][] = [
+          ["checkpoint_blocker", "normal", "检查点阻塞"],
+          ["checkpoint_question", "low", "待确认问题"],
+        ];
+        for (const [kind, priority, detail] of groups) {
+          const entries = kind === "checkpoint_blocker" ? ctx.checkpoint.blockers : ctx.checkpoint.open_questions;
+          for (const entry of entries) {
+            raw.push({ kind, priority, context_id: ctx.id, context_title: ctx.title, title: entry, detail, tab: "overview" });
+          }
+        }
+      }
+      // Same-kind grouping: the row count must match the number the user reads.
+      const items: Record<string, unknown>[] = [];
+      const groupAt = new Map<string, number>();
+      for (const item of raw) {
+        const key = `${item.kind as string}:${item.context_id as string}`;
+        const at = groupAt.get(key);
+        if (at === undefined) {
+          groupAt.set(key, items.length);
+          items.push({ ...item });
+          continue;
+        }
+        const merged = items[at]!;
+        merged.count = ((merged.count as number) ?? 1) + 1;
+        const also = (merged.also as string[]) ?? [];
+        if (also.length < 4) merged.also = [...also, item.title as string];
+      }
+      // Leverage: how many other streams declare depends_on onto each stream.
+      const leverage: Record<string, number> = {};
+      for (const relation of store.relations) {
+        if (relation.kind !== "depends_on") continue;
+        leverage[relation.to_id] = (leverage[relation.to_id] ?? 0) + 1;
+      }
+      for (const item of items) {
+        const count = leverage[item.context_id as string];
+        if (count) item.blocked_count = count;
       }
       const unread: Record<string, number> = {};
       for (const context of store.contexts) {
@@ -855,6 +907,31 @@ test("scopes the attention inbox and jumps to the board that resolves the item",
   await expect(sections(page).locator(".ant-segmented-item-selected")).toHaveText("委派");
   // Reading the inbox is read-only: it must not silently mark the stream seen.
   expect(store.seen["ctx-1"]).toBeUndefined();
+});
+
+test("groups repeated reminders from one stream and shows dependency leverage", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  const store = await install(page, seededStore());
+  // Three overdue items in the SAME stream: attention cost tracks ROWS, so they
+  // must collapse into one row that says how many, not three near-identical lines.
+  for (const [index, text] of ["过期项 A", "过期项 B", "过期项 C"].entries()) {
+    store.todos.push({
+      id: `todo-g${index}`, context_id: "ctx-1", text, status: "todo", owner: "",
+      due_at: "2026-10-01T00:00:00Z", source: "human", position: index, version: 1, created_at: NOW, updated_at: NOW,
+    });
+  }
+  // The other stream depends on ctx-1, so ctx-1 carries leverage.
+  store.relations.push({ id: "rel-dep", from_id: "ctx-2", to_id: "ctx-1", kind: "depends_on", condition: "ctx-1 不交付则无法对齐", created_at: NOW });
+  await openSection(page, "待处理");
+
+  const inbox = boards(page).locator(".wd-attention");
+  await expect(inbox.getByText("共 3 条", { exact: true })).toBeVisible();
+  // The collapsed titles stay readable without opening the stream.
+  await expect(inbox.getByText("过期项 A", { exact: true })).toBeVisible();
+  // Leverage is its own tag, so "why is this row first" is answerable at a glance.
+  // It appears on every row of that stream (each row belongs to it), so the assertion
+  // is deliberately scoped with .first() rather than demanding a single match.
+  await expect(inbox.getByText("阻塞 1 条主线", { exact: true }).first()).toBeVisible();
 });
 
 test("the rail unread badge leads to the changes it counts", async ({ page }) => {

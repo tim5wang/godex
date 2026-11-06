@@ -796,6 +796,12 @@ test("renders plan items as compact two-line bubbles with no visible meta labels
   const openBorder = await open.evaluate((el) => getComputedStyle(el).borderLeftColor);
   expect(doneBorder).not.toBe(openBorder);
 
+  // The due field carries a calendar glyph. antd's DatePicker suffix is a calendar
+  // by default, but the requirement was explicit, so it is asserted rather than left
+  // to the library: a future `suffixIcon={null}` (a plausible tweak for a tight row)
+  // would silently drop it.
+  await expect(done.locator(".wd-todo-due .ant-picker-suffix .anticon-calendar")).toHaveCount(1);
+
   // The status pill still names the state, and stays editable in place.
   await expect(done.getByText("完成", { exact: true })).toBeVisible();
 });

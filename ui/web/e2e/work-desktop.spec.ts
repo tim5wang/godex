@@ -508,7 +508,8 @@ async function openDesktopRail(page: Page, path = "/chat") {
     await sidebarToggle.first().click();
   }
   await expect(viewSwitch(page)).toBeVisible();
-  await viewSwitch(page).getByText("桌面", { exact: true }).click();
+  // Locale-tolerant: the two options are 对话/桌面 in zh and Directory/Desktop in en.
+  await page.locator(".ant-segmented-item", { hasText: /桌面|Desktop/ }).click();
   await expect(rail(page)).toBeVisible();
 }
 
@@ -519,8 +520,14 @@ async function openDesktopRail(page: Page, path = "/chat") {
  */
 async function openDesktop(page: Page) {
   await openDesktopRail(page);
-  if (!(await boards(page).isVisible())) {
-    await page.locator('.chat-v2-topbar-tab[aria-label="Work desktop"]').click();
+  // Do NOT probe with isVisible() and then click: the dock tab's click TOGGLES, so
+  // clicking an already-open tab collapses it. That race (the guide or the view
+  // switch can already have opened it) would leave the panel hidden forever.
+  // Only click when the tab is not active, and let the assertion below auto-wait.
+  const dockTab = page.locator('.chat-v2-topbar-tab[aria-label="Work desktop"]');
+  const isActive = await dockTab.evaluate((el) => el.classList.contains("chat-v2-topbar-tab-active"));
+  if (!isActive) {
+    await dockTab.click();
   }
   await expect(boards(page)).toBeVisible();
 }
@@ -574,6 +581,24 @@ test("switching to the desktop view reveals its boards without a second click", 
   await expect(rail(page)).toBeVisible();
   await expect(boards(page)).toBeVisible();
   await expect(sections(page)).toBeVisible();
+});
+
+test("remembers the left view across a reload", async ({ page }) => {
+  // The user asked for the view to be remembered. It matters beyond convenience:
+  // the work desktop is where background nudges land, so a reload must not silently
+  // drop you back into the conversation directory. Asserted through a real reload
+  // (not by calling the store), so it fails if the persistence wiring is ever dropped
+  // again — the helpers existed for a while with nothing calling them.
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  await install(page, seededStore());
+  await openDesktopRail(page);
+  await expect(page.locator(".chat-v2-left")).toHaveAttribute("data-left-view", "desktop");
+
+  await page.reload();
+  await expect(page.locator(".chat-v2-left")).toHaveAttribute("data-left-view", "desktop");
+  await expect(rail(page)).toBeVisible();
+  // And the directory really is not what came back.
+  await expect(page.locator('[data-testid="chat-v2-sessions"]')).toHaveCount(0);
 });
 
 test("an empty store is a real first-run state, and creating a desktop writes through the API", async ({ page }) => {

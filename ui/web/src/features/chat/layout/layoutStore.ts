@@ -189,17 +189,23 @@ export function hydrateSnapshot(raw: string | null): ChatLayoutSnapshot | null {
 
 export function readPersistedSnapshot(): ChatLayoutSnapshot | null {
   if (typeof window === "undefined") return null;
-  // Mobile always starts from the conversation view; a layout persisted on a
-  // desktop viewport (files dock open, rails wide) would otherwise cover the
-  // whole screen with the files panel on a narrow device.
-  if (isNarrowViewport()) {
-    return defaultChatLayoutSnapshot();
-  }
+  let raw: string | null = null;
   try {
-    return hydrateSnapshot(window.localStorage.getItem(CHAT_LAYOUT_STORAGE_KEY));
+    raw = window.localStorage.getItem(CHAT_LAYOUT_STORAGE_KEY);
   } catch {
     return null;
   }
+  const hydrated = hydrateSnapshot(raw);
+  // Mobile keeps the rails out of the way: a layout persisted on a desktop
+  // viewport (dock open, rails wide) would otherwise cover the whole screen with
+  // the files panel on a narrow device. The VIEW is deliberately preserved here —
+  // the work desktop is the point of the fusion, and remembering it costs nothing
+  // on a phone (it is a list, not a panel that would cover the screen).
+  if (isNarrowViewport()) {
+    const base = hydrated ?? defaultChatLayoutSnapshot();
+    return { ...base, leftCollapsed: true, rightCollapsed: true };
+  }
+  return hydrated;
 }
 
 export function writePersistedSnapshot(state: ChatLayoutStoreState | ChatLayoutSnapshot): void {

@@ -176,6 +176,20 @@ describe("layout store", () => {
     expect(persisted!.leftView).toBe("directory");
   });
 
+  it("keeps the left view on narrow viewports while still collapsing the rails", () => {
+    // The view is remembered even on a phone: the desktop is a list, not a panel
+    // that would cover the screen, so preserving it costs nothing — while the rails
+    // must still start collapsed so the conversation is immediately usable.
+    useConversationLayoutStore.getState().setLeftView("desktop");
+    writePersistedSnapshot(useConversationLayoutStore.getState());
+    useConversationLayoutStore.getState().reset();
+    setViewportWidth(390);
+    const persisted = readPersistedSnapshot();
+    expect(persisted!.leftView).toBe("desktop");
+    expect(persisted!.leftCollapsed).toBe(true);
+    expect(persisted!.rightCollapsed).toBe(true);
+  });
+
   it("reset restores defaults", () => {
     useConversationLayoutStore.getState().toggleLeft();
     useConversationLayoutStore.getState().setLeftWidth(300);

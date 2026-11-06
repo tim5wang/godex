@@ -33,7 +33,7 @@ import { useSettingsStore } from "./store/settings";
 import { useNodeContextStore } from "./store/nodeContext";
 import { useLayoutStore } from "./store/layout";
 import { DOCK_TAB_META } from "./features/chat/layout/DockRail";
-import { useConversationLayoutStore } from "./features/chat/layout/layoutStore";
+import { useConversationLayoutStore, readPersistedSnapshot, serializeSnapshot, writePersistedSnapshot } from "./features/chat/layout/layoutStore";
 import {
   LAYOUT_STORAGE_KEY,
   applyLayoutSnapshot,
@@ -122,6 +122,25 @@ export default function App() {
       unsubscribe();
       window.removeEventListener("storage", onStorage);
     };
+  }, []);
+
+  // The chat layout store (which left view you are on, the dock tab, rail widths)
+  // persists through the same hand-rolled layer. Without this the helpers existed but
+  // nothing called them, so the layout — including the left view — reset on reload.
+  // The view is the part that matters most: the work desktop is where background
+  // nudges land, so reloading should not silently drop you back into the directory.
+  useLayoutEffect(() => {
+    const persisted = readPersistedSnapshot();
+    if (persisted) {
+      useConversationLayoutStore.setState(persisted);
+    }
+    const unsubscribe = useConversationLayoutStore.subscribe((state) => {
+      // Defer to microtask to avoid sync I/O during commit phase.
+      queueMicrotask(() => {
+        writePersistedSnapshot(serializeSnapshot(state));
+      });
+    });
+    return () => unsubscribe();
   }, []);
 
   // P3 / T7 (SPEC §4.4): Ctrl/Cmd + ` toggles the terminal panel

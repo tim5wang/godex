@@ -907,6 +907,14 @@ test("recalls facts by scope, reviews a candidate and submits a memory candidate
   await boards(page).getByRole("textbox", { name: "搜索结论、关键词或历史线索", exact: true }).fill("参数");
   await expect(boards(page).locator(".wd-knowledge")).toHaveCount(1);
 
+  // Rows collapse to their title by default, so the review actions are one click
+  // away: they live in the body with the content they act on.
+  const card = boards(page).locator(".wd-knowledge").first();
+  await expect(card).toHaveAttribute("data-expanded", "false");
+  await expect(card.getByRole("button", { name: rx("确认") })).toHaveCount(0);
+  await card.locator(".wd-knowledge-head").click();
+  await expect(card).toHaveAttribute("data-expanded", "true");
+
   await boards(page).getByRole("button", { name: rx("确认") }).click();
   await expect(boards(page).locator(".wd-knowledge").getByText("已确认", { exact: true })).toBeVisible();
   expect(store.writes).toContain("PATCH /v1/work-contexts/ctx-1/facts/fact-1");
@@ -917,12 +925,11 @@ test("recalls facts by scope, reviews a candidate and submits a memory candidate
   expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/facts/fact-1/memory-candidate");
 });
 
-test("renders knowledge as markdown, keeps line breaks and folds long entries", async ({ page }) => {
+test("renders knowledge as markdown and collapses entries to their title until opened", async ({ page }) => {
   test.skip((page.viewportSize()?.width ?? 0) < 1024);
   const store = await install(page, seededStore());
-  // A long entry: a heading plus a list, longer than the fold threshold. The title
-  // and the excerpt both contain real newlines, which used to collapse into one
-  // run-on line.
+  // A long entry: a heading plus a list. The title and the excerpt both contain
+  // real newlines, which used to collapse into one run-on line.
   const body = ["# 根因分析", "- 固定解码参数", "- 单变量对比", "- 复核短句集合", "- 检查后处理", "- 复跑 r12 基线"].join("\n");
   store.facts[0]!.content = body;
   store.facts[0]!.title = "退化可能来自解码参数\n（待复核）";
@@ -932,33 +939,45 @@ test("renders knowledge as markdown, keeps line breaks and folds long entries", 
   const card = boards(page).locator(".wd-knowledge").first();
   await expect(card).toBeVisible();
 
-  // (1) Folded: only the opening lines render. Asserting the ITEM COUNT (not "the
-  //     card exists") is what makes this fail if the fold is dropped.
-  await expect(card.locator("li")).toHaveCount(3);
-  await expect(card.getByText("复跑 r12 基线", { exact: true })).toHaveCount(0);
-  // A folded entry shows the headline only; the details are part of the fold.
+  // (1) Collapsed by default: the title row is the whole card. Asserting the
+  //     *absence* of the rendered body (not just "the card exists") is what makes
+  //     this fail if the collapse is dropped.
+  await expect(card).toHaveAttribute("data-expanded", "false");
+  await expect(card.getByText("退化可能来自解码参数", { exact: false })).toBeVisible();
+  await expect(card.locator("li")).toHaveCount(0);
+  await expect(card.locator("h1")).toHaveCount(0);
+  // The scope detail is part of the body, so it is hidden too.
   await expect(card.getByText("适用范围", { exact: false })).toHaveCount(0);
+  // A collapsed row must still show its review state, or a candidate that needs a
+  // decision would look identical to a confirmed fact.
+  await expect(card.getByText("待审核", { exact: true })).toBeVisible();
 
-  // (2) Markdown actually renders (the heading becomes a heading element).
-  await expect(card.locator("h1")).toHaveText("根因分析");
+  // (2) The head is the toggle, and it advertises its state.
+  const head = card.locator(".wd-knowledge-head");
+  await expect(head).toHaveAttribute("aria-expanded", "false");
+  await head.click();
+  await expect(card).toHaveAttribute("data-expanded", "true");
+  await expect(head).toHaveAttribute("aria-expanded", "true");
 
-  // (3) Expanding reveals the rest and brings the details back.
-  await card.getByRole("button", { name: "展开全部" }).click();
+  // (3) Opening reveals the markdown body (the heading becomes a heading element)
+  //     and brings the details back.
   await expect(card.locator("li")).toHaveCount(5);
+  await expect(card.locator("h1")).toHaveText("根因分析");
   await expect(card.getByText("复跑 r12 基线", { exact: true })).toBeVisible();
   await expect(card.getByText("适用范围", { exact: false })).toBeVisible();
 
   // (4) Line breaks survive in the title and the evidence excerpt. Compared as
   //     computed style: textContent keeps the \n either way, so only white-space
   //     distinguishes "preserved" from "collapsed into one line".
-  await expect(card.locator(".ant-card-head-title .whitespace-pre-wrap").first()).toHaveCSS("white-space", "pre-wrap");
+  await expect(card.locator(".wd-knowledge-title").first()).toHaveCSS("white-space", "pre-wrap");
   const excerpt = card.locator(".ant-typography.whitespace-pre-wrap").first();
   await expect(excerpt).toHaveCSS("white-space", "pre-wrap");
   await expect(excerpt).toContainText("短句 8.4% → 9.6%");
 
-  // (5) And it folds back.
-  await card.getByRole("button", { name: "收起" }).click();
-  await expect(card.locator("li")).toHaveCount(3);
+  // (5) And it collapses back to the title row.
+  await head.click();
+  await expect(card).toHaveAttribute("data-expanded", "false");
+  await expect(card.locator("li")).toHaveCount(0);
 });
 
 test("delegates to a real card without auto-running it, then executes and reviews on demand", async ({ page }, info) => {

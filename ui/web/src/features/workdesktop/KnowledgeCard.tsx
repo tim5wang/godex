@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Button, Card, Space, Tag, Typography } from "antd";
-import { ThunderboltOutlined } from "@ant-design/icons";
+import { DownOutlined, RightOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { MarkdownContent } from "../../components/MarkdownContent";
 import { formatTimestamp } from "./workDesktopView";
 import type { WorkFact } from "../../lib/apiWorkContext";
@@ -8,12 +8,17 @@ import type { WorkFact } from "../../lib/apiWorkContext";
 /**
  * KnowledgeCard renders one work fact.
  *
- * Long entries fold to their opening lines: a stream accumulates many facts and a
- * wall of full-length text is unscannable. The fold is line-based rather than a CSS
- * clamp so what is hidden is predictable, and the full text is one click away.
+ * Collapsed by default, showing only the title: a stream accumulates many facts
+ * and a wall of full-length entries is unscannable, so the board reads as a list
+ * of headline rows and the user opens the one they care about. The whole title
+ * row is the toggle (a large hit target, and the disclosure is announced through
+ * aria-expanded) rather than a small link at the bottom of the body.
+ *
+ * Only the title row stays visible when collapsed — the content, scope/source
+ * details and the review actions are all part of what opening reveals. The status
+ * tag stays in the card's `extra` so the review state is readable while collapsed
+ * (a candidate that needs a decision must not look identical to a confirmed one).
  */
-const PREVIEW_LINES = 4;
-
 export function KnowledgeCard(props: {
   fact: WorkFact;
   contextTitle?: string;
@@ -28,32 +33,41 @@ export function KnowledgeCard(props: {
   const { fact, contextTitle, statusColor, readOnly, tr, trLabel, onAccept, onDismiss, onPromote } = props;
   const [open, setOpen] = useState(false);
 
-  const lines = fact.content.split("\n");
-  const collapsible = lines.length > PREVIEW_LINES;
-  const folded = collapsible && !open;
-  const shown = folded ? lines.slice(0, PREVIEW_LINES).join("\n") : fact.content;
+  // Label describes what the NEXT click does, which is the disclosure convention.
+  const toggleLabel = open ? tr("collapse") : tr("expand");
 
   return (
     <Card
       size="small"
       className="wd-knowledge"
-      // Title with pre-wrap: an entry title can carry its own line break, and the
-      // card head's default `white-space: normal` collapses it into one run-on line.
-      title={<Space wrap><Tag>{trLabel("factKind", fact.kind)}</Tag><span className="whitespace-pre-wrap break-words">{fact.title}</span></Space>}
+      data-expanded={open ? "true" : "false"}
+      title={
+        // The whole head is one button, so the title is both the label and the
+        // click target. It carries no aria-label on purpose: that would override
+        // the accessible name and hide the title (the actual content) from screen
+        // readers; aria-expanded conveys the state and `title` the hover hint.
+        <button
+          type="button"
+          className="wd-knowledge-head"
+          aria-expanded={open}
+          title={toggleLabel}
+          onClick={() => setOpen((prev) => !prev)}
+        >
+          {open ? <DownOutlined aria-hidden="true" /> : <RightOutlined aria-hidden="true" />}
+          <Tag>{trLabel("factKind", fact.kind)}</Tag>
+          {/* pre-wrap: an entry title can carry its own line break, and the card
+              head's default `white-space: normal` collapses it into one run-on line. */}
+          <span className="wd-knowledge-title whitespace-pre-wrap break-words">{fact.title}</span>
+        </button>
+      }
       extra={<Tag color={statusColor}>{trLabel("factStatus", fact.status)}</Tag>}
     >
-      {/* forceMarkdown, not the usual "does it look like markdown?" heuristic: a
-          knowledge entry is authored text where headings and lists are intended,
-          whereas that heuristic exists to keep incidental tool output un-mangled. */}
-      <MarkdownContent content={shown} forceMarkdown />
-      {folded ? (
-        <Button size="small" type="link" className="wd-knowledge-toggle" aria-expanded={false} onClick={() => setOpen(true)}>
-          {tr("expand")}
-        </Button>
-      ) : null}
+      {open ? <>
+        {/* forceMarkdown, not the usual "does it look like markdown?" heuristic: a
+            knowledge entry is authored text where headings and lists are intended,
+            whereas that heuristic exists to keep incidental tool output un-mangled. */}
+        <MarkdownContent content={fact.content} forceMarkdown />
 
-      {/* Details are part of what the fold hides — collapsed stays concise. */}
-      {!folded && <>
         <div className="wd-muted">{tr("factScopeLabel")} · {fact.scope || tr("noItems")}</div>
         <div className="wd-muted">{tr("factObserved")} · {formatTimestamp(fact.observed_at) || tr("noItems")}</div>
         {fact.verified_at && <div className="wd-muted">{tr("verifiedAt")} · {formatTimestamp(fact.verified_at)}</div>}
@@ -62,22 +76,17 @@ export function KnowledgeCard(props: {
             where the original layout is the evidence. */}
         {fact.source_excerpt && <Typography.Paragraph type="secondary" className="whitespace-pre-wrap break-words">“{fact.source_excerpt}”</Typography.Paragraph>}
         {fact.supersedes_id && <div className="wd-muted">{tr("factSupersedes")} · {fact.supersedes_id}</div>}
-        {collapsible ? (
-          <Button size="small" type="link" className="wd-knowledge-toggle" aria-expanded onClick={() => setOpen(false)}>
-            {tr("collapse")}
-          </Button>
-        ) : null}
-      </>}
 
-      <Space wrap style={{ marginTop: 12 }}>
-        {contextTitle && <Tag>{contextTitle}</Tag>}
-        {fact.status === "candidate" && !readOnly && <>
-          <Button size="small" type="primary" onClick={() => onAccept(fact)}>{tr("accept")}</Button>
-          <Button size="small" danger onClick={() => onDismiss(fact)}>{tr("dismiss")}</Button>
-        </>}
-        {!fact.memory_candidate_id && fact.status === "confirmed" && !readOnly && <Button size="small" icon={<ThunderboltOutlined aria-hidden="true" />} onClick={() => onPromote(fact)}>{tr("promoteMemory")}</Button>}
-        {fact.memory_candidate_id && <Tag color="purple">{tr("memoryCandidate")}</Tag>}
-      </Space>
+        <Space wrap style={{ marginTop: 12 }}>
+          {contextTitle && <Tag>{contextTitle}</Tag>}
+          {fact.status === "candidate" && !readOnly && <>
+            <Button size="small" type="primary" onClick={() => onAccept(fact)}>{tr("accept")}</Button>
+            <Button size="small" danger onClick={() => onDismiss(fact)}>{tr("dismiss")}</Button>
+          </>}
+          {!fact.memory_candidate_id && fact.status === "confirmed" && !readOnly && <Button size="small" icon={<ThunderboltOutlined aria-hidden="true" />} onClick={() => onPromote(fact)}>{tr("promoteMemory")}</Button>}
+          {fact.memory_candidate_id && <Tag color="purple">{tr("memoryCandidate")}</Tag>}
+        </Space>
+      </> : null}
     </Card>
   );
 }

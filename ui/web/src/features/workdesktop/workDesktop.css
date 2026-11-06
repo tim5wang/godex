@@ -132,9 +132,25 @@
 .wd-recall-tools { display: grid; grid-template-columns: minmax(0, 1fr) 200px; gap: 12px; }
 .wd-knowledge .ant-card-head-title { white-space: normal; padding: 10px 0; overflow-wrap: anywhere; }
 .wd-knowledge .ant-card-head-wrapper { gap: 8px; }
-/* A folded knowledge entry is one click from its full text; keep the toggle flush
-   with the body so an expanded entry does not look like it has a stray footer. */
-.wd-knowledge-toggle { padding: 0; height: auto; }
+/* Collapsed knowledge rows are headline-only, so the whole head is the toggle:
+   a large hit target that reads as one row. Reset the button chrome so the title
+   looks like the card title it replaced. */
+.wd-knowledge-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.wd-knowledge-title { min-width: 0; overflow-wrap: anywhere; }
+.wd-knowledge-head:hover .wd-knowledge-title { color: var(--godex-accent); }
 .wd-wrap { overflow-wrap: anywhere; word-break: break-word; }
 .wd-mobile-switch { display: none; }
 .wd-page button:focus-visible { outline: 2px solid var(--godex-accent); outline-offset: 3px; }

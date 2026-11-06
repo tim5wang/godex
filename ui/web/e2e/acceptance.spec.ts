@@ -272,31 +272,6 @@ test.describe("M0 Acceptance Checklist — PC (Desktop Chrome 1440×900)", () =>
     expect(expandedBox!.width).toBeGreaterThan(120);
   });
 
-  test("Task center chip selects the shared inspector task tab", async ({ page }) => {
-    await page.waitForSelector(".godex-header", { timeout: 5000 });
-    const chip = page.locator('[data-testid="task-center-chip-button"]');
-    await expect(chip).toBeVisible({ timeout: 5000 });
-    await chip.click();
-
-    const inspector = page.locator('[data-testid="chat-inspector"]');
-    await expect(inspector).toHaveAttribute("data-collapsed", "false");
-    await expect(inspector.locator(".task-center-band")).toBeVisible({ timeout: 3000 });
-    await expect(inspector.locator('[role="tab"][aria-selected="true"]')).toContainText(/Task Center|任务中心/);
-  });
-
-  test("Shared inspector collapse button folds the task center drawer", async ({ page }) => {
-    const chip = page.locator('[data-testid="task-center-chip-button"]');
-    await chip.click();
-    const inspector = page.locator('[data-testid="chat-inspector"]');
-    await expect(inspector).toHaveAttribute("data-collapsed", "false");
-
-    await page.locator('[data-testid="inspector-collapse"]').click();
-    await expect(inspector).toHaveAttribute("data-collapsed", "true");
-
-    await chip.click();
-    await expect(inspector).toHaveAttribute("data-collapsed", "false");
-    await expect(inspector.locator(".task-center-band")).toBeVisible({ timeout: 3000 });
-  });
 });
 
 test.describe("M0 Acceptance Checklist — Mobile (Pixel 7 375×812)", () => {

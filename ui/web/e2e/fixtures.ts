@@ -66,6 +66,19 @@ async function handleAPIRoute(route: Route): Promise<void> {
       });
       return;
 
+    // Agent templates (the "talent market"). The shape matters for the same reason
+    // as nodes above: the chat page resolves the route's template with
+    // `(templatesQuery.data ?? []).find(...)`, so the generic `{}` fallback crashes
+    // the whole page with "`.find` is not a function" — which is what left /chat on
+    // an error boundary here and made the mobile dock assertions unreachable.
+    case path === "/agent-templates" || path.startsWith("/agent-templates?"):
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([]),
+      });
+      return;
+
     case path === "/sessions" || path === "/sessions/":
       if (route.request().method() === "POST") {
         await route.fulfill({
@@ -116,6 +129,11 @@ async function handleAPIRoute(route: Route): Promise<void> {
     case path.startsWith("/sessions/playwright-session/subagents"):
     case path.startsWith("/sessions/playwright-session/longtasks"):
     case path.startsWith("/sessions/playwright-session/skills"):
+    // Compactions is the same class of trap as nodes/templates above: the chat
+    // page passes it straight to a list, so `{}` crashes with
+    // "`.map` is not a function" instead of failing quietly. Every session-scoped
+    // collection belongs in this group for that reason.
+    case path.startsWith("/sessions/playwright-session/compactions"):
       await route.fulfill({
         status: 200,
         contentType: "application/json",

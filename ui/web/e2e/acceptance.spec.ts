@@ -325,7 +325,9 @@ test.describe("M0 Acceptance Checklist — Mobile (Pixel 7 375×812)", () => {
   });
 
   test("Every mobile dock provides a reachable Back to chat action", async ({ page }) => {
-    for (const dock of ["Files", "Terminal", "Tasks", "Preview", "Status"]) {
+    // "Tasks" is not in this list because that dock is no longer reachable from the
+    // icon strip (it duplicated the desktop's delegation board and was removed).
+    for (const dock of ["Files", "Terminal", "Preview", "Status"]) {
       const dockTab = page.getByRole("button", { name: dock, exact: true });
       await expect(dockTab, `${dock} button should not be clipped`).toBeVisible({ timeout: 5000 });
       await expect(dockTab).toBeInViewport();

@@ -442,10 +442,16 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
                   </span>
                 ) : null}
                 <div className="chat-v2-topbar-tabs">
-                  {DOCK_TABS.map((tab: DockTab) => {
+                  {/* The Tasks icon is deliberately not rendered in this strip, on request.
+                      It was not the only way to the task list: the same TaskCenterPanel is
+                      also a tab inside the Status inspector, so nothing became unreachable.
+
+                      Excluded from the STRIP rather than from DOCK_TABS itself: a layout
+                      persisted with this tab active still hydrates (isDockTab keeps
+                      accepting "tasks") and its pane still renders. */}
+                  {DOCK_TABS.filter((tab) => tab !== "tasks").map((tab: DockTab) => {
                     const meta = DOCK_TAB_META[tab];
                     const active = tab === v2ActiveDockTab && !v2RightCollapsed;
-                    const badge = tab === "tasks" ? (pendingPermissions.length || 0) : 0;
                     return (
                       <Tooltip key={tab} title={meta.label}>
                         <Button
@@ -455,9 +461,7 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
                           aria-label={meta.label}
                           className={`chat-v2-topbar-tab${active ? " chat-v2-topbar-tab-active" : ""}`}
                           onClick={() => v2SetActiveDockTab(tab)}
-                        >
-                          {badge > 0 ? <span className="chat-v2-topbar-badge">{badge}</span> : null}
-                        </Button>
+                        />
                       </Tooltip>
                     );
                   })}

@@ -406,21 +406,6 @@
   color: var(--godex-accent, #0f766e);
 }
 
-.chat-v2-topbar-badge {
-  position: absolute;
-  top: 0;
-  right: 0;
-  min-width: 12px;
-  height: 12px;
-  padding: 0 2px;
-  border-radius: 6px;
-  background: var(--godex-error, #b42318);
-  color: #fff;
-  font-size: 8px;
-  line-height: 12px;
-  text-align: center;
-}
-
 /* Collapsed left rail icon strip */
 .chat-v2-rail-collapsed {
   display: flex;
@@ -627,7 +612,9 @@
 
   .chat-v2-topbar-tabs {
     display: grid;
-    grid-template-columns: repeat(5, minmax(40px, 1fr));
+    /* Count-agnostic on purpose: this used to hardcode repeat(5, ...) and went stale
+       whenever a dock tab was added or removed (the Tasks tab was just removed). */
+    grid-template-columns: repeat(auto-fit, minmax(40px, 1fr));
     flex: 1 1 auto;
     min-width: 0;
   }

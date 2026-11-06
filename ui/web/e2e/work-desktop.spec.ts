@@ -857,6 +857,46 @@ test("scopes the attention inbox and jumps to the board that resolves the item",
   expect(store.seen["ctx-1"]).toBeUndefined();
 });
 
+test("the rail unread badge leads to the changes it counts", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  const store = await install(page, seededStore());
+  await openDesktop(page);
+
+  // seededStore gives ctx-1 exactly one event and no seen watermark, so its badge
+  // reads "1 条未读变动". The seed previously made "2" unexplainable from the desktop
+  // because the count is unread EVENTS, while the 待我处理 board lists actionable
+  // items (overdue plans / cards to review) — two different populations.
+  const badge = rail(page).getByRole("button", { name: "1 条未读变动" });
+  await expect(badge).toBeVisible();
+  // It is a real button and NOT nested inside the card's own button; nesting buttons
+  // is invalid HTML, which is precisely why the number could not be clicked before.
+  await expect(rail(page).locator(".wd-rail-item .wd-rail-unread")).toHaveCount(0);
+
+  // Collapse the card that actually explains the count.
+  const focusCard = boards(page).locator(".wd-focus-card");
+  await expect(focusCard).toHaveAttribute("data-folded", "false");
+  await focusCard.locator(".wd-fold-toggle").click();
+  await expect(focusCard).toHaveAttribute("data-folded", "true");
+
+  // From another board, the badge must PULL the user to Overview (not just print a
+  // number) and the card must be readable there.
+  await sections(page).getByText("计划", { exact: true }).click();
+  await expect(sections(page).locator(".ant-segmented-item-selected")).toHaveText("计划");
+  await badge.click();
+  await expect(sections(page).locator(".ant-segmented-item-selected")).toHaveText("概览");
+  await expect(focusCard.getByText("检查点 r3 已保存", { exact: true })).toBeVisible();
+
+  // Clicking again while already on Overview re-reveals a card the user collapsed:
+  // this is the path where nothing remounts, so the reveal has to be explicit.
+  await focusCard.locator(".wd-fold-toggle").click();
+  await expect(focusCard).toHaveAttribute("data-folded", "true");
+  await badge.click();
+  await expect(focusCard).toHaveAttribute("data-folded", "false");
+
+  // Looking at the count is a read: it must not silently mark the stream seen.
+  expect(store.seen["ctx-1"]).toBeUndefined();
+});
+
 test("selecting another desktop in the rail swaps the boards to it", async ({ page }) => {
   test.skip((page.viewportSize()?.width ?? 0) < 1024);
   const store = await install(page, seededStore());

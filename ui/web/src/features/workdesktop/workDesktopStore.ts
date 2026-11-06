@@ -78,6 +78,10 @@ interface WorkDesktopState {
   attentionScope: "current" | "all";
   /** Free-text filter over the desktop list in the rail. */
   search: string;
+  /** Bumped when the user asks to be taken to the "changes since last seen" list
+   *  (i.e. clicked a rail unread badge). A monotonically increasing nonce rather
+   *  than a boolean, so repeated clicks re-trigger the reveal. */
+  changesFocusNonce: number;
   setContextId: (id: string) => void;
   setSection: (section: WorkDesktopSection) => void;
   openEditor: (editor: WorkDesktopEditor, reviewTargetId?: string) => void;
@@ -87,6 +91,7 @@ interface WorkDesktopState {
   setRecallScope: (scope: RecallScope) => void;
   setAttentionScope: (scope: "current" | "all") => void;
   setSearch: (search: string) => void;
+  revealChanges: () => void;
 }
 
 export const useWorkDesktopStore = create<WorkDesktopState>((set) => ({
@@ -99,6 +104,7 @@ export const useWorkDesktopStore = create<WorkDesktopState>((set) => ({
   recallScope: "current",
   attentionScope: "all",
   search: "",
+  changesFocusNonce: 0,
   setContextId: (id) => set({ contextId: id, briefOpen: false }),
   setSection: (section) => set({ section }),
   openEditor: (editor, reviewTargetId = "") => set({ editor, reviewTargetId }),
@@ -108,6 +114,7 @@ export const useWorkDesktopStore = create<WorkDesktopState>((set) => ({
   setRecallScope: (recallScope) => set({ recallScope }),
   setAttentionScope: (attentionScope) => set({ attentionScope }),
   setSearch: (search) => set({ search }),
+  revealChanges: () => set((state) => ({ changesFocusNonce: state.changesFocusNonce + 1 })),
 }));
 
 /** Attention-inbox items name the desktop tab where they resolve. The old tabs

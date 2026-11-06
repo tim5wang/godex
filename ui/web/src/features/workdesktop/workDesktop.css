@@ -403,7 +403,24 @@
 /* Left rail: one row per desktop, with the ACTIVE one expanding in place to show
    its linked conversations. */
 .wd-rail-list { display: flex; flex-direction: column; gap: 6px; padding: 0 8px 8px; }
-.wd-rail-item-wrap { min-width: 0; }
+.wd-rail-item-wrap { min-width: 0; position: relative; }
+/* The unread badge is a real button (it leads to the changes it counts), so it is
+   positioned over the card corner rather than nested inside the card's button. */
+.wd-rail-unread {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.wd-rail-unread .ant-badge { line-height: 1; }
+/* The title shares the corner with the badge, so keep it clear of it. */
+.wd-rail-item-top { padding-right: 26px; }
 .wd-rail-item {
   display: flex;
   flex-direction: column;

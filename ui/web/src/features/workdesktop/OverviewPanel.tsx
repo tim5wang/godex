@@ -1,8 +1,10 @@
+import { useEffect, useRef } from "react";
 import { Button, Empty, Space, Tag, Typography } from "antd";
 import { CheckCircleOutlined, ClockCircleOutlined, FileTextOutlined, PauseCircleOutlined, PlayCircleOutlined, ProfileOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { InlineEdit } from "./workDesktopInline";
 import { InfoHint } from "./workDesktopHints";
 import { FoldCard } from "./workDesktopFold";
+import { useWorkDesktopStore } from "./workDesktopStore";
 import { formatTimestamp, joinLines, splitLines } from "./workDesktopView";
 import type { CheckpointInput, WorkCheckpoint, WorkEvent } from "../../lib/apiWorkContext";
 
@@ -69,6 +71,20 @@ export function OverviewPanel(props: {
 
   const seenLabel = lastSeenAt ? formatTimestamp(lastSeenAt) : tr("lastSeenNever");
 
+  // The rail's unread badge lands here, so this card must force itself open and
+  // scroll into view when asked: it is where "N unread changes" are actually read.
+  // Ref-compared against the mount value, so a stale non-zero nonce does not scroll
+  // the panel on every mount (e.g. after switching desktops and back).
+  const changesFocusNonce = useWorkDesktopStore((state) => state.changesFocusNonce);
+  const changesRef = useRef<HTMLDivElement>(null);
+  const lastChangesFocus = useRef(changesFocusNonce);
+  useEffect(() => {
+    if (changesFocusNonce !== lastChangesFocus.current) {
+      lastChangesFocus.current = changesFocusNonce;
+      changesRef.current?.scrollIntoView({ block: "center" });
+    }
+  }, [changesFocusNonce]);
+
   return <div className="wd-stack">
     <FoldCard
       {...foldProps}
@@ -104,14 +120,17 @@ export function OverviewPanel(props: {
       {listEdit("checkpointEvidenceRefs", checkpoint.evidence_refs, (items) => ({ evidence_refs: items }))}
     </FoldCard>
 
-    <FoldCard
-      {...foldProps}
-      className="wd-focus-card"
-      title={<Space size={6}><ThunderboltOutlined aria-hidden="true" />{tr("changesSinceTitle")}<span className="wd-muted">{seenLabel}</span></Space>}
-      extra={!readOnly && focusChanges.length > 0 ? <Button size="small" loading={markSeenPending} onClick={onMarkSeen}>{tr("markSeen")}</Button> : null}
-    >
-      {focusChanges.length ? <div className="wd-stack">{focusChanges.slice(0, 8).map((event) => <div key={event.id}><Typography.Text>{event.title}</Typography.Text><div className="wd-muted">{event.kind} · {formatTimestamp(event.created_at)}</div></div>)}</div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={tr("noChanges")} />}
-    </FoldCard>
+    <div ref={changesRef}>
+      <FoldCard
+        {...foldProps}
+        className="wd-focus-card"
+        revealNonce={changesFocusNonce}
+        title={<Space size={6}><ThunderboltOutlined aria-hidden="true" />{tr("changesSinceTitle")}<span className="wd-muted">{seenLabel}</span></Space>}
+        extra={!readOnly && focusChanges.length > 0 ? <Button size="small" loading={markSeenPending} onClick={onMarkSeen}>{tr("markSeen")}</Button> : null}
+      >
+        {focusChanges.length ? <div className="wd-stack">{focusChanges.slice(0, 8).map((event) => <div key={event.id}><Typography.Text>{event.title}</Typography.Text><div className="wd-muted">{event.kind} · {formatTimestamp(event.created_at)}</div></div>)}</div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={tr("noChanges")} />}
+      </FoldCard>
+    </div>
 
     <Typography.Paragraph type="secondary" className="wd-foot-note">
       <InfoHint title={tr("currentUnknown")} text={tr("currentUnknownHint")} /> {tr("currentUnknown")}

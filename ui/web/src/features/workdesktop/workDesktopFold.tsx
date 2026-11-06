@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Card } from "antd";
 import { DownOutlined, RightOutlined } from "@ant-design/icons";
 
@@ -17,13 +17,29 @@ export function FoldCard(props: {
   extra?: ReactNode;
   className?: string;
   defaultOpen?: boolean;
+  /** Bumped externally to force this card open — used when something else links
+   *  TO this card (e.g. the rail's unread badge), where landing on a folded card
+   *  would hide the very content the link promised. */
+  revealNonce?: number;
   /** Labels for the toggle's accessible name (it is the only control that folds). */
   openLabel: string;
   closeLabel: string;
   children: ReactNode;
 }) {
-  const { title, extra, className, defaultOpen = true, openLabel, closeLabel, children } = props;
+  const { title, extra, className, defaultOpen = true, revealNonce = 0, openLabel, closeLabel, children } = props;
   const [open, setOpen] = useState(defaultOpen);
+
+  // Only an actual BUMP forces the card open. Comparing against the mount value (via
+  // ref) rather than truthiness matters: a non-zero nonce stays non-zero forever, so
+  // a plain `if (revealNonce)` would re-open the card on every remount and override
+  // a collapse the user had since chosen.
+  const lastReveal = useRef(revealNonce);
+  useEffect(() => {
+    if (revealNonce !== lastReveal.current) {
+      lastReveal.current = revealNonce;
+      setOpen(true);
+    }
+  }, [revealNonce]);
 
   return (
     <Card

@@ -2,6 +2,7 @@ import { useEffect, type ReactNode } from "react";
 import { App as AntApp, Badge, Button, Empty, Input, Popconfirm, Skeleton, Space, Tag, Tooltip, Typography } from "antd";
 import { CommentOutlined, DeleteOutlined, LinkOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, VerticalRightOutlined } from "@ant-design/icons";
 import { useWorkDesktopStore } from "./workDesktopStore";
+import { useConversationLayoutStore } from "../chat/layout/layoutStore";
 import { WorkDesktopEditorModal } from "./WorkDesktopEditorModal";
 import { useOpenWorkConversation, useWorkDesktopData } from "./useWorkDesktopData";
 import { ensurePushSubscriptionSilent } from "../../lib/push";
@@ -38,7 +39,10 @@ export function WorkDesktopRail(props: { collapsed: boolean; viewSwitcher: React
   const search = useWorkDesktopStore((state) => state.search);
   const setSearch = useWorkDesktopStore((state) => state.setSearch);
   const setContextId = useWorkDesktopStore((state) => state.setContextId);
+  const setSection = useWorkDesktopStore((state) => state.setSection);
+  const revealChanges = useWorkDesktopStore((state) => state.revealChanges);
   const openEditor = useWorkDesktopStore((state) => state.openEditor);
+  const activateDockTab = useConversationLayoutStore((state) => state.activateDockTab);
   const {
     tr, trLabel, filteredContexts, contextId, readOnly, invalidContext,
     unreadByContext, sessions, contextsQuery, unlinkSessionMutation,
@@ -50,6 +54,20 @@ export function WorkDesktopRail(props: { collapsed: boolean; viewSwitcher: React
   // editor opened from here. The dock renders a fallback copy only when this rail is
   // not on screen (see WorkDesktopPanel), so exactly one instance exists at a time.
   const modal = <WorkDesktopEditorModal data={data} />;
+
+  // The unread badge is the only place a stream announces that it has moved, so it
+  // must LEAD somewhere: it selects that desktop, shows the Overview board and
+  // reveals the "changes since last seen" card — which is what the count actually
+  // counts. A badge that only printed a number is exactly what made "2"
+  // unexplainable from inside the desktop, and it was nested inside the card's own
+  // <button> (invalid HTML) so it could not have been clicked anyway.
+  const openUnreadChanges = (id: string) => {
+    setContextId(id);
+    setSection("overview");
+    revealChanges();
+    // The boards live in the right dock, so the badge must also bring it into view.
+    activateDockTab("workdesk");
+  };
 
   // Re-register the push subscription once per mount. It never prompts, so a user
   // who has not granted permission is left alone and one who has does not have to
@@ -117,6 +135,21 @@ export function WorkDesktopRail(props: { collapsed: boolean; viewSwitcher: React
               const linked = active ? sessions : [];
               return (
                 <div key={item.id} className="wd-rail-item-wrap">
+                  {/* The unread badge sits OUTSIDE the card's own button: a button
+                      nested in a button is invalid HTML, which is why it could not be
+                      clicked before. Its accessible name says what it does. */}
+                  {unread > 0 ? (
+                    <Tooltip title={tr("attentionUnreadHint", { count: unread })}>
+                      <button
+                        type="button"
+                        className="wd-rail-unread"
+                        aria-label={tr("attentionUnread", { count: unread })}
+                        onClick={() => openUnreadChanges(item.id)}
+                      >
+                        <Badge count={unread} size="small" />
+                      </button>
+                    </Tooltip>
+                  ) : null}
                   <button
                     type="button"
                     className={`wd-rail-item ${active ? "wd-rail-item-selected" : ""}`}
@@ -126,7 +159,6 @@ export function WorkDesktopRail(props: { collapsed: boolean; viewSwitcher: React
                     <span className="wd-rail-item-top">
                       <strong>{item.title}</strong>
                       <Space size={4} align="center">
-                        {unread > 0 && <Badge count={unread} size="small" title={tr("attentionUnread", { count: unread })} />}
                         <span className={`wd-status-dot wd-status-${item.status}`} />
                       </Space>
                     </span>

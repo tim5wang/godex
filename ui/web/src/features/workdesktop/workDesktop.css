@@ -92,7 +92,23 @@
 .wd-next-card { border-top: 3px solid var(--godex-accent); }
 .wd-next-list { margin: 6px 0 16px; padding-left: 22px; }
 .wd-next-list li { padding: 4px 0; line-height: 1.6; }
-.wd-overview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+/* Overview sections stack in ONE column: the panel lives in the chat's right dock,
+   where a two-column grid left each card too narrow to read. Each section is a
+   FoldCard, so height is opt-in rather than fixed. */
+/* The fold toggle is chrome, not content: keep it quiet so it does not compete
+   with the card title it sits next to. */
+.wd-fold-toggle {
+  color: var(--godex-muted);
+  background: none;
+  border: 0;
+  padding: 0 2px 0 0;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+}
+.wd-fold-toggle:hover { color: var(--godex-accent); }
+.wd-fold .ant-card-head-title { padding: 0; }
+.wd-fold-head { display: inline-flex; align-items: center; gap: 6px; }
 .wd-section + .wd-section { margin-top: 16px; }
 .wd-section ul { margin: 10px 0 16px; padding-left: 18px; }
 .wd-section li { margin: 6px 0; line-height: 1.6; overflow-wrap: anywhere; }
@@ -127,7 +143,6 @@
   .wd-layout { grid-template-columns: 218px minmax(0, 1fr); }
   .wd-sidebar { grid-column: 2; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .wd-sidebar > :last-child { grid-column: 1 / -1; }
-  .wd-overview-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 760px) {
@@ -241,26 +256,46 @@
 .wd-chip-created { font-size: 11px; }
 .wd-chip-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 
-/* --- plan items --- */
-.wd-todos { display: flex; flex-direction: column; gap: 4px; }
+/* --- plan items (compact bubbles) --- */
+/* The desktop moved into the chat's right dock, which is far narrower than the old
+   standalone page, so the five-column row (status | text | owner | due | delete)
+   could not survive. Each item is now a two-line bubble — what, then who/when —
+   whose meta row WRAPS instead of squeezing the columns. */
+.wd-todos { display: flex; flex-direction: column; gap: 6px; }
 .wd-todo {
-  display: grid;
-  grid-template-columns: 88px minmax(0, 1fr) 150px 130px auto;
-  gap: 8px;
-  align-items: center;
-  padding: 4px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
   border: 1px solid var(--godex-border);
+  /* The status colour rides the left bar, so the state stays readable at a glance
+     without a strikethrough (line-through measurably hurt readability here). */
+  border-left: 3px solid var(--godex-border);
   border-radius: 6px;
   background: var(--godex-panel);
 }
-.wd-todo-blocked { border-color: var(--godex-danger, #cf1322); }
-.wd-todo-done .wd-todo-text { text-decoration: line-through; opacity: 0.7; }
-.wd-todo-meta { display: flex; align-items: center; gap: 4px; font-size: 12px; min-width: 0; }
+.wd-todo-todo { border-left-color: var(--godex-muted); }
+.wd-todo-doing { border-left-color: var(--godex-accent); }
+.wd-todo-done { border-left-color: var(--godex-success, #389e0d); background: var(--godex-panel-muted); }
+.wd-todo-blocked { border-left-color: var(--godex-danger, #cf1322); }
+.wd-todo-text-row { min-width: 0; font-size: 13px; }
+.wd-todo-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  min-width: 0;
+}
+.wd-todo-meta { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
 .wd-todo-meta .ant-picker { padding: 0; }
+/* Delete sits at the end of the meta row, dimmed until hover: it is destructive and
+   should not compete with the content for attention. */
+.wd-todo-delete { margin-left: auto; opacity: 0.5; }
+.wd-todo-delete:hover { opacity: 1; }
 .wd-todo-add { width: 100%; }
 
 @media (max-width: 760px) {
-  .wd-todo { grid-template-columns: 88px minmax(0, 1fr); }
   .wd-chip-title { max-width: 120px; }
 }
 

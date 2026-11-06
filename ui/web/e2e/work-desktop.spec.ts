@@ -757,6 +757,71 @@ test("keeps plan items in place and marks the stream seen", async ({ page }, inf
   await expect(page.getByText("已把此主线标记为已读", { exact: true })).toBeVisible();
 });
 
+test("renders plan items as compact two-line bubbles with no visible meta labels", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  const store = await install(page, seededStore());
+  // One done item carrying an owner and a due date, plus one open item, so the
+  // status marking is observable as a DIFFERENCE rather than a single sample.
+  store.todos.push(
+    { id: "t-1", context_id: "ctx-1", text: "跑一轮固定参数评测", status: "done", owner: "小林", due_at: "2026-11-20T00:00:00Z", source: "human", position: 1, version: 1, created_at: NOW, updated_at: NOW },
+    { id: "t-2", context_id: "ctx-1", text: "整理发布清单", status: "todo", owner: "", due_at: "", source: "human", position: 2, version: 1, created_at: NOW, updated_at: NOW },
+  );
+  await openSection(page, "计划");
+
+  const done = boards(page).locator(".wd-todo").filter({ hasText: "跑一轮固定参数评测" });
+  const open = boards(page).locator(".wd-todo").filter({ hasText: "整理发布清单" });
+  await expect(done).toBeVisible();
+
+  // Two lines: the plan text on its own row, the meta pieces on the next.
+  await expect(done.locator(".wd-todo-text-row")).toContainText("跑一轮固定参数评测");
+  await expect(done.locator(".wd-todo-meta-row")).toContainText("小林");
+  // The meta row WRAPS rather than squeezing, which is what makes the bubble survive
+  // the dock's narrow width instead of clipping the pieces.
+  await expect(done.locator(".wd-todo-meta-row")).toHaveCSS("flex-wrap", "wrap");
+
+  // "Owner" / "Due" are not rendered as visible text any more: a name and a date read
+  // on their own, and two labels would eat the width the bubble needs. They survive as
+  // accessible names, so the field stays identifiable without a visible label.
+  await expect(done).not.toContainText("负责人");
+  await expect(done).not.toContainText("截止时间");
+  await expect(done.locator('[aria-label="负责人: 跑一轮固定参数评测"]')).toHaveCount(1);
+  await expect(done.locator('[aria-label="截止时间: 跑一轮固定参数评测"]')).toHaveCount(1);
+
+  // A done item is marked by COLOUR, not a strikethrough (line-through measurably hurt
+  // readability at this size). Asserted as "not struck through" plus "visually
+  // distinguishable from an open item", so removing the colour would fail too.
+  const decoration = await done.locator(".wd-todo-text .wd-inline-value").evaluate((el) => getComputedStyle(el).textDecorationLine);
+  expect(decoration).not.toContain("line-through");
+  const doneBorder = await done.evaluate((el) => getComputedStyle(el).borderLeftColor);
+  const openBorder = await open.evaluate((el) => getComputedStyle(el).borderLeftColor);
+  expect(doneBorder).not.toBe(openBorder);
+
+  // The status pill still names the state, and stays editable in place.
+  await expect(done.getByText("完成", { exact: true })).toBeVisible();
+});
+
+test("stacks overview sections in one column and folds each one", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  await install(page, seededStore());
+  await openSection(page, "概览");
+
+  // Single column: every section starts at the same x, so none are side by side. The
+  // old two-column grid squeezed each card at dock width, which is what this replaces.
+  const cards = boards(page).locator(".wd-fold");
+  const xs = await cards.evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().x)));
+  expect(xs.length).toBeGreaterThan(1);
+  expect(new Set(xs).size).toBe(1);
+
+  // Sections start OPEN (this panel is work memory: hiding remembered content by
+  // default is the worse failure), and each folds on demand.
+  const completed = cards.filter({ hasText: "最近完成" });
+  await expect(completed.getByText("补齐评测脚本", { exact: true })).toBeVisible();
+  await completed.getByRole("button", { name: "折叠", exact: true }).click();
+  await expect(completed.getByText("补齐评测脚本", { exact: true })).toHaveCount(0);
+  await completed.getByRole("button", { name: "展开", exact: true }).click();
+  await expect(completed.getByText("补齐评测脚本", { exact: true })).toBeVisible();
+});
+
 test("scopes the attention inbox and jumps to the board that resolves the item", async ({ page }) => {
   test.skip((page.viewportSize()?.width ?? 0) < 1024);
   const store = await install(page, seededStore());

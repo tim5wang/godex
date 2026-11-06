@@ -1,6 +1,6 @@
 # 工作桌面的注意力经济学（Attention Economics）：现状核查与增强方案
 
-> 状态：Partial（§3 为代码实证基线；**AE1 已实施**，见 §6.1；AE2–AE5 仍为待评审方案）
+> 状态：Partial（§3 为代码实证基线；**AE1、AE3 已实施**，见 §6.1/§6.2；AE2、AE4、AE5 仍为待评审方案）
 > 日期：2026-11-07
 > 关联：[work-context-desktop-design.md](./work-context-desktop-design.md)（工作桌面主设计）、[taskboard-plugin-design.md](./taskboard-plugin-design.md)（委派执行器）、[memory-design-principles.md](./memory-design-principles.md)（记忆治理）、[agent-role-and-bundle-design.md](./agent-role-and-bundle-design.md)（Agent 模板/多入口）
 > 定位：解释「工作桌面」这一层在注意力经济中的位置，指出现有实现的杠杆缺口，并给出可分期落地的增强方案。本文不引入第二套 Agent Runtime，不改变既有权限与执行边界。
@@ -162,7 +162,7 @@ Agent     = 条目的生产者（delegate / executor / flow_inspect / 记忆候�
 |---|---|---|---|
 | AE1 | L1 完整化 + 合批 + 杠杆排序 | 无新采集 | ✅ 已实施（2026-11-07），见 §6.1 |
 | AE2 | L1 动词（claim/snooze/dismiss/委托） | 需新增少量接口（动作本身要落审计） | 动作幂等 + owner 隔离 + 不推进 seen 水位 |
-| AE3 | L2 验收包 + 证据徽章 | 复用卡 Execution/Checklist | 无新执行能力；渲染层改动 |
+| AE3 | L2 验收包 + 证据徽章 | 复用卡 Execution/Checklist | ✅ 已实施（2026-11-07），见 §6.2 |
 | AE4 | L3 digest + 配额 + 老化降级 | 依赖 AE1 排序 | 静默时段不烧提醒的不变量仍成立 |
 | AE5 | L4 度量 | 依赖 AE2 动作记录 | 指标可复算；不引入新的埋点隐私面 |
 
@@ -191,6 +191,24 @@ Agent     = 条目的生产者（delegate / executor / flow_inspect / 记忆候�
 - 前端：`pnpm typecheck` 通过；`vitest run` 49 文件 / 497 通过；i18n 中英对齐通过。
 - `playwright work-desktop` **三端 27 passed / 36 skipped / 0 failed**（新增「同一主线多条提醒合批 + 展示被依赖数」用例，含严格模式下的杠杆标签断言）。
 - arch 门禁两个失败仍为**既有基线**（`routes_account.go:registerMemberRoutes` 复杂度 45、`ChatPageView.tsx` 行数），本轮未触碰这两个文件（stash 后复现证实）。
+
+### 6.2 AE3 实施记录（2026-11-07）
+
+验收包：让「能不能收」不靠读执行记录。
+
+- **关键发现（为什么便宜）**：后端与前端类型早已带齐所需字段，**是渲染时把它们丢了**。`WorkDelegationView.Card` 就是完整 `taskboard.Card`，而 `WorkDesktopSections.tsx` 只渲染了 `checklist[].text`，丢掉 `evidence`；`observed_paths` / `research.open_questions` / `merge_report` / `executions[].summary` 全部未用。taskboard 自己的弹窗（`TaskBoardDialogs.tsx:310`）早已渲染 `evidence`——既有先例。
+- **新增纯函数** `acceptancePackage(card)`（`workDesktopView.ts`）：从卡自身字段装配自查包——`summary`（取**最后一条非空** execution summary；无执行则留空，**不拿冻结简报冒充结果**）、`observedPaths`（gate 3 运行上报）与 `declaredPaths`（gate 1 声明未验证，与前者**分开展示**且去重，observed 优先）、`checks`（验收条件 + 证据）、`open`（research.open_questions）、`conflicts`（merge_report）、`hasEvidence`。
+- **诚实规则（本项的核心）**：`hasEvidence` **只在「已勾选且有证据」时才算真**——勾选本身只是声称。一个勾了但无证据的条目会被单独标注「（未附证据）」；若一条证据都没有，面板直接明说「没有可核验的证据」并解释含义，而**不是**让绿勾暗示已验证。未勾选项上的 evidence 不计入（那是备注，不是验证结果）。
+- **新增展示组件** `AcceptancePanel.tsx`（98 行）：单列分区渲染上述五块；证据串按原文换行渲染并加引号（当作记录，不当作者表述）；跨卡路径冲突用 error Alert（裁定冲突正是 reviewer 的职责，不能理）。
+- **接线**：委派卡改用 `AcceptancePanel`；未取到卡时仍显式报 `cardMissing`。
+- **i18n**：中英新增 12 键；样式 `wd-accept-*` 追加入 `workDesktop.css`。
+- 无后端改动（无新接口、无新执行能力），故不重建二进制。
+
+验证（2026-11-07）：
+
+- 新增纯函数单测 6 条（装配、无证据不算、未勾选证据不算且路径不重复、无执行时 summary 留空、取最后一条非空 summary、冲突标签回退）；`workDesktopView.test.ts` 13 通过。
+- 前端：`pnpm typecheck` 通过；`vitest run` 49 文件 / 503 通过；i18n 中英对齐通过。
+- `playwright work-desktop` **三端 29 passed / 40 skipped / 0 failed**；新增两条用例：「展示验收包且把主张与证据分开」（断言证据可见、「（未附证据）」被标出、observed/declared 分区、重叠路径只列一次、未决与冲突可见）与「卡上没有可核验项时直接明说」（种子卡的验收项未勾选且无证据）。
 
 ## 7. 非目标与风险
 

@@ -17,7 +17,17 @@ type Res = { id: string; title: string; kind: string; locator: string; node_id: 
 type Rel = { id: string; from_id: string; to_id: string; kind: string; condition: string; created_at: string };
 type Fact = { id: string; context_id: string; title: string; content: string; kind: string; status: string; scope: string; subject: string; predicate: string; source: string; source_excerpt: string; source_revision: string; observed_at: string; verified_at: string; provenance: string; supersedes_id: string; version: number; created_at: string; memory_candidate_id: string };
 type Link = { id: string; session_id: string; topic: string; created_at: string };
-type Card = { id: string; project_id: string; title: string; status: string; urgency: string; version: number; checklist: { text: string; done: boolean }[]; created_at: string };
+type Card = {
+  id: string; project_id: string; title: string; status: string; urgency: string; version: number;
+  checklist: { text: string; done: boolean; evidence?: string }[]; created_at: string;
+  // Acceptance-package inputs the real card already carries: gate-3 reported paths,
+  // gate-1 declared paths, the run's own outcome summary, its still-open points, and
+  // the gate-4 conflict report.
+  observed_paths?: string[]; touched_paths?: string[];
+  research?: { open_questions?: string[] };
+  merge_report?: { conflicts: { path: string; other_card?: string; other_title?: string }[] };
+  executions?: { summary?: string }[];
+};
 type Event = { id: string; context_id: string; kind: string; title: string; source: string; created_at: string };
 type Delegation = { id: string; request_id: string; card_id: string; project_id: string; title: string; pack: string; state: string; created_at: string };
 type Todo = { id: string; context_id: string; text: string; status: string; owner: string; due_at: string; source: string; position: number; version: number; created_at: string; updated_at: string };
@@ -1124,6 +1134,52 @@ test("delegates to a real card without auto-running it, then executes and review
   await expect.poll(() => store.cards["card-1"]!.status).toBe("in_progress");
   expect(store.writes).toContain("POST /v1/taskboard/cards/card-1/execute");
   await page.screenshot({ path: `../../.godex/tmp/work-desktop-delegation-${info.project.name}.png`, fullPage: true });
+});
+
+test("shows an acceptance package with evidence, and keeps claims apart from proof", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  const store = await install(page, seededStore());
+  // A finished run that reported what it touched, with one evidenced criterion and
+  // one that is only ticked — the distinction the panel exists to make.
+  store.cards["card-1"] = {
+    ...store.cards["card-1"]!,
+    checklist: [
+      { text: "能从部署记录定位回滚目标", done: true, evidence: "go test ./internal/plugins/taskboard/... ok" },
+      { text: "写明灰度回滚窗口", done: true },
+    ],
+    observed_paths: ["internal/plugins/taskboard"],
+    touched_paths: ["internal/plugins/taskboard", "internal/services/backend"],
+    research: { open_questions: ["灰度窗口是否需要人工确认"] },
+    merge_report: { conflicts: [{ path: "internal/services/backend", other_card: "card-9", other_title: "并发卡" }] },
+    executions: [{ summary: "补齐回滚路径并跑通看板用例" }],
+  };
+  await openSection(page, "委派");
+
+  // What was done, from the run itself rather than the frozen brief.
+  await expect(boards(page).getByText("补齐回滚路径并跑通看板用例", { exact: true })).toBeVisible();
+  // How it was verified: the recorded evidence is shown as evidence.
+  await expect(boards(page).getByText(/go test .\/internal\/plugins\/taskboard/)).toBeVisible();
+  // Honesty rule: the ticked-but-unevidenced criterion is called out rather than
+  // left looking identical to the verified one.
+  await expect(boards(page).getByText("（未附证据）", { exact: true })).toBeVisible();
+  // Observed (gate 3) and declared (gate 1) paths stay apart, and the overlap is not
+  // listed twice.
+  await expect(boards(page).getByText("实际改动路径（运行上报）", { exact: true })).toBeVisible();
+  await expect(boards(page).getByText("声明改动路径（未验证）", { exact: true })).toBeVisible();
+  await expect(boards(page).getByText("internal/plugins/taskboard", { exact: true })).toHaveCount(1);
+  // Still-open points and cross-card conflicts are surfaced, not buried.
+  await expect(boards(page).getByText("灰度窗口是否需要人工确认", { exact: true })).toBeVisible();
+  await expect(boards(page).getByText("跨卡路径冲突，需你裁定", { exact: true })).toBeVisible();
+});
+
+test("says outright when a card has nothing checkable", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  const store = await install(page, seededStore());
+  // The seeded card has one criterion, unticked and unevidenced: accepting it would be
+  // accepting a claim, so the panel must say so instead of implying verification.
+  await openSection(page, "委派");
+  await expect(boards(page).getByText("没有可核验的证据", { exact: true })).toBeVisible();
+  expect(store.cards["card-1"]!.executions ?? []).toHaveLength(0);
 });
 
 test("archives to read-only and surfaces write conflicts", async ({ page }) => {

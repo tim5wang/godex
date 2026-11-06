@@ -495,3 +495,19 @@
 /* Overview's linked-conversation rows. */
 .wd-session-row { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding-bottom: 8px; border-bottom: 1px solid var(--godex-border); }
 .wd-session-row:last-child { padding-bottom: 0; border-bottom: 0; }
+
+/* Acceptance package: the structured self-check shown before accepting a card.
+   One column, because it lives in the narrow right dock; each part is a labelled
+   block so "what was done" / "how it was verified" never blur together. */
+.wd-accept { width: 100%; }
+.wd-accept-part { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.wd-accept-part .ant-typography { margin: 0; }
+.wd-accept-checks { margin: 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.wd-accept-checks li { min-width: 0; }
+.wd-accept-open { margin: 0; padding-left: 18px; }
+.wd-accept-conflicts { margin: 0; padding-left: 18px; }
+/* The evidence string reads as recorded, not authored — quoted and de-emphasised
+   so it is never mistaken for the card's own description. */
+.wd-accept-evidence { display: block; font-size: 12px; margin-top: 2px; }
+.wd-accept-done { color: var(--godex-success, #52c41a); }
+.wd-accept-todo { color: var(--godex-muted); }

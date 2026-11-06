@@ -13,6 +13,7 @@ import {
   ThunderboltOutlined,
 } from "@ant-design/icons";
 import { InfoHint } from "./workDesktopHints";
+import { AcceptancePanel } from "./AcceptancePanel";
 import { AttentionInbox } from "./AttentionInbox";
 import { KnowledgeCard } from "./KnowledgeCard";
 import { InlineEdit } from "./workDesktopInline";
@@ -141,8 +142,11 @@ export function WorkDesktopSectionBoard(props: { section: string; data: WorkDesk
         {delegations.length ? delegations.map((delegation) => {
           const card = delegation.card ?? undefined;
           return <Card size="small" className="wd-task" key={delegation.id} title={<Space wrap><span>{delegation.title}</span>{card && <Tag color={cardStatusColor[card.status] ?? "default"}>{trLabel("cardStatus", card.status)}</Tag>}</Space>}>
-            <div className="wd-muted">{tr("acceptance")}</div>
-            <div>{card?.checklist?.length ? <ul>{card.checklist.map((item, index) => <li key={index}>{item.text}</li>)}</ul> : <Typography.Paragraph type="secondary">{delegation.pack || tr("noItems")}</Typography.Paragraph>}</div>
+            {/* The acceptance package, not just the criterion text: what was done, how
+                it was verified, what the run touched, and what is still open — assembled
+                from the card's own fields so accepting does not require reading the
+                execution transcript. */}
+            <AcceptancePanel card={card} fallback={delegation.pack} tr={tr} />
             {!card && <Alert type="warning" showIcon title={tr("cardMissing")} />}
             {card && <div className="wd-muted">{tr("cardState")} · {trLabel("cardStatus", card.status)} · {card.id}</div>}
             <Space wrap style={{ marginTop: 12 }}>

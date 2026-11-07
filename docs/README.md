@@ -135,6 +135,7 @@
 | [release-notes-v1.3.0.md](./release-notes-v1.3.0.md) | v1.3.0 release record | Historical |
 | [release-notes-v1.4.0.md](./release-notes-v1.4.0.md) | v1.4.0 release record | Historical |
 | [release-notes-v1.5.0.md](./release-notes-v1.5.0.md) | v1.5.0 release record | Historical（已发布；tag `v1.5.0` 已推送） |
+| [release-notes-v1.6.0.md](./release-notes-v1.6.0.md) | v1.6.0 release record | Historical（已发布；tag `v1.6.0` 已推送） |
 | [codex-cache.md](./codex-cache.md) | Codex/Responses 端点缓存行为分析 | Analysis |
 | [cache-hitrate-analysis.md](./cache-hitrate-analysis.md) | Cache hit-rate 实测分析 | Analysis（独立任务产物） |
 | [tools_issues.md](./tools_issues.md) | 工具失败与规避经验日志 | Historical / Operational Log |

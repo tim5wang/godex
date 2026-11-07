@@ -92,6 +92,7 @@
     <string name="detail_stop_speak">停止朗读</string>
     <string name="detail_full_text_title">全文</string>
     <string name="detail_full_text_hint">点按底部返回</string>
+    <string name="detail_full_text_capped">回复过长，此处显示不全，请在更大屏幕查看</string>
     <string name="detail_in_progress"> · 进行中</string>
     <string name="detail_history">历史消息</string>
     <string name="history_title">历史消息</string>

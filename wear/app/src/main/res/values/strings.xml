@@ -107,6 +107,7 @@
     <string name="detail_stop_speak">Stop reading</string>
     <string name="detail_full_text_title">Full text</string>
     <string name="detail_full_text_hint">Tap Back below</string>
+    <string name="detail_full_text_capped">Reply too long to show in full here — read it on a larger screen</string>
     <string name="detail_in_progress"> · in progress</string>
     <string name="detail_history">History</string>
     <string name="history_title">History</string>

@@ -176,6 +176,11 @@ data class WatchSessionDetail(
     // lastMessage.text, which is only a raw 140-rune cut and so often showed a
     // markdown heading or the opening of a code fence instead of a sentence.
     @SerialName("reply_summary") val replySummary: String? = null,
+    // Where that reply lives in the session's message list. reply_summary is a
+    // 120-rune shaping of the reply, not the reply, so opening "full text" on it
+    // needs this handle to fetch the real thing. -1 means the node cannot tell
+    // us (an older node), in which case the screen keeps showing the summary.
+    @SerialName("reply_index") val replyIndex: Int = -1,
     @SerialName("current_tool") val currentTool: String? = null,
     // The recent tool sequence (mockup 05's "what has it been doing"), bounded
     // server-side. Distinct from currentTool, which is only the most recent name.
@@ -220,6 +225,7 @@ data class WatchSessionDetail(
     data class LastMessage(
         val role: String = "",
         val text: String = "",
+        val index: Int = -1,
     )
 
     /**
@@ -337,9 +343,30 @@ data class WatchHistoryMessage(
     val text: String = "",
     val timestamp: String? = null,
     val truncated: Boolean = false,
+    // Position in the session's message list, used to fetch the uncut text from
+    // GET /watch/sessions/{id}/messages/{index}. Defaults to -1 so a node that
+    // predates the field reports "no handle" rather than index 0, which would
+    // silently open the first message instead of the tapped one.
+    val index: Int = -1,
 ) {
     val isUser: Boolean get() = role == "user"
 }
+
+/**
+ * One message with its untruncated text.
+ *
+ * The history list is capped at 600 runes per message; this is the way back to
+ * the rest of a long reply, so "truncated" is not a dead end on the wrist.
+ */
+@Serializable
+data class WatchHistoryMessageDetail(
+    @SerialName("session_id") val sessionId: String = "",
+    val index: Int = -1,
+    val role: String = "",
+    val text: String = "",
+    val timestamp: String? = null,
+    val truncated: Boolean = false,
+)
 
 /**
  * The recent conversation, oldest first.

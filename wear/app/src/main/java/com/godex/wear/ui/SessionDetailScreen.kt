@@ -57,16 +57,19 @@ fun SessionDetailScreen(
     onSpeak: () -> Unit = {},
     /** Opens the multi-turn conversation (see HistoryScreen). */
     onHistory: () -> Unit = {},
+    /** The reply being read in full, already fetched by the caller. */
+    fullText: WatchViewModel.FullText? = null,
+    /**
+     * Requests the uncut reply at [index].
+     *
+     * The preview here is a 120-rune summary or a 140-rune cut, so the text in
+     * hand is never the whole reply. Only the node still has it.
+     */
+    onOpenFullText: (index: Int, fallback: String) -> Unit = { _, _ -> },
+    onCloseFullText: () -> Unit = {},
 ) {
     val listState = rememberScalingLazyListState()
 
-    // The reply preview is capped at 3 lines, which on a round 227dp display is the
-    // whole readable area — so a long answer was permanently unreadable on the wrist.
-    // Tapping it opens the full text on its own scrollable screen. A separate screen
-    // rather than an inline expansion because ScalingLazyColumn would have to
-    // re-layout every following item mid-scroll, which jumps the list under the
-    // user's finger.
-    var fullText by remember { mutableStateOf<String?>(null) }
 
     // Needed by elapsedSince, which is not @Composable: it ticks inside LaunchedEffect.
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -87,12 +90,16 @@ fun SessionDetailScreen(
         }
     }
 
-    // Full-text reader (see fullText above). Rendered instead of the list rather
-    // than over it: a scrollable overlay on top of a scrollable list makes it
-    // ambiguous which one a rotary turn should move.
+    // Full-text reader. Rendered instead of the list rather than over it: a
+    // scrollable overlay on top of a scrollable list makes it ambiguous which one
+    // a rotary turn should move.
     val openText = fullText
     if (openText != null) {
-        FullTextScreen(text = openText, onBack = { fullText = null })
+        FullTextScreen(
+            text = openText.text,
+            truncated = openText.truncated,
+            onBack = onCloseFullText,
+        )
     } else {
         FullTextBody(
             listState = listState,
@@ -105,7 +112,7 @@ fun SessionDetailScreen(
             speaking = speaking,
             onSpeak = onSpeak,
             elapsed = elapsed,
-            onOpenFullText = { fullText = it },
+            onOpenFullText = onOpenFullText,
             onHistory = onHistory,
         )
     }
@@ -123,7 +130,7 @@ private fun FullTextBody(
     speaking: Boolean,
     onSpeak: () -> Unit,
     elapsed: String,
-    onOpenFullText: (String) -> Unit,
+    onOpenFullText: (index: Int, fallback: String) -> Unit,
     onHistory: () -> Unit,
 ) {
     ScalingLazyColumn(
@@ -184,6 +191,13 @@ private fun FullTextBody(
                     // screen must still show something in that case.
                     val title = (d.replySummary?.takeIf { it.isNotBlank() }
                         ?: d.lastMessage?.text?.takeIf { it.isNotBlank() })
+                    // Whatever `title` holds is a preview, not the reply: reply_summary
+                    // is a 120-rune shaping and last_message a 140-rune cut. Opening
+                    // "full text" therefore has to fetch the message itself, so this is
+                    // the index to ask for — never the preview string.
+                    val fullTextIndex = d.replyIndex.takeIf { it >= 0 }
+                        ?: d.lastMessage?.index?.takeIf { it >= 0 }
+                        ?: -1
                     if (title != null) {
                         Text(
                             text = title,
@@ -194,7 +208,7 @@ private fun FullTextBody(
                             textAlign = TextAlign.Center,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { onOpenFullText(title) },
+                                .clickable { onOpenFullText(fullTextIndex, title) },
                         )
                         // Only offered when there is actually more to see: a
                         // "read full text" hint on a 2-line reply opens a screen
@@ -207,7 +221,7 @@ private fun FullTextBody(
                                 textAlign = TextAlign.Center,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable { onOpenFullText(title) },
+                                    .clickable { onOpenFullText(fullTextIndex, title) },
                             )
                         }
                         Spacer(Modifier.height(4.dp))
@@ -352,11 +366,16 @@ private fun FullTextBody(
  * Scrollable rather than paginated: a reply can be any length, and paging would
  * need a "next" tap per screenful on a display that already struggles for room.
  *
+ * [truncated] reports that even this full text hit the server's safety cap. It is
+ * stated plainly rather than left to a trailing ellipsis, because the whole point
+ * of this screen is to be the place where a cut reply stops being cut: silently
+ * ending mid-sentence here would read as the reply's real ending.
+ *
  * Selection is deliberately not enabled — Wear has no clipboard affordance worth
  * the gesture conflicts it introduces on a list-free screen.
  */
 @Composable
-internal fun FullTextScreen(text: String, onBack: () -> Unit) {
+internal fun FullTextScreen(text: String, truncated: Boolean = false, onBack: () -> Unit) {
     RoundScreen {
         Column(
             modifier = Modifier
@@ -376,6 +395,16 @@ internal fun FullTextScreen(text: String, onBack: () -> Unit) {
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
+            if (truncated) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.detail_full_text_capped),
+                    style = MaterialTheme.typography.caption1,
+                    color = GodexColors.TextMuted,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
             Spacer(Modifier.height(10.dp))
             SmallAction(stringResource(R.string.common_back), onBack, Modifier.fillMaxWidth())
         }

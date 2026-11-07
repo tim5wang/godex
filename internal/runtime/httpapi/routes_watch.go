@@ -926,6 +926,9 @@ func watchSessionDetail(snapshot backend.Snapshot) map[string]any {
 		out["last_message"] = map[string]any{
 			"role": last.Role,
 			"text": truncateRunes(protocol.MessageText(last), 140),
+			// Same reason as reply_index: 140 runes is a preview, so the client
+			// needs a handle to fetch the rest of it.
+			"index": len(snapshot.Messages) - 1,
 		}
 	}
 	// B4: a wrist-shortened form of the agent's last reply.
@@ -936,8 +939,29 @@ func watchSessionDetail(snapshot backend.Snapshot) map[string]any {
 	// the shaper output, so the detail screen can show a sentence instead.
 	if summary := watchReplySummary(lastAssistantText(snapshot.Messages)); summary != "" {
 		out["reply_summary"] = summary
+		// reply_summary is a shaper output — 120 runes by design, because that is
+		// what a two-line wrist slot holds. It is not the reply, so the screen must
+		// not treat "open full text" on it as complete. The index lets the client
+		// fetch the real text, the same way a truncated history bubble does.
+		if idx := lastAssistantIndex(snapshot.Messages); idx >= 0 {
+			out["reply_index"] = idx
+		}
 	}
 	return out
+}
+
+// lastAssistantIndex returns the position of the message lastAssistantText read,
+// so a client holding only the summary can still ask for the full reply.
+func lastAssistantIndex(messages []protocol.Message) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != protocol.RoleAssistant {
+			continue
+		}
+		if strings.TrimSpace(protocol.MessageText(messages[i])) != "" {
+			return i
+		}
+	}
+	return -1
 }
 
 // lastAssistantText returns the most recent assistant reply, so the summary

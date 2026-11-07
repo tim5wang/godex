@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Background layer of the adaptive launcher icon. This is the white canvas the
+      mark is drawn on in the source artwork (desktop/src-tauri/icons/source-icon.png),
+      not an arbitrary colour: the mark's own circular badge is cream and reads
+      correctly only against that white.
+    -->
+    <color name="ic_launcher_background">#FFFFFF</color>
+</resources>

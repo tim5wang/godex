@@ -151,12 +151,30 @@ private fun GodexWearRoot(deepLinkSessionId: String = "", deepLinkApprovalKey: S
     // subscription depend on which screen is showing.
     val history by vm.history.collectAsState()
     val historyLoading by vm.historyLoading.collectAsState()
+    // The reply/message being read in full. Collected here rather than inside a
+    // navigation branch for the same reason as `history`: both the detail and the
+    // history screen render it, and a conditional subscription would depend on
+    // which screen is showing.
+    val fullText by vm.fullText.collectAsState()
     // Hoisted rather than collected inside the navigation branch: collecting state
     // conditionally is fragile (the subscription depends on which screen is
     // showing) and the approval detail screen re-resolves against it.
     val openApprovalKey by vm.openApprovalKey.collectAsState()
 
     var screen by remember { mutableStateOf<Screen>(Screen.Home) }
+
+    // The full-text reader is now fetched state (see vm.fullText) rather than
+    // screen-local state, because the text comes from the node rather than from
+    // the tapped bubble. That makes it outlive the screen that opened it, so it is
+    // cleared on every navigation: leaving Detail with a reply open must not make
+    // History open straight into that reply later.
+    //
+    // Opening the reader does not change `screen` (it replaces the body), so this
+    // only fires on real navigation — Back inside the reader goes through
+    // onCloseFullText instead.
+    LaunchedEffect(screen) {
+        vm.closeFullText()
+    }
 
     // Set by Home's "Link phone" so the pairing screen mints a code immediately
     // instead of waiting for 生成配对码. Cleared once consumed, so arriving at
@@ -376,11 +394,23 @@ private fun GodexWearRoot(deepLinkSessionId: String = "", deepLinkApprovalKey: S
                         vm.loadHistory(state.currentSessionId)
                         screen = Screen.History
                     },
+                    fullText = fullText,
+                    onOpenFullText = { index, fallback ->
+                        // index carries where the reply lives; the preview string is
+                        // only a fallback for nodes too old to report it.
+                        vm.loadFullText(state.currentSessionId, index, fallback)
+                    },
+                    onCloseFullText = vm::closeFullText,
                 )
 
                 Screen.History -> HistoryScreen(
                     messages = history,
                     loading = historyLoading,
+                    fullText = fullText,
+                    onOpenFullText = { index, fallback ->
+                        vm.loadFullText(state.currentSessionId, index, fallback)
+                    },
+                    onCloseFullText = vm::closeFullText,
                     onBack = { screen = Screen.Detail },
                 )
 

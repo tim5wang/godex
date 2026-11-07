@@ -201,6 +201,16 @@ class WatchApi(
         Request.Builder().url(url("/watch/sessions/$sessionId/messages?limit=$limit" + nodeQuery(nodeId).replaceFirst("?", "&"))).get()
     }
 
+    /**
+     * One message with its untruncated text.
+     *
+     * The list above cuts each message to keep the wrist budget; this is the
+     * follow-up call a "truncated" bubble makes to show the rest.
+     */
+    suspend fun sessionMessageFull(sessionId: String, index: Int, nodeId: String = ""): WatchHistoryMessageDetail = call {
+        Request.Builder().url(url("/watch/sessions/$sessionId/messages/$index" + nodeQuery(nodeId))).get()
+    }
+
     suspend fun nodes(): List<WatchNode> = call {
         Request.Builder().url(url("/watch/nodes")).get()
     }

@@ -10,10 +10,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -37,24 +33,36 @@ import com.godex.wear.data.WatchHistoryMessage
  *
  * Deliberately read-only and bounded: a wrist has no room to compose, edit or
  * search, and re-rendering an entire long conversation would both be slow to
- * scroll and cost a network round trip per open. Tapping a message opens the
- * full text, the same reader the detail screen uses for long replies.
+ * scroll and cost a network round trip per open. Tapping a truncated message
+ * fetches that message in full, the same reader the detail screen uses for long
+ * replies.
  */
 @Composable
 fun HistoryScreen(
     messages: List<WatchHistoryMessage>,
     loading: Boolean,
+    /** The message being read in full, already fetched by the caller. */
+    fullText: WatchViewModel.FullText? = null,
+    /**
+     * Requests the uncut text of one message.
+     *
+     * Takes the message index rather than its text: the list only carries 600
+     * runes of each message, so the text in hand is exactly what is already on
+     * screen. Only the node still has the rest.
+     */
+    onOpenFullText: (index: Int, fallback: String) -> Unit = { _, _ -> },
+    onCloseFullText: () -> Unit = {},
     onBack: () -> Unit,
 ) {
     val listState = rememberScalingLazyListState()
 
-    // Same reader as the detail screen, kept as screen-local state: the open
-    // message belongs to this screen, and hoisting it to the root would leave a
-    // full-text view bound to a list the user already navigated away from.
-    var fullText by remember { mutableStateOf<String?>(null) }
     val openText = fullText
     if (openText != null) {
-        FullTextScreen(text = openText, onBack = { fullText = null })
+        FullTextScreen(
+            text = openText.text,
+            truncated = openText.truncated,
+            onBack = onCloseFullText,
+        )
         return
     }
 
@@ -94,7 +102,10 @@ fun HistoryScreen(
         }
 
         items(messages) { message ->
-            HistoryBubble(message = message, onOpenFullText = { fullText = it })
+            HistoryBubble(
+                message = message,
+                onOpenFullText = { onOpenFullText(message.index, message.text) },
+            )
         }
 
         item {
@@ -116,7 +127,7 @@ fun HistoryScreen(
  * sunlight, and the label also carries through to screen readers.
  */
 @Composable
-private fun HistoryBubble(message: WatchHistoryMessage, onOpenFullText: (String) -> Unit) {
+private fun HistoryBubble(message: WatchHistoryMessage, onOpenFullText: () -> Unit) {
     val isUser = message.isUser
     Column(
         modifier = Modifier
@@ -130,7 +141,7 @@ private fun HistoryBubble(message: WatchHistoryMessage, onOpenFullText: (String)
             // place. Non-truncated messages are not clickable: a tap that opens
             // the same text it just showed is a dead end.
             .then(
-                if (message.truncated) Modifier.clickable { onOpenFullText(message.text) }
+                if (message.truncated) Modifier.clickable { onOpenFullText() }
                 else Modifier,
             ),
         horizontalAlignment = Alignment.CenterHorizontally,

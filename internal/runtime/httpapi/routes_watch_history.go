@@ -25,6 +25,14 @@ const (
 	// Per-message cap. A wrist cannot usefully render more, and one runaway reply
 	// (a pasted log, a generated file) would otherwise consume the whole budget.
 	watchHistoryMessageRunes = 600
+
+	// Full-text cap for one message, served by the per-message endpoint below.
+	//
+	// This is a memory guard, not a display budget: it exists so a single runaway
+	// reply cannot exhaust the watch, and it is deliberately far above anything a
+	// human writes. Hitting it still sets `truncated`, so the client never shows a
+	// cut reply as if it were complete.
+	watchHistoryFullTextMaxRunes = 20000
 )
 
 // watchHistoryMessage is one turn of the conversation as the wrist shows it.
@@ -34,6 +42,24 @@ type watchHistoryMessage struct {
 	Timestamp string `json:"timestamp,omitempty"`
 	// Truncated tells the client the text was cut, so it can offer to open the
 	// full reply rather than silently showing an incomplete answer as complete.
+	Truncated bool `json:"truncated,omitempty"`
+	// Index is this message's position in the session's message list, which is
+	// what GET /watch/sessions/{id}/messages/{index} takes to return the text
+	// uncut. Without it, a truncated bubble had no way to ask for its tail: the
+	// client only ever held the already-cut string, so "open full text" opened
+	// the same cut text again.
+	Index int `json:"index"`
+}
+
+// watchHistoryMessageDetail is one message with its untruncated text.
+type watchHistoryMessageDetail struct {
+	SessionID string `json:"session_id"`
+	Index     int    `json:"index"`
+	Role      string `json:"role"`
+	Text      string `json:"text"`
+	Timestamp string `json:"timestamp,omitempty"`
+	// Truncated is set only when the text exceeded the full-text cap, which takes
+	// an implausibly long reply.
 	Truncated bool `json:"truncated,omitempty"`
 }
 
@@ -71,6 +97,48 @@ func registerWatchHistoryRoute(mux *http.ServeMux, api watchAPI, read func(http.
 			Messages:  watchConversation(snapshot.Messages, limit),
 		})
 	}))))
+
+	// One message, uncut.
+	//
+	// The list above is deliberately budgeted (600 runes), but that budget must
+	// not be the end of the story: the wrist shows "truncated", the user taps,
+	// and there has to be somewhere to read the rest. Serving it by index into
+	// the same snapshot keeps the list cheap without making long replies
+	// unreachable — which is what the previous behaviour amounted to.
+	mux.Handle("GET /watch/sessions/{id}/messages/{index}", read(api.proxy.withForwardToNode(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sessionID := r.PathValue("id")
+		if service == nil {
+			writeError(w, http.StatusServiceUnavailable, fmt.Errorf("session service unavailable"))
+			return
+		}
+		raw := strings.TrimSpace(r.PathValue("index"))
+		index := parseIntQuery(raw, -1)
+		if raw == "" || index < 0 {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid message index"))
+			return
+		}
+
+		snapshot, err := loadWatchSession(r.Context(), service, sessionID)
+		if err != nil {
+			writeError(w, statusForSessionError(err), err)
+			return
+		}
+		if index >= len(snapshot.Messages) {
+			writeError(w, http.StatusNotFound, fmt.Errorf("message %d not found", index))
+			return
+		}
+		msg := snapshot.Messages[index]
+		text := strings.TrimSpace(protocol.MessageText(msg))
+		cut := truncateRunes(text, watchHistoryFullTextMaxRunes)
+		writeJSON(w, http.StatusOK, watchHistoryMessageDetail{
+			SessionID: snapshot.SessionID,
+			Index:     index,
+			Role:      msg.Role,
+			Text:      cut,
+			Timestamp: messageTimestamp(msg),
+			Truncated: len([]rune(text)) > watchHistoryFullTextMaxRunes,
+		})
+	}))))
 }
 
 // watchConversation keeps the last `limit` user/assistant messages.
@@ -105,6 +173,7 @@ func watchConversation(messages []protocol.Message, limit int) []watchHistoryMes
 			Text:      cut,
 			Timestamp: messageTimestamp(msg),
 			Truncated: len([]rune(text)) > watchHistoryMessageRunes,
+			Index:     i,
 		})
 	}
 	// Reverse in place: the backwards walk produced newest-first.

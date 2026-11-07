@@ -95,7 +95,8 @@
 | 设置（服务器地址 / 通知开关 / 省电 / 常亮显示 / 权限范围 / 取消配对） | ✅ |
 | Web 端 Watch 管理页（配对批准 / 设备列表 / 吊销） | ✅ |
 
-后端契约面：`/watch/pair/*`、`/watch/sessions*`、`/watch/approvals*`、`/watch/command`、
+后端契约面：`/watch/pair/*`、`/watch/sessions*`、`/watch/sessions/{id}/messages/{index}`（单条全文）、
+`/watch/approvals*`、`/watch/command`、
 `/watch/asr`、`/watch/tts`、`/watch/push/*`、`/watch/nodes`、`/watch/devices`、
 `/watch/templates`、`/watch/overview`。
 

@@ -86,6 +86,26 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     val historyLoading: StateFlow<Boolean> = _historyLoading.asStateFlow()
 
     /**
+     * The untruncated text the user asked to read, and which message it belongs to.
+     *
+     * Separate from [history] because it is a different resource: the list is
+     * budgeted to 600 runes per message so a wrist-sized fetch stays cheap, while
+     * this is the on-demand full reply that makes the "truncated" marker
+     * actionable. Keyed by (session, index) so a stale response cannot overwrite
+     * a newer request for a different message.
+     */
+    private val _fullText = MutableStateFlow<FullText?>(null)
+    val fullText: StateFlow<FullText?> = _fullText.asStateFlow()
+
+    data class FullText(
+        val sessionId: String,
+        val index: Int,
+        val text: String,
+        /** True when even the full-text cap cut this message. */
+        val truncated: Boolean = false,
+    )
+
+    /**
      * Resolves a UI string.
      *
      * Not a composable, so stringResource is unavailable; the application context
@@ -813,6 +833,51 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                 _historyLoading.value = false
             }
         }
+    }
+
+    /**
+     * Fetches one message uncut and opens it in the full-text reader.
+     *
+     * This is what makes the "truncated" marker honest. Before it, tapping a cut
+     * bubble re-displayed the same 600-rune cut: the list had no way to ask the
+     * node for the rest, so a long reply was permanently unreadable on the wrist.
+     *
+     * [fallback] is shown if the fetch fails. It is the already-visible cut text,
+     * so a network error degrades to today's behaviour instead of an empty screen.
+     */
+    fun loadFullText(sessionId: String, index: Int, fallback: String) {
+        if (sessionId.isBlank() || index < 0) {
+            // No handle (an older node, or a detail response without reply_index):
+            // show what we already have rather than nothing.
+            _fullText.value = FullText(sessionId, index, fallback)
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val loaded = api.sessionMessageFull(sessionId, index, nodeId = remoteNodeId())
+                _fullText.value = FullText(
+                    sessionId = sessionId,
+                    index = index,
+                    text = loaded.text.ifBlank { fallback },
+                    truncated = loaded.truncated,
+                )
+            } catch (err: WatchApiException) {
+                if (err.isAuthFailure) {
+                    handleApiError(err)
+                } else {
+                    _fullText.value = FullText(sessionId, index, fallback)
+                    _notice.value = Notice(err.message, isError = true)
+                }
+            } catch (err: Exception) {
+                _fullText.value = FullText(sessionId, index, fallback)
+                _notice.value = Notice(err.message ?: string(R.string.vm_history_failed), isError = true)
+            }
+        }
+    }
+
+    /** Closes the full-text reader. */
+    fun closeFullText() {
+        _fullText.value = null
     }
 
     /**

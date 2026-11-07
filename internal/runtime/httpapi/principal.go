@@ -187,12 +187,28 @@ func resolveNodeProxyToken(r *http.Request, legacyToken string, lookup nodeProxy
 //     the session resolver is consulted before the default rather than after.
 func classifyPrincipal(r *http.Request, nodeProxy nodeProxyMatch, trustedRelay bool, session func(*http.Request) (identity.Principal, bool)) identity.Principal {
 	if trustedRelay {
-		return identity.Principal{
+		// A forward over this node's own authenticated relay channel. The center
+		// may have asserted WHOSE request this is (VouchIdentityHeader, set from
+		// the identity IT authenticated); honour it so per-owner surfaces resolve
+		// the real user rather than collapsing every remote caller onto the
+		// placeholder. No vouch — or a malformed one — keeps the placeholder,
+		// which owns nothing: an un-attributable caller gets an empty per-owner
+		// surface instead of someone else's data.
+		//
+		// Kind stays KindNode: the vouch conveys ownership, not extra authority, so
+		// naming a user must not widen any capability gate (it must not, for
+		// instance, hand the caller center execution).
+		principal := identity.Principal{
 			UserID:       "relay-node",
 			Kind:         identity.KindNode,
 			Entitlements: identity.NormalizeEntitlements([]string{identity.EntitlementRelayOnly}),
 			AuthMethod:   AuthMethodRelayTrust,
 		}
+		if vouch, ok := relay.DecodeVouch(r.Header.Get(relay.VouchIdentityHeader)); ok {
+			principal.TenantID = vouch.TenantID
+			principal.UserID = vouch.UserID
+		}
+		return principal
 	}
 	if nodeProxy.Matched {
 		// The restricted nk_ credential is what a joined node presents. It is

@@ -238,6 +238,16 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			req.Headers[h] = v
 		}
 	}
+	// Assert the identity we authenticated for this caller, so a node serving
+	// per-owner data scopes to the real user instead of the anonymous
+	// "relay-node" placeholder it would otherwise resolve. Built from the
+	// NodeAccess decision (never copied from the caller), so a caller cannot name
+	// someone else; a malformed or forged inbound value is simply overwritten
+	// here. An empty user emits no header, and the node then owns nothing — an
+	// un-attributable caller sees an empty per-owner surface, not another's data.
+	if vouch := EncodeVouch(decision.TenantID, decision.UserID); vouch != "" {
+		req.Headers[VouchIdentityHeader] = vouch
+	}
 
 	timeout := p.Timeout
 	if timeout <= 0 && !isSSEStream(r) {

@@ -234,7 +234,7 @@ Agent     = 条目的生产者（delegate / executor / flow_inspect / 记忆候�
 - **反向验证过非空洞**：临时把 `reveal={pendingReveal}` 改成 `reveal={false}` 后，`data-flash` 断言**真失败**，恢复后通过——即该断言真的在守护这个 bug。
 - **flake 判定用 A/B 对照而非名字**：全量中 `TestScreenUserInputHookFireAndForgetShadow` 失败并不等于本轮引入。我的改动 `-count=5` 失败 2 次，stash 后基线 `-count=5` 也失败 1 次 → 既有 flake（根因：shadow screener 的后台分类 goroutine 在测试结束后才写盘，与 `t.TempDir` 清理竞态，见 `security_screener_test.go:73`）。只看名字会「猜对而推理错」。
 
-## 7. AE2 前置调研：动词状态放哪（2026-11-07，仅静态核查，未写码）
+## 7. AE2 前置调研：动词状态放哪（2026-11-07；选项 A 的副作用已实测，其余为静态核查）
 
 **问题**。AE2 要给收件箱加动词（claim / snooze / dismiss）。真正决定成本的不是接口数量，而是**状态放哪**：snooze 是「持续到某时刻」的状态，与既有「读时投影」的 read model 不同类。
 
@@ -254,7 +254,9 @@ Agent     = 条目的生产者（delegate / executor / flow_inspect / 记忆候�
 | B 新表 | `wc_attention_actions(tenant, context, item_key, verb, until_at, reason, actor, created_at)`，PK 三列；读路径 LEFT JOIN | migration 4（~20 行 DDL）+ 需定 item_key | ✅ 建议 |
 | C 复用 wc_todos | snooze=改 `due_at`，claim=写 `assignee` | 只能覆盖计划项 | 仅作 todo_* 快捷路径，不能当统一底座 |
 
-**选项 A 的致命副作用（实证）**：`wc_events` 同时是「未读计数」与「变了什么」的来源，而 `UnreadCounts` 的查询**不带 kind 过滤**（`attention.go:238-247`，只按 `created_at > last_seen_at` 分组）。把动作写进 wc_events，会让你**自己的 snooze 变成一条未读变动**，污染未读账本与 AE5 度量。要绕开就得给未读查询加 kind 白名单，把复杂度转移到读路径；此外 snooze 的「到点复现」还要额外 sweep，且日志无界增长需压实。
+**选项 A 的致命副作用（已实测确认，非推断）**：`wc_events` 同时是「未读计数」与「变了什么」的来源，而 `UnreadCounts` 的查询**不带 kind 过滤**（`attention.go:238-247`，只按 `created_at > last_seen_at` 分组）。把动作写进 wc_events，会让你**自己的 snooze 变成一条未读变动**，污染未读账本与 AE5 度量。要绕开就得给未读查询加 kind 白名单，把复杂度转移到读路径；此外 snooze 的「到点复现」还要额外 sweep，且日志无界增长需压实。
+
+实测（`internal/core/workcontext/unread_kinds_test.go` · `TestUnreadCountsCountsEveryEventKind`，写成 characterization test 守护此语义）：给已 `MarkSeen` 的主线写入一条 `attention_action` 事件后，`UnreadCounts` 从 **0 变 1**，且该事件出现在 `Focus.changes` 里——即用户自己的 dismiss 会被当成「未读变动」报回给自己。
 
 **选项 B 的好处**：动作与内容分离（不污染未读/变更流）；动作表天然就是 AE5「注意力收益率」的账本；与 `wc_seen` 先例同构。snooze 的「到期复现」改为**读时判断**（未到点则不投影），省掉一个后台唤醒任务及其不变式。
 
@@ -271,9 +273,13 @@ Agent     = 条目的生产者（delegate / executor / flow_inspect / 记忆候�
 - 动作不得推进 seen 水位（`wc_seen` 仍只由显式 `MarkSeen` 改）。
 - owner 隔离：动作表必须带 tenant/owner 并 JOIN `wc_contexts` 过滤（沿用 `attention_signals.go` 既有做法）。
 
+**量级参考（本机实测）**：`work-contexts.sqlite` 当前 3 条主线 / 105 条事件 / 10 条计划项。动作表的行数随「人做出的动作数」增长、而非随时间增长，在这个规模下任何索引方案都够用；这也是「动作表本身就是 AE5 账本」可行的原因。
+
 **建议顺序**：① 先定 item_key（组级）+ 撤销语义；② 选 B（新表）；③ snooze 到期复现用读时判断。
 
-**未验证**：以上均为代码静态核查，**未写码、未跑测**；选项 A 的「未读污染」是从查询无 kind 过滤推断（未构造数据实测）；B 的实际行数与读路径 JOIN 成本未评估。
+**验证状态（如实区分）**：
+- **已实测**：选项 A 的「未读污染」（探针一次 + 永久回归测试 `unread_kinds_test.go`）；`UnreadCounts` / `Focus.changes` 无 kind 过滤（代码阅读 + 该测试双重确认）。
+- **仍为静态核查，未写码、未跑测**：本节选型结论本身、item_key 语义、B 的实际行数与读路径 JOIN 成本（**未评估**）。
 
 ## 8. 非目标与风险
 

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { Alert, App, Button, Card, Descriptions, Empty, Progress, Space, Table, Tag, Tooltip, Typography } from "antd";
-import { ApiOutlined, ArrowLeftOutlined, CheckOutlined, CodeOutlined, DesktopOutlined, FileTextOutlined, ProfileOutlined, ReloadOutlined, CommentOutlined, StopOutlined } from "@ant-design/icons";
+import { Alert, App, Button, Card, Collapse, Descriptions, Empty, Progress, Space, Table, Tag, Tooltip, Typography } from "antd";
+import { ApiOutlined, ArrowLeftOutlined, CheckOutlined, CodeOutlined, DesktopOutlined, FileTextOutlined, ProfileOutlined, ReloadOutlined, CommentOutlined, SettingOutlined, StopOutlined } from "@ant-design/icons";
 import { useNavigate, useParams } from "react-router-dom";
 import { useI18n } from "../../i18n";
 import { approveNodePermission, denyNodePermission, getNodeOverview } from "../../lib/api";
@@ -60,8 +60,8 @@ export function NodeDetailPage() {
       navigate("/business-agents");
       return;
     }
-    // The work desktop has no route of its own - it is a VIEW of the chat's left
-    // rail - so entering it means selecting the desktop view there. setLeftView
+    // The work desktop has no route of its own — it is a VIEW of the chat's left
+    // rail — so entering it means selecting the desktop view there. setLeftView
     // also unfolds the rail and opens the desktop boards in the right dock, which
     // is exactly "show me this node's work desktop".
     if (page === "workdesk") {
@@ -176,12 +176,37 @@ export function NodeDetailPage() {
           </div>
         </Card>
 
-        {/* Exposure control (design §4.2): the OWNER's own decision. Placed beside
-            the forward tunnels because both answer "what have I opened up on this
-            machine", one for ports and one for peers. */}
-        <NodeVisibilityCard node={node} token={token} />
-
-        <ForwardTunnelsCard nodeID={id} token={token} />
+        {/* Configuration, not live state: exposure and tunnels are set once and
+            revisited rarely, so they sit behind one collapsed section instead of
+            pushing the node's actual running state (sessions/jobs/approvals/events)
+            below the fold. Same "list first, config one click away" rule as the
+            node list page. */}
+        <Collapse
+          className="node-settings-collapse"
+          items={[
+            {
+              key: "settings",
+              label: (
+                <span className="node-settings-collapse-label">
+                  <SettingOutlined />
+                  <span>{t("nodes.detailSettingsTitle")}</span>
+                  <Typography.Text type="secondary" className="node-settings-hint">
+                    {t("nodes.detailSettingsSubtitle")}
+                  </Typography.Text>
+                </span>
+              ),
+              children: (
+                <Space direction="vertical" size={16} style={{ width: "100%" }}>
+                  {/* Exposure control (design §4.2): the OWNER's own decision. Placed
+                      beside the forward tunnels because both answer "what have I opened
+                      up on this machine", one for ports and one for peers. */}
+                  <NodeVisibilityCard node={node} token={token} />
+                  <ForwardTunnelsCard nodeID={id} token={token} />
+                </Space>
+              ),
+            },
+          ]}
+        />
 
         <Card title={t("nodes.runningSessions")} loading={query.isLoading}>
           <Table<NodeSessionInfo>

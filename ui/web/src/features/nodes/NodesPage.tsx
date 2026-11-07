@@ -1,14 +1,16 @@
+import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, App, Button, Card, Empty, Grid, Popconfirm, Space, Spin, Table, Tag, Typography } from "antd";
-import { DeleteOutlined, ReloadOutlined } from "@ant-design/icons";
+import { Alert, App, Button, Empty, Input, Segmented, Space, Spin, Typography } from "antd";
+import { ReloadOutlined, SettingOutlined } from "@ant-design/icons";
 import { useNavigate, useParams } from "react-router-dom";
 import { useI18n } from "../../i18n";
 import { deleteControlNode, getMeta, listControlNodes } from "../../lib/api";
 import type { ControlNode } from "../../lib/types";
 import { useSettingsStore } from "../../store/settings";
-import { JoinCenterCard } from "./JoinCenterCard";
-import { JoinNodeCard } from "./JoinNodeCard";
+import { NodeCard } from "./NodeCard";
 import { NodeDetailPage } from "./NodeDetailPage";
+import { NodeSettingsPanel } from "./NodeSettingsPanel";
+import { matchesNodeQuery, nodeVisualStatus, sortNodesByStatus, type NodeVisualStatus } from "./nodeStatus";
 
 export function NodesPage() {
   const { id } = useParams();
@@ -18,12 +20,22 @@ export function NodesPage() {
   return <NodesListPage />;
 }
 
+type StatusFilter = "all" | NodeVisualStatus;
+
+const SETTINGS_KEY = "settings";
+
 function NodesListPage() {
   const { t } = useI18n();
   const { message } = App.useApp();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const token = useSettingsStore((state) => state.token);
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<StatusFilter>("all");
+  // null = not touched yet, so the section follows its default; once the operator
+  // toggles it, their choice wins (including "keep it collapsed" on an empty list).
+  const [settingsOpen, setSettingsOpen] = useState<string[] | null>(null);
+
   const metaQuery = useQuery({ queryKey: ["meta"], queryFn: getMeta });
   const authRequired = metaQuery.data?.auth_required ?? false;
   const canReachNodes = !authRequired || !!token;
@@ -33,8 +45,12 @@ function NodesListPage() {
     refetchInterval: 15_000,
     queryFn: async () => listControlNodes(token || null),
   });
-  const screens = Grid.useBreakpoint();
-  const isNarrow = !screens.md;
+
+  const nodes = useMemo(() => nodesQuery.data ?? [], [nodesQuery.data]);
+
+  // Relative timestamps are pinned to the last data refresh, so a re-render from
+  // typing in the search box cannot make the same node read "2 分钟前" then "3 分钟前".
+  const now = nodesQuery.dataUpdatedAt || Date.now();
 
   const removeNode = async (node: ControlNode) => {
     try {
@@ -46,27 +62,25 @@ function NodesListPage() {
     }
   };
 
-  const renderCapabilities = (values?: string[]) => (
-    <Space size={[4, 4]} wrap>
-      {(values ?? []).slice(0, 6).map((item) => (
-        <Tag key={item}>{item}</Tag>
-      ))}
-      {(values?.length ?? 0) > 6 ? <Tag>+{(values?.length ?? 0) - 6}</Tag> : null}
-    </Space>
+  const counts = useMemo(() => {
+    const base: Record<StatusFilter, number> = { all: nodes.length, healthy: 0, degraded: 0, offline: 0 };
+    for (const node of nodes) {
+      base[nodeVisualStatus(node)] += 1;
+    }
+    return base;
+  }, [nodes]);
+
+  // Status order first (healthy → degraded → offline), not registry order: the
+  // first card should be one you can actually open.
+  const visible = useMemo(
+    () =>
+      sortNodesByStatus(nodes).filter(
+        (node) => (filter === "all" || nodeVisualStatus(node) === filter) && matchesNodeQuery(node, query),
+      ),
+    [nodes, filter, query],
   );
 
-  const renderDelete = (node: ControlNode) => (
-    <Popconfirm
-      title={t("nodes.deleteTitle")}
-      description={t("nodes.deleteConfirm")}
-      okText={t("nodes.deleteTitle")}
-      cancelText={t("common.cancel")}
-      onConfirm={() => void removeNode(node)}
-      onPopupClick={(e) => e.stopPropagation()}
-    >
-      <Button size="small" danger icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()} />
-    </Popconfirm>
-  );
+  const refresh = () => void queryClient.invalidateQueries({ queryKey: ["control-nodes", token] });
 
   if (!canReachNodes) {
     return (
@@ -76,152 +90,81 @@ function NodesListPage() {
     );
   }
 
-  const nodes = nodesQuery.data ?? [];
-
-  // Narrow screens: card list instead of the wide table.
-  const nodeCards = nodes.map((node) => (
-    <Card
-      key={node.id}
-      size="small"
-      hoverable
-      onClick={() => navigate(`/nodes/${encodeURIComponent(node.id)}`)}
-      title={
-        <Space direction="vertical" size={2}>
-          <Typography.Text strong>
-            {node.name || node.id}{" "}
-            {node.source === "center" ? <Tag color="purple">{t("nodes.sourceCenter")}</Tag> : null}
-          </Typography.Text>
-          <Typography.Text type="secondary" copyable={{ text: node.id }}>
-            {node.id}
-          </Typography.Text>
-        </Space>
-      }
-      extra={renderDelete(node)}
-      style={{ cursor: "pointer" }}
-    >
-      <Space direction="vertical" size={8} style={{ width: "100%" }}>
-        <Space wrap>
-          <Tag color={node.status === "online" ? "green" : "default"}>{node.status || "offline"}</Tag>
-          <Tag color={node.relay_status === "connected" ? "blue" : "default"}>
-            {node.relay_status || "disconnected"}
-          </Tag>
-        </Space>
-        <div>
-          <Typography.Text type="secondary">{t("nodes.workspace")}: </Typography.Text>
-          <Typography.Text title={node.workspace_dir}>{node.workspace_dir || "-"}</Typography.Text>
-        </div>
-        <div>
-          <Typography.Text type="secondary">{t("nodes.endpoint")}: </Typography.Text>
-          <Typography.Text title={node.endpoint}>{node.endpoint || "-"}</Typography.Text>
-        </div>
-        <div>
-          <Typography.Text type="secondary">{t("nodes.version")}: </Typography.Text>
-          <Typography.Text>{node.version || "-"}</Typography.Text>
-          <Typography.Text type="secondary" style={{ marginLeft: 12 }}>
-            {t("nodes.lastSeen")}:{" "}
-          </Typography.Text>
-          <Typography.Text>{node.last_seen ? new Date(node.last_seen).toLocaleString() : "-"}</Typography.Text>
-        </div>
-        {renderCapabilities(node.capabilities)}
-      </Space>
-    </Card>
-  ));
+  const isLoading = nodesQuery.isLoading;
+  // Onboarding is not the daily task, so the panel ships collapsed — unless the
+  // list is loaded AND empty, where adding the first node IS the task.
+  //
+  // Deliberately keyed on isSuccess rather than `nodes.length === 0`: the length is
+  // 0 while the query is still loading too, so an unqualified check would flash the
+  // panel open on every visit to a center that has nodes.
+  const empty = nodesQuery.isSuccess && nodes.length === 0;
+  const expandedSettings = settingsOpen ?? (empty ? [SETTINGS_KEY] : []);
 
   return (
     <main className="page-shell">
-      <JoinCenterCard />
-      <JoinNodeCard />
-      <Card
-        title={t("nodes.tableTitle")}
-        extra={
-          <Button
-            icon={<ReloadOutlined />}
-            onClick={() => void queryClient.invalidateQueries({ queryKey: ["control-nodes", token] })}
-          >
-            {t("nodes.refresh")}
-          </Button>
-        }
-      >
-        {isNarrow ? (
-          <Spin spinning={nodesQuery.isLoading}>
-            <Space direction="vertical" size={12} style={{ width: "100%" }}>
-              {nodeCards}
-              {nodes.length === 0 ? <Empty description={t("nodes.empty")} /> : null}
-            </Space>
-          </Spin>
-        ) : (
-          <Table<ControlNode>
-            rowKey="id"
-            loading={nodesQuery.isLoading}
-            dataSource={nodes}
-            locale={{ emptyText: <Empty description={t("nodes.empty")} /> }}
-            pagination={{ pageSize: 20, showSizeChanger: true }}
-            onRow={(node) => ({
-              onClick: () => navigate(`/nodes/${encodeURIComponent(node.id)}`),
-              style: { cursor: "pointer" },
-            })}
-            columns={[
-              {
-                title: t("nodes.name"),
-                dataIndex: "name",
-                render: (_value, node) => (
-                  <Space direction="vertical" size={2}>
-                    <Typography.Text strong>
-                      {node.name || node.id}{" "}
-                      {node.source === "center" ? <Tag color="purple">{t("nodes.sourceCenter")}</Tag> : null}
-                    </Typography.Text>
-                    <Typography.Text type="secondary" copyable={{ text: node.id }}>
-                      {node.id}
-                    </Typography.Text>
-                  </Space>
-                ),
-              },
-              {
-                title: t("nodes.status"),
-                dataIndex: "status",
-                width: 120,
-                render: (status: ControlNode["status"]) => (
-                  <Tag color={status === "online" ? "green" : "default"}>{status || "offline"}</Tag>
-                ),
-              },
-              {
-                title: t("nodes.workspace"),
-                dataIndex: "workspace_dir",
-                ellipsis: true,
-                render: (value?: string) => <Typography.Text title={value}>{value || "-"}</Typography.Text>,
-              },
-              {
-                title: t("nodes.endpoint"),
-                dataIndex: "endpoint",
-                ellipsis: true,
-                render: (value?: string) => <Typography.Text title={value}>{value || "-"}</Typography.Text>,
-              },
-              {
-                title: t("nodes.version"),
-                dataIndex: "version",
-                width: 120,
-                render: (value?: string) => value || "-",
-              },
-              {
-                title: t("nodes.lastSeen"),
-                dataIndex: "last_seen",
-                width: 190,
-                render: (value?: string) => (value ? new Date(value).toLocaleString() : "-"),
-              },
-              {
-                title: t("nodes.capabilities"),
-                dataIndex: "capabilities",
-                render: (_value, node) => renderCapabilities(node.capabilities),
-              },
-              {
-                title: t("nodes.deleteTitle"),
-                width: 90,
-                render: (_value, node) => renderDelete(node),
-              },
+      <div className="node-toolbar">
+        <div className="node-toolbar-filters">
+          <Input.Search
+            allowClear
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t("nodes.searchPlaceholder")}
+            style={{ width: 240 }}
+          />
+          <Segmented
+            value={filter}
+            onChange={(value) => setFilter(value as StatusFilter)}
+            options={[
+              { value: "all", label: `${t("nodes.filterAll")} ${counts.all}` },
+              { value: "healthy", label: `${t("nodes.filterHealthy")} ${counts.healthy}` },
+              { value: "degraded", label: `${t("nodes.filterDegraded")} ${counts.degraded}` },
+              { value: "offline", label: `${t("nodes.filterOffline")} ${counts.offline}` },
             ]}
           />
+        </div>
+        <Space>
+          <Button icon={<ReloadOutlined />} loading={nodesQuery.isFetching} onClick={refresh}>
+            {t("nodes.refresh")}
+          </Button>
+          <Button
+            icon={<SettingOutlined />}
+            type={expandedSettings.length > 0 ? "primary" : "default"}
+            onClick={() => setSettingsOpen(expandedSettings.length > 0 ? [] : [SETTINGS_KEY])}
+          >
+            {t("nodes.settingsTitle")}
+          </Button>
+        </Space>
+      </div>
+
+      {/* Onboarding is not the daily task: keep it collapsed until asked for —
+          except on a brand-new center, where adding the first node IS the task. */}
+      <NodeSettingsPanel activeKey={expandedSettings} onChange={(keys) => setSettingsOpen(keys)} />
+
+      <Spin spinning={isLoading}>
+        {!isLoading && nodes.length === 0 ? (
+          <Empty description={t("nodes.empty")} />
+        ) : visible.length === 0 ? (
+          <Empty description={t("nodes.noMatch")} />
+        ) : (
+          <div className="node-card-grid">
+            {visible.map((node) => (
+              <NodeCard
+                key={node.id}
+                node={node}
+                now={now}
+                onOpen={() => navigate(`/nodes/${encodeURIComponent(node.id)}`)}
+                onDelete={() => void removeNode(node)}
+              />
+            ))}
+          </div>
         )}
-      </Card>
+      </Spin>
+
+      {visible.length > 0 ? (
+        <Typography.Text type="secondary" className="node-count-hint">
+          {t("nodes.showingCount", { shown: visible.length, total: nodes.length })}
+        </Typography.Text>
+      ) : null}
     </main>
   );
 }

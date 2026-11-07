@@ -11,9 +11,26 @@ export async function mockBackend(page: Page): Promise<void> {
   await page.route("**/v1/**", handleV1Route);
 }
 
+/**
+ * Unwrap the center's node-proxy prefix so the canned routes below match while a
+ * remote node is active.
+ *
+ * When the node context is set, EVERY node-scoped request is rewritten by
+ * apiClient's nodeProxyPath to `/api/control/nodes/{id}/proxy{path}` (a blacklist:
+ * only the center's own paths stay unproxied). The handlers below were written
+ * against bare paths, so with a node active they all fell through to the generic
+ * `{}` response — and any consumer that calls an array method on a collection
+ * (`(x ?? []).map/filter/find`) then crashed the page. Stripping the prefix keeps
+ * one set of canned responses serving both modes instead of duplicating them.
+ */
+const NODE_PROXY_SEGMENT = /\/control\/nodes\/[^/]+\/proxy/;
+function stripNodeProxy(path: string): string {
+  return path.replace(NODE_PROXY_SEGMENT, "");
+}
+
 async function handleAPIRoute(route: Route): Promise<void> {
   const url = new URL(route.request().url());
-  const path = url.pathname.replace(/^\/api/, "");
+  const path = stripNodeProxy(url.pathname.replace(/^\/api/, ""));
 
   switch (true) {
     case path === "/meta" || path === "/meta/":
@@ -59,6 +76,18 @@ async function handleAPIRoute(route: Route): Promise<void> {
     // list to build its execution-node picker, so returning the generic `{}`
     // fallback crashes the whole chat page (`.filter is not a function`).
     case path === "/control/nodes" || path.startsWith("/control/nodes?"):
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([]),
+      });
+      return;
+
+    // Forward tunnels. The node detail page filters this list per node
+    // (`(forwardsQuery.data ?? []).filter(...)`), and it is a CENTER-local path, so
+    // the node-proxy strip does not cover it: the `{}` fallback would crash the
+    // whole detail page.
+    case path === "/control/forwards" || path.startsWith("/control/forwards?"):
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -314,7 +343,10 @@ async function handleAPIRoute(route: Route): Promise<void> {
 
 async function handleV1Route(route: Route): Promise<void> {
   const url = new URL(route.request().url());
-  const path = url.pathname.replace(/^\/v1/, "");
+  // `**/v1/**` also matches the proxied form, whose path is
+  // `/api/control/nodes/{id}/proxy/v1/...`: strip the center `/api` prefix and the
+  // node-proxy segment before the `/v1` prefix so one handler serves both modes.
+  const path = stripNodeProxy(url.pathname.replace(/^\/api/, "")).replace(/^\/v1/, "");
 
   if (path === "/models" || path === "/models/") {
     await route.fulfill({

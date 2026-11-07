@@ -340,6 +340,7 @@ export const zhCoreMessages = {
       openFiles: "打开文件",
       openTaskboard: "打开任务看板",
       openBusinessAgents: "打开业务 Agent",
+      openWorkDesktop: "打开工作桌面",
       remoteBanner: "正在操作远程节点",
       remoteExit: "退出远程模式",
       actions: "操作",

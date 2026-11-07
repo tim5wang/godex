@@ -341,6 +341,7 @@ export const enCoreMessages = {
       openFiles: "Open Files",
       openTaskboard: "Open Taskboard",
       openBusinessAgents: "Open Business Agents",
+      openWorkDesktop: "Open Work Desktop",
       remoteBanner: "Operating remote node",
       remoteExit: "Exit remote mode",
       actions: "Actions",

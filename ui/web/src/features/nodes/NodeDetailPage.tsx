@@ -1,12 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { Alert, App, Button, Card, Descriptions, Empty, Progress, Space, Table, Tag, Tooltip, Typography } from "antd";
-import { ApiOutlined, ArrowLeftOutlined, CheckOutlined, CodeOutlined, FileTextOutlined, ProfileOutlined, ReloadOutlined, CommentOutlined, StopOutlined } from "@ant-design/icons";
+import { ApiOutlined, ArrowLeftOutlined, CheckOutlined, CodeOutlined, DesktopOutlined, FileTextOutlined, ProfileOutlined, ReloadOutlined, CommentOutlined, StopOutlined } from "@ant-design/icons";
 import { useNavigate, useParams } from "react-router-dom";
 import { useI18n } from "../../i18n";
 import { approveNodePermission, denyNodePermission, getNodeOverview } from "../../lib/api";
 import type { NodeApprovalInfo, NodeJobInfo, NodeSessionInfo, NodeStoredEvent } from "../../lib/types";
 import { useSettingsStore } from "../../store/settings";
 import { useNodeContextStore } from "../../store/nodeContext";
+import { useConversationLayoutStore } from "../chat/layout/layoutStore";
 import { ForwardTunnelsCard } from "./ForwardTunnelsCard";
 import { NodeVisibilityCard } from "./NodeVisibilityCard";
 
@@ -45,7 +46,7 @@ export function NodeDetailPage() {
     }
   };
 
-  const openRemote = (page: "chat" | "terminal" | "files" | "taskboard" | "business-agents") => {
+  const openRemote = (page: "chat" | "terminal" | "files" | "taskboard" | "business-agents" | "workdesk") => {
     setNode(id, node?.name);
     if (page === "files") {
       navigate("/files");
@@ -57,6 +58,15 @@ export function NodeDetailPage() {
     }
     if (page === "business-agents") {
       navigate("/business-agents");
+      return;
+    }
+    // The work desktop has no route of its own - it is a VIEW of the chat's left
+    // rail - so entering it means selecting the desktop view there. setLeftView
+    // also unfolds the rail and opens the desktop boards in the right dock, which
+    // is exactly "show me this node's work desktop".
+    if (page === "workdesk") {
+      useConversationLayoutStore.getState().setLeftView("desktop");
+      navigate("/chat");
       return;
     }
     navigate("/chat");
@@ -95,6 +105,11 @@ export function NodeDetailPage() {
           <Tooltip title={node?.relay_status !== "connected" ? t("nodes.remoteDisabledHint") : undefined}>
             <Button icon={<ApiOutlined />} disabled={node?.relay_status !== "connected"} onClick={() => openRemote("business-agents")}>
               {t("nodes.openBusinessAgents")}
+            </Button>
+          </Tooltip>
+          <Tooltip title={node?.relay_status !== "connected" ? t("nodes.remoteDisabledHint") : undefined}>
+            <Button icon={<DesktopOutlined />} disabled={node?.relay_status !== "connected"} onClick={() => openRemote("workdesk")}>
+              {t("nodes.openWorkDesktop")}
             </Button>
           </Tooltip>
         </Space>

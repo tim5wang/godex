@@ -5,7 +5,7 @@ import { useI18n } from "../../i18n";
 import { InfoHint } from "./workDesktopHints";
 import { FoldCard } from "./workDesktopFold";
 import { formatTimestamp } from "./workDesktopView";
-import type { AttentionItem, AttentionVerb, DeferredAttention } from "../../lib/apiWorkContext";
+import type { AttentionAction, AttentionItem, AttentionVerb, DeferredAttention } from "../../lib/apiWorkContext";
 
 /**
  * AttentionInbox is the cross-stream "needs me" list.
@@ -33,8 +33,66 @@ export function AttentionInbox(props: {
   const tr = (key: string, vars?: Record<string, string | number>) => t(`workDesktop.${key}`, vars);
   // The dismiss reason lives here rather than in the server payload because it is
   // typed into a popover: a blank reason must not become a recorded verdict, so the
-  // confirm button stays disabled until something is written.
+  // confirm button stays disabled until something is written. It is keyed by whatever
+  // action key the verdict is for, so row and entry dismissals share one map.
   const [dismissReason, setDismissReason] = useState<Record<string, string>>({});
+  // A grouped row's entries are behind a toggle that starts CLOSED: per-entry verbs are
+  // the exception (most rows are ruled on as a whole), and rendering every entry's three
+  // buttons would turn the triage list into a wall of affordances.
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  /**
+   * One set of verbs, for either a whole row or a single entry of it. Kept as a helper
+   * (rather than duplicated) so the two levels cannot drift apart in behaviour —
+   * including the "dismiss needs a reason" rule, which is the one that protects work
+   * from being silently dropped.
+   */
+  const renderVerbs = (contextId: string, actionKey: string, action?: AttentionAction) => (
+    <Space size={2} className="wd-attention-verbs">
+      {action?.verb === "claim" ? (
+        // A claim is still work (the opposite of deferral), so it stays on the list
+        // and says so rather than vanishing when picked up.
+        <Tag color="processing" className="wd-attention-claimed">{tr("attentionClaimed")}</Tag>
+      ) : (
+        <Button size="small" type="link" onClick={() => onAction?.(contextId, actionKey, "claim")}>
+          {tr("attentionClaim")}
+        </Button>
+      )}
+      <Button
+        size="small"
+        type="link"
+        title={tr("attentionSnoozeHint")}
+        onClick={() => onAction?.(contextId, actionKey, "snooze")}
+      >
+        {tr("attentionSnooze")}
+      </Button>
+      {/* Dismiss hides work, so it takes a reason first: a verdict with no recorded
+          reason is indistinguishable from losing the work, and this is what makes undo
+          meaningful. */}
+      <Popconfirm
+        title={tr("attentionDismissTitle")}
+        description={(
+          <Input
+            size="small"
+            value={dismissReason[actionKey] ?? ""}
+            placeholder={tr("attentionDismissPlaceholder")}
+            onChange={(event) => setDismissReason((prev) => ({ ...prev, [actionKey]: event.target.value }))}
+          />
+        )}
+        okText={tr("attentionDismiss")}
+        cancelText={tr("attentionCancel")}
+        okButtonProps={{ disabled: !(dismissReason[actionKey] ?? "").trim() }}
+        onConfirm={() => {
+          const reason = (dismissReason[actionKey] ?? "").trim();
+          if (!reason) return;
+          onAction?.(contextId, actionKey, "dismiss", reason);
+          setDismissReason((prev) => ({ ...prev, [actionKey]: "" }));
+        }}
+      >
+        <Button size="small" type="link">{tr("attentionDismiss")}</Button>
+      </Popconfirm>
+    </Space>
+  );
 
   const label = (item: AttentionItem) => {
     switch (item.kind) {
@@ -109,51 +167,38 @@ export function AttentionInbox(props: {
                   one a single click applies — no verb silently defaults. They only
                   appear when a handler is wired, so the board degrades to the old
                   read-only list instead of offering buttons that do nothing. */}
-              {onAction ? (
-                <Space size={2} className="wd-attention-verbs">
-                  {item.action?.verb === "claim" ? (
-                    // A claim is still work (the opposite of deferral), so it stays on
-                    // the list and says so rather than vanishing when picked up.
-                    <Tag color="processing" className="wd-attention-claimed">{tr("attentionClaimed")}</Tag>
-                  ) : (
-                    <Button size="small" type="link" onClick={() => onAction(item.context_id, item.item_key, "claim")}>
-                      {tr("attentionClaim")}
-                    </Button>
-                  )}
-                  <Button
-                    size="small"
-                    type="link"
-                    title={tr("attentionSnoozeHint")}
-                    onClick={() => onAction(item.context_id, item.item_key, "snooze")}
-                  >
-                    {tr("attentionSnooze")}
-                  </Button>
-                  {/* Dismiss hides the whole group, so it takes a reason first: a
-                      verdict with no recorded reason is indistinguishable from
-                      losing the work, and this is what makes undo meaningful. */}
-                  <Popconfirm
-                    title={tr("attentionDismissTitle")}
-                    description={(
-                      <Input
-                        size="small"
-                        value={dismissReason[item.item_key] ?? ""}
-                        placeholder={tr("attentionDismissPlaceholder")}
-                        onChange={(event) => setDismissReason((prev) => ({ ...prev, [item.item_key]: event.target.value }))}
-                      />
-                    )}
-                    okText={tr("attentionDismiss")}
-                    cancelText={tr("attentionCancel")}
-                    okButtonProps={{ disabled: !(dismissReason[item.item_key] ?? "").trim() }}
-                    onConfirm={() => {
-                      const reason = (dismissReason[item.item_key] ?? "").trim();
-                      if (!reason) return;
-                      onAction(item.context_id, item.item_key, "dismiss", reason);
-                      setDismissReason((prev) => ({ ...prev, [item.item_key]: "" }));
-                    }}
-                  >
-                    <Button size="small" type="link">{tr("attentionDismiss")}</Button>
-                  </Popconfirm>
-                </Space>
+              {onAction ? renderVerbs(item.context_id, item.item_key, item.action) : null}
+              {/* Per-entry verbs are opt-in: most rows are ruled on as a whole, so the
+                  entry list starts collapsed rather than stacking three buttons per
+                  entry into a triage list. */}
+              {onAction && item.entries?.length ? (
+                <button
+                  type="button"
+                  className="wd-attention-entries-toggle"
+                  aria-expanded={expanded[item.item_key] === true}
+                  onClick={() => setExpanded((prev) => ({ ...prev, [item.item_key]: !prev[item.item_key] }))}
+                >
+                  {expanded[item.item_key] ? tr("attentionEntriesHide") : tr("attentionEntriesShow", { count: item.entries.length })}
+                </button>
+              ) : null}
+              {onAction && item.entries?.length && expanded[item.item_key] ? (
+                <ul className="wd-attention-entries">
+                  {item.entries.map((entry) => (
+                    <li key={entry.key || entry.title} className="wd-attention-entry">
+                      <span className="wd-attention-entry-title">{entry.title}</span>
+                      {entry.due_at ? <span className="wd-muted">{formatTimestamp(entry.due_at)}</span> : null}
+                      {/* Entries with no stable identity (free-text checkpoint markers)
+                          cannot be ruled on individually, so they get NO verbs rather
+                          than buttons that would fail. The row's own verbs still apply
+                          to them, which is why they are listed here at all. */}
+                      {entry.key ? (
+                        renderVerbs(item.context_id, entry.key, entry.action)
+                      ) : (
+                        <span className="wd-muted wd-attention-entry-group-only">{tr("attentionEntryGroupOnly")}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
               ) : null}
             </li>
           ))}

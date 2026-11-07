@@ -64,14 +64,57 @@ type AttentionActionInput struct {
 	ActorID string `json:"actor_id,omitempty"`
 }
 
-// AttentionItemKey builds the group-scoped key a verb is stored against. Both the
-// writer and the reader go through this one function so they cannot disagree about
-// which row an action belongs to.
+// AttentionItemKey builds the GROUP-scoped key a verb is stored against when the
+// verdict covers every entry of a row. Both the writer and the reader go through
+// this one function so they cannot disagree about which row an action belongs to.
 func AttentionItemKey(kind, contextID string) string {
 	return strings.TrimSpace(kind) + ":" + strings.TrimSpace(contextID)
 }
 
-// AttentionActionKind returns the item kind encoded in an item key.
+// AttentionEntryKey builds the key for ONE entry of a row, used when the verdict
+// covers a single entry rather than the whole group ("ignore this one, not all
+// three"). entityID is the underlying record's id — a plan item, a fact, a card — so
+// it is stable across reads.
+//
+// Only kinds that HAVE such an id can be addressed this way. The stream's own
+// recorded blockers/open questions are free text inside the checkpoint, so they have
+// no per-entry key; see AttentionEntryKeyFor.
+func AttentionEntryKey(kind, contextID, entityID string) string {
+	return AttentionItemKey(kind, contextID) + ":" + strings.TrimSpace(entityID)
+}
+
+// AttentionEntryKeyFor returns the per-entry key when the kind carries a stable
+// entity id, and "" when it does not. Callers use the empty string to mean "this kind
+// can only be acted on as a whole group", rather than inventing a fake identity
+// (a title hash would silently detach the verdict the moment the text is edited).
+func AttentionEntryKeyFor(kind, contextID, entityID string) string {
+	if strings.TrimSpace(entityID) == "" {
+		return ""
+	}
+	return AttentionEntryKey(kind, contextID, entityID)
+}
+
+// AttentionGroupKeyOf maps any action key — group or entry — back to the group it
+// belongs to, so a per-entry verdict can still be attributed to its row. A group key
+// is returned unchanged.
+//
+// Keys are "kind:contextID[:entityID]". Ids in this store are generated hex strings
+// (see newID) and never contain a colon, so splitting on the first two separators is
+// unambiguous; the entity id is taken as the remainder rather than split again.
+func AttentionGroupKeyOf(key string) string {
+	key = strings.TrimSpace(key)
+	kind, rest, ok := strings.Cut(key, ":")
+	if !ok {
+		return key
+	}
+	contextID, _, hasEntry := strings.Cut(rest, ":")
+	if !hasEntry {
+		return key
+	}
+	return kind + ":" + contextID
+}
+
+// AttentionActionKind returns the item kind encoded in an action key (group or entry).
 func AttentionActionKind(itemKey string) string {
 	kind, _, _ := strings.Cut(itemKey, ":")
 	return kind
@@ -195,6 +238,21 @@ func (s *Store) DeleteAttentionAction(ctx context.Context, scope Scope, contextI
 		WHERE tenant_id=? AND owner_id=? AND context_id=? AND item_key=?`,
 		tenantID, ownerID, contextID, itemKey)
 	return err
+}
+
+// AttentionActionFor picks the verdict that applies to one row, preferring the more
+// SPECIFIC one: an entry-level verdict (a single record was singled out) over a
+// group-level one. The read path and the nudge sweep both go through this, so a row
+// hidden from the inbox is also not pushed about — the two must never disagree about
+// whether the user already ruled on something.
+func AttentionActionFor(actions map[string]AttentionAction, entryKey, groupKey string) (AttentionAction, bool) {
+	if entryKey != "" {
+		if action, ok := actions[strings.TrimSpace(entryKey)]; ok {
+			return action, true
+		}
+	}
+	action, ok := actions[strings.TrimSpace(groupKey)]
+	return action, ok
 }
 
 // AttentionActionIndex returns every recorded verb for the scope, keyed by item

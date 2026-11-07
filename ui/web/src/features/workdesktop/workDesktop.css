@@ -433,6 +433,34 @@
 .wd-metrics-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .wd-metrics-cell strong { font-size: 16px; line-height: 1.3; }
 
+/* Per-entry verbs are opt-in, so the toggle is a quiet text affordance rather than a
+   button: it opens a detail plane, it is not itself a decision. */
+.wd-attention-entries-toggle {
+  flex-basis: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--godex-accent);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+/* The entry plane is indented and quieter than the row: it answers "which one do you
+   mean?" for a row already on the list. */
+.wd-attention-entries {
+  list-style: none;
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  padding: 0 0 0 10px;
+  border-left: 2px solid var(--godex-border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.wd-attention-entry { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wd-attention-entry-title { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
+.wd-attention-entry-group-only { font-size: 12px; }
+
 /* Left rail: one row per desktop, with the ACTIVE one expanding in place to show
    its linked conversations. */
 .wd-rail-list { display: flex; flex-direction: column; gap: 6px; padding: 0 8px 8px; }

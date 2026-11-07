@@ -43,12 +43,26 @@ const (
 	// it one busy stream can spend every nudge the owner gets in a day, and the
 	// other streams go silent — the exact unfairness a single global cap hides.
 	attentionPerStreamDailyCap = 4
-	// unreadAgingAfter is how long an unread change keeps calling for action. Past
-	// it the count is reported as aged: the badge is demoted to a muted summary
-	// instead of a red dot, because a marker nobody clears stops being a request
-	// and becomes background debt. It is NOT hidden — hiding remembering content
-	// would be the worse failure.
+	// unreadAgingAfter is the FALLBACK aging threshold, used when a stream has too
+	// little history to have a pace of its own. Past the threshold the count is reported
+	// as aged: the badge is demoted to a muted summary instead of a red dot, because a
+	// marker nobody clears stops being a request and becomes background debt. It is NOT
+	// hidden — hiding remembered content would be the worse failure.
 	unreadAgingAfter = 72 * time.Hour
+	// The aging threshold is ADAPTIVE: three times a stream's own recent event stride,
+	// clamped between the bounds below. A fixed threshold is wrong in both directions —
+	// a stream that legitimately moves twice a week is not stale after three days, and a
+	// stream that moves hourly is stale long before that. The stride between a stream's
+	// own events is the only honest scale for "has this gone quiet?".
+	//
+	// The floor keeps a fast stream from being called stale almost immediately (which
+	// would mute a badge the user has not had a chance to see), and the ceiling keeps a
+	// genuinely dormant stream from being treated as active forever.
+	unreadAgingFloor          = 24 * time.Hour
+	unreadAgingCeiling        = 14 * 24 * time.Hour
+	unreadAgingStrideMultiple = 3
+	unreadAgingLookback       = 30 * 24 * time.Hour
+	unreadAgingMinSamples     = 3
 	// quiet hours are in server-local time.
 	quietHoursStart = 22
 	quietHoursEnd   = 8
@@ -62,6 +76,11 @@ const (
 	// attentionGroupTitlesLimit caps the collapsed titles a grouped row spells out,
 	// so a stream that moved twenty times does not turn into a paragraph.
 	attentionGroupTitlesLimit = 4
+	// attentionGroupEntriesLimit caps how many per-entry verdict targets a grouped row
+	// carries. It is deliberately larger than the title list: titles are for READING the
+	// row, entries are for ACTING on it, and "ignore this one" is useless if the entry
+	// the user meant is not addressable.
+	attentionGroupEntriesLimit = 20
 )
 
 // Attention priorities. A decision (a card awaiting human acceptance) is always
@@ -84,6 +103,26 @@ const (
 	AttentionKindCheckpointBlocker  = "checkpoint_blocker"
 	AttentionKindCheckpointQuestion = "checkpoint_question"
 )
+
+// AttentionEntry is ONE entry inside a grouped row.
+//
+// It exists so a verdict can be scoped to a single entry ("ignore this one, not all
+// three") without weakening the group-level verbs. Key is the per-entry action key, or
+// empty when the kind has NO stable entity id — the stream's recorded
+// blockers/open questions are free text inside the checkpoint, so they can only be
+// acted on as a group, and pretending otherwise (a title hash) would silently detach
+// the verdict the moment the text is edited.
+type AttentionEntry struct {
+	Key    string `json:"key,omitempty"`
+	Title  string `json:"title"`
+	Detail string `json:"detail,omitempty"`
+	DueAt  string `json:"due_at,omitempty"`
+	// Action is the verdict recorded on THIS entry (not on the row), when there is
+	// one. It exists because a claimed entry stays on the list — a claim is work, not
+	// deferral — and "I took this one" has to be visible or the claim reads as a
+	// no-op that silently did nothing.
+	Action *workcontext.AttentionAction `json:"action,omitempty"`
+}
 
 // AttentionItem is one actionable line in the inbox.
 type AttentionItem struct {
@@ -108,6 +147,15 @@ type AttentionItem struct {
 	// Also lists the collapsed titles (capped), so a grouped row is still readable
 	// without opening the stream.
 	Also []string `json:"also,omitempty"`
+	// Entries are the individual entries a grouped row stands for, present only when
+	// the row actually collapsed more than one. They are what makes a per-entry verdict
+	// possible: the row's own verbs still cover the whole group, and each entry can be
+	// ruled on by itself. Empty for a single-entry row, where the two are the same thing.
+	Entries []AttentionEntry `json:"entries,omitempty"`
+	// EntityID is the underlying record id (plan item / fact / card) used to derive a
+	// per-entry key. It is internal: the wire shape exposes Entries instead, so clients
+	// cannot mistake it for an action key.
+	EntityID string `json:"-"`
 	// ItemKey is the group-scoped identity a verb is stored against
 	// ("{kind}:{context_id}"), so the UI acts on exactly the row it renders.
 	ItemKey string `json:"item_key"`
@@ -271,26 +319,7 @@ func (s *Service) AttentionInbox(ctx context.Context, scope workcontext.Scope) (
 	if err != nil {
 		return AttentionView{}, err
 	}
-	active := make([]AttentionItem, 0, len(items))
-	deferred := []DeferredAttention{}
-	for _, item := range items {
-		action, hasAction := actions[item.ItemKey]
-		switch {
-		case !hasAction || !workcontext.AttentionActionActive(action, now):
-			active = append(active, item)
-		case action.Verb == workcontext.AttentionVerbClaim:
-			// A claim is still actionable work — it is the opposite of deferral. It
-			// stays on the list carrying its state so "I took this" is visible
-			// rather than making the row disappear the moment it was picked up.
-			claimed := item
-			claimed.Action = &action
-			active = append(active, claimed)
-		default:
-			// Snoozed (still inside its window) or dismissed: off the working list, but
-			// reported so deferral is visible and undoable.
-			deferred = append(deferred, DeferredAttention{Item: item, Action: action})
-		}
-	}
+	active, deferred := applyAttentionActions(items, actions, now)
 	sortAttention(active, leverage)
 
 	unread, err := store.UnreadCounts(ctx, scope)
@@ -340,22 +369,104 @@ func (s *Service) attentionMetrics(ctx context.Context, store *workcontext.Store
 	return metrics, nil
 }
 
-// agedUnreadStreams reports which streams have unread changes older than
-// unreadAgingAfter. A stream with NO unread is never aged: there is nothing to
-// demote, and reporting it would put a permanent grey marker on quiet streams.
+// agedUnreadStreams reports which streams have unread changes older than their own
+// aging threshold. A stream with NO unread is never aged: there is nothing to demote,
+// and reporting it would put a permanent grey marker on quiet streams.
 func (s *Service) agedUnreadStreams(ctx context.Context, store *workcontext.Store, scope workcontext.Scope, now time.Time) (map[string]bool, error) {
 	newest, err := store.NewestUnreadEventAt(ctx, scope)
 	if err != nil {
 		return nil, err
 	}
-	cutoff := now.Add(-unreadAgingAfter)
+	thresholds, err := s.agingThresholds(ctx, store, scope)
+	if err != nil {
+		return nil, err
+	}
 	aged := map[string]bool{}
 	for id, at := range newest {
-		if at.Before(cutoff) {
+		// A stream with too little history to have a measurable pace gets the fallback.
+		threshold, ok := thresholds[id]
+		if !ok {
+			threshold = unreadAgingAfter
+		}
+		if at.Before(now.Add(-threshold)) {
 			aged[id] = true
 		}
 	}
 	return aged, nil
+}
+
+// agingThresholds derives, per stream, how long a silence may last before an unread
+// marker stops counting as a request.
+//
+// The scale is the stream's OWN pace: three times the median stride between its recent
+// events, clamped to [unreadAgingFloor, unreadAgingCeiling]. Streams with too little
+// history get no entry here and the caller falls back to the fixed threshold, because a
+// threshold derived from one or two strides is noise that would jump between reads.
+func (s *Service) agingThresholds(ctx context.Context, store *workcontext.Store, scope workcontext.Scope) (map[string]time.Duration, error) {
+	stamps, err := store.RecentEventStamps(ctx, scope, unreadAgingLookback, 2000)
+	if err != nil {
+		return nil, err
+	}
+	return thresholdsFromStamps(stamps), nil
+}
+
+// thresholdsFromStamps is the pure part of the cadence calculation, kept separate so it
+// can be tested without a database.
+//
+// Reminder ("nudge") and progress-probe ("task_status") events are EXCLUDED: they are
+// written by the attention system itself, so counting them would make nudging a quiet
+// stream look like activity and reset the very staleness that triggered the reminder —
+// the stream would then never age, which is exactly backwards.
+func thresholdsFromStamps(stamps []workcontext.EventStamp) map[string]time.Duration {
+	previous := map[string]time.Time{}
+	strides := map[string][]time.Duration{}
+	for _, stamp := range stamps {
+		if stamp.Kind == nudgeEventKind || stamp.Kind == "task_status" {
+			continue
+		}
+		if last, ok := previous[stamp.ContextID]; ok {
+			if stride := last.Sub(stamp.At); stride > 0 {
+				strides[stamp.ContextID] = append(strides[stamp.ContextID], stride)
+			}
+		}
+		previous[stamp.ContextID] = stamp.At
+	}
+	out := map[string]time.Duration{}
+	for id, list := range strides {
+		if len(list) < unreadAgingMinSamples {
+			continue
+		}
+		out[id] = clampAgingThreshold(medianDuration(list))
+	}
+	return out
+}
+
+// clampAgingThreshold turns a measured pace into a threshold, bounded on both sides: the
+// floor stops a fast stream from being called stale before the user could plausibly have
+// seen the badge, and the ceiling stops a dormant stream from being treated as active
+// forever.
+func clampAgingThreshold(stride time.Duration) time.Duration {
+	threshold := stride * unreadAgingStrideMultiple
+	if threshold < unreadAgingFloor {
+		return unreadAgingFloor
+	}
+	if threshold > unreadAgingCeiling {
+		return unreadAgingCeiling
+	}
+	return threshold
+}
+
+// medianDuration returns the median of the durations, sorting a copy so the caller's
+// slice is untouched. The median (not the mean) is deliberate: one long gap — a holiday,
+// a blocked week — must not drag the threshold out of shape.
+func medianDuration(values []time.Duration) time.Duration {
+	sorted := append([]time.Duration(nil), values...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	mid := len(sorted) / 2
+	if len(sorted)%2 == 1 {
+		return sorted[mid]
+	}
+	return (sorted[mid-1] + sorted[mid]) / 2
 }
 
 // delegationAttention collects delegated cards: the ones awaiting a human, and the
@@ -381,6 +492,9 @@ func (s *Service) delegationAttention(ctx context.Context, store *workcontext.St
 				Kind: AttentionKindDelegationMissing, Priority: AttentionNormal,
 				ContextID: link.ContextID, ContextTitle: link.ContextTitle,
 				Title: link.Title, Detail: "委派卡已丢失", Tab: "delegations",
+				// The card id is stable even though the card is gone, so this entry can be
+				// ruled on individually.
+				EntityID: link.CardID,
 			})
 			continue
 		}
@@ -390,7 +504,7 @@ func (s *Service) delegationAttention(ctx context.Context, store *workcontext.St
 		items = append(items, AttentionItem{
 			Kind: AttentionKindDelegationReview, Priority: AttentionHigh,
 			ContextID: link.ContextID, ContextTitle: link.ContextTitle,
-			Title: card.Title, Detail: "等待验收", Tab: "tasks",
+			Title: card.Title, Detail: "等待验收", Tab: "tasks", EntityID: card.ID,
 		})
 	}
 	return items, nil
@@ -408,7 +522,7 @@ func (s *Service) factAttention(ctx context.Context, store *workcontext.Store, s
 		items = append(items, AttentionItem{
 			Kind: AttentionKindFactReview, Priority: AttentionNormal,
 			ContextID: fact.ContextID, ContextTitle: fact.ContextTitle,
-			Title: fact.Title, Detail: "待审核事实", Tab: "knowledge",
+			Title: fact.Title, Detail: "待审核事实", Tab: "knowledge", EntityID: fact.ID,
 		})
 	}
 	return items, nil
@@ -437,12 +551,14 @@ func (s *Service) planAttention(ctx context.Context, store *workcontext.Store, s
 				Kind: AttentionKindTodoOverdue, Priority: AttentionNormal,
 				ContextID: todo.ContextID, ContextTitle: todo.ContextTitle,
 				Title: todo.Text, Detail: "已过期", DueAt: todo.DueAt, Tab: "plan",
+				EntityID: todo.ID,
 			})
 		case workcontext.DueSoon:
 			items = append(items, AttentionItem{
 				Kind: AttentionKindTodoSoon, Priority: AttentionLow,
 				ContextID: todo.ContextID, ContextTitle: todo.ContextTitle,
 				Title: todo.Text, Detail: "即将到期", DueAt: todo.DueAt, Tab: "plan",
+				EntityID: todo.ID,
 			})
 		}
 	}
@@ -455,6 +571,7 @@ func (s *Service) planAttention(ctx context.Context, store *workcontext.Store, s
 			Kind: AttentionKindTodoBlocked, Priority: AttentionNormal,
 			ContextID: todo.ContextID, ContextTitle: todo.ContextTitle,
 			Title: todo.Text, Detail: "计划项受阻", DueAt: todo.DueAt, Tab: "plan",
+			EntityID: todo.ID,
 		})
 	}
 	return items, nil
@@ -511,10 +628,21 @@ func appendCheckpointList(items []AttentionItem, stream workcontext.Context, lis
 // Attention cost tracks the number of ROWS, not the number of facts, so "this
 // stream moved five times" must read as one line that says five — that is the
 // difference between a scannable inbox and a wall.
+//
+// It also records the individual ENTRIES it collapsed (with their per-entry action
+// keys), which is what makes "ignore this one, not all three" possible. A row of one
+// keeps no entry list: the row and the entry are the same thing there, and a
+// one-element list would only be a second way to say the same sentence.
 func groupAttention(items []AttentionItem) []AttentionItem {
 	type groupKey struct{ kind, contextID string }
 	index := map[groupKey]int{}
 	out := make([]AttentionItem, 0, len(items))
+	entryOf := func(item AttentionItem) AttentionEntry {
+		return AttentionEntry{
+			Key:   workcontext.AttentionEntryKeyFor(item.Kind, item.ContextID, item.EntityID),
+			Title: item.Title, Detail: item.Detail, DueAt: item.DueAt,
+		}
+	}
 	for _, item := range items {
 		key := groupKey{item.Kind, item.ContextID}
 		at, seen := index[key]
@@ -525,17 +653,132 @@ func groupAttention(items []AttentionItem) []AttentionItem {
 		}
 		merged := &out[at]
 		if merged.Count == 0 {
+			// The first entry is only NOW known to be part of a group, so backfill it: the
+			// collapsed row must stand for every entry, not all-but-the-first.
 			merged.Count = 1
+			merged.Entries = append(merged.Entries, entryOf(*merged))
 		}
 		merged.Count++
 		if len(merged.Also) < attentionGroupTitlesLimit {
 			merged.Also = append(merged.Also, item.Title)
+		}
+		if len(merged.Entries) < attentionGroupEntriesLimit {
+			merged.Entries = append(merged.Entries, entryOf(item))
 		}
 		if earlierDue(item.DueAt, merged.DueAt) {
 			merged.DueAt = item.DueAt
 		}
 	}
 	return out
+}
+
+// applyAttentionActions splits the rows into the working list and the deferred list
+// using the owner's recorded verbs.
+//
+// Two levels of verdict are honoured, and the more SPECIFIC one wins:
+//   - an ENTRY-level verb (keyed by the underlying record id) rules on one entry of a
+//     collapsed row — "ignore this one, not all three";
+//   - a GROUP-level verb rules on the whole row.
+//
+// Entry-level wins because it is the more deliberate statement: someone who singled
+// out one entry has said more than someone who ruled on the row, so letting the broader
+// verdict override the narrower one would silently discard their precise intent.
+//
+// A row leaves the list only when ALL of its entries are deferred. Otherwise it stays
+// with what is left, because dropping a row whose first entry was ignored would hide
+// the siblings the user never ruled on.
+func applyAttentionActions(items []AttentionItem, actions map[string]workcontext.AttentionAction, now time.Time) ([]AttentionItem, []DeferredAttention) {
+	active := make([]AttentionItem, 0, len(items))
+	deferred := []DeferredAttention{}
+	for _, item := range items {
+		groupAction, hasGroupAction := actions[item.ItemKey]
+
+		if len(item.Entries) == 0 {
+			// No per-entry keys to consider (a single-entry row, or a kind whose entries
+			// have no stable id): the group verdict is the only verdict there is.
+			if !hasGroupAction || !workcontext.AttentionActionActive(groupAction, now) {
+				active = append(active, item)
+				continue
+			}
+			if groupAction.Verb == workcontext.AttentionVerbClaim {
+				claimed := item
+				claimed.Action = &groupAction
+				active = append(active, claimed)
+				continue
+			}
+			deferred = append(deferred, DeferredAttention{Item: item, Action: groupAction})
+			continue
+		}
+
+		// A grouped row: partition its entries by whether each one is deferred.
+		remaining := []AttentionEntry{}
+		for _, entry := range item.Entries {
+			verdict := groupAction
+			hasVerdict := hasGroupAction
+			if entry.Key != "" {
+				if entryAction, ok := actions[entry.Key]; ok {
+					verdict, hasVerdict = entryAction, true
+				}
+			}
+			if !hasVerdict || !workcontext.AttentionActionActive(verdict, now) {
+				remaining = append(remaining, entry)
+				continue
+			}
+			if verdict.Verb == workcontext.AttentionVerbClaim {
+				// A claim is work, not deferral, so the entry stays listed — carrying its own
+				// state, otherwise "I took this one" would look like it did nothing.
+				claimed := entry
+				verdictCopy := verdict
+				claimed.Action = &verdictCopy
+				remaining = append(remaining, claimed)
+				continue
+			}
+			// A deferred entry is reported as its own line: the verdict applied to that
+			// one entry, and folding it into the row's copy would lose which entry it was.
+			deferred = append(deferred, DeferredAttention{
+				Item: AttentionItem{
+					Kind: item.Kind, Priority: item.Priority,
+					ContextID: item.ContextID, ContextTitle: item.ContextTitle,
+					Title: entry.Title, Detail: entry.Detail, DueAt: entry.DueAt,
+					Tab: item.Tab, ItemKey: entry.Key,
+				},
+				Action: verdict,
+			})
+		}
+		if len(remaining) == 0 {
+			continue
+		}
+		// The row survives with what is left of it. A single remaining entry is no longer a
+		// group, so it is reported as that entry rather than as a one-item group.
+		keeper := item
+		keeper.Entries = nil
+		keeper.Also = nil
+		keeper.Title = remaining[0].Title
+		keeper.Detail = remaining[0].Detail
+		keeper.DueAt = remaining[0].DueAt
+		if len(remaining) == 1 {
+			keeper.Count = 0
+		} else {
+			keeper.Count = len(remaining)
+			keeper.Entries = remaining
+			for _, entry := range remaining[1:] {
+				if len(keeper.Also) < attentionGroupTitlesLimit {
+					keeper.Also = append(keeper.Also, entry.Title)
+				}
+			}
+		}
+		if hasGroupAction && groupAction.Verb == workcontext.AttentionVerbClaim &&
+			workcontext.AttentionActionActive(groupAction, now) {
+			keeper.Action = &groupAction
+		}
+		// A row that collapsed to a single surviving entry must carry THAT entry's own
+		// verdict, or a claim made on the entry would disappear from the row it lives on.
+		if keeper.Count == 0 && len(remaining) == 1 && remaining[0].Action != nil {
+			keeper.Action = remaining[0].Action
+		}
+		active = append(active, keeper)
+	}
+	return active, deferred
 }
 
 // earlierDue reports whether dueA is strictly before dueB. Unparseable values
@@ -715,7 +958,7 @@ func (s *Service) sweepScope(ctx context.Context, store *workcontext.Store, scop
 			if isNew && card.Status == taskboard.StatusInReview {
 				s.pushNudge(ctx, store, scope, now, nudgeEventKind, link.ContextID,
 					fmt.Sprintf("nudge:card:%s:v%d", card.ID, card.Version),
-					AttentionKindDelegationReview,
+					AttentionKindDelegationReview, card.ID,
 					card.Title+" 等待验收", "委派任务已完成，等待你验收（"+link.ContextTitle+"）", actions)
 			}
 		}
@@ -742,7 +985,7 @@ func (s *Service) sweepScope(ctx context.Context, store *workcontext.Store, scop
 		}
 		s.pushNudge(ctx, store, scope, now, nudgeEventKind, todo.ContextID,
 			fmt.Sprintf("nudge:todo:%s:%s:%s", todo.ID, todo.DueAt, state),
-			itemKind, body+": "+todo.Text, todo.ContextTitle, actions)
+			itemKind, todo.ID, body+": "+todo.Text, todo.ContextTitle, actions)
 	}
 }
 
@@ -756,14 +999,19 @@ func (s *Service) sweepScope(ctx context.Context, store *workcontext.Store, scop
 // This way a blocked nudge simply retries on the next sweep, while a delivered one
 // is deduplicated permanently by its dedup key.
 //
-// itemKind is the inbox row kind this notification corresponds to. It is needed
-// here because verbs are stored against inbox rows ("{kind}:{context_id}"), and the
-// sweep must respect a verb the user applied from the inbox rather than inventing a
-// second, event-shaped identity for the same thing.
+// itemKind is the inbox row kind this notification corresponds to, and entityID is the
+// underlying record id. Both are needed here because inbox verbs are stored against
+// inbox identities (group key "{kind}:{context_id}", entry key "{kind}:{context_id}:{entityID}")
+// and the sweep must respect a verdict the user applied from the inbox rather than
+// inventing a second, event-shaped identity for the same thing.
 func (s *Service) pushNudge(ctx context.Context, store *workcontext.Store, scope workcontext.Scope,
-	now time.Time, kind, contextID, dedup, itemKind, title, body string,
+	now time.Time, kind, contextID, dedup, itemKind, entityID, title, body string,
 	actions map[string]workcontext.AttentionAction) {
-	if action, ok := actions[workcontext.AttentionItemKey(itemKind, contextID)]; ok &&
+	// Same resolution order as the inbox (entry verdict beats group verdict), so a row
+	// the user ruled on in the inbox is not then pushed about.
+	entryKey := workcontext.AttentionEntryKeyFor(itemKind, contextID, entityID)
+	groupKey := workcontext.AttentionItemKey(itemKind, contextID)
+	if action, ok := workcontext.AttentionActionFor(actions, entryKey, groupKey); ok &&
 		workcontext.AttentionActionActive(action, now) {
 		return
 	}

@@ -176,6 +176,60 @@ func (s *Store) NewestUnreadEventAt(ctx context.Context, scope Scope) (map[strin
 	return out, rows.Err()
 }
 
+// EventStamp is one recorded event reduced to what a cadence calculation needs.
+type EventStamp struct {
+	ContextID string
+	Kind      string
+	At        time.Time
+}
+
+// RecentEventStamps returns recent events across the scope's non-archived streams,
+// newest first, so the attention inbox can learn each stream's OWN pace.
+//
+// Why a stream's own pace: one global staleness threshold is wrong in both directions.
+// A stream that genuinely moves twice a week is not stale after three days, and a
+// stream that moves hourly is stale long before that. The stride between a stream's own
+// recent events is the only honest scale for "has this gone quiet?".
+//
+// Kind is returned so the caller can exclude events the attention system itself wrote:
+// a reminder must never count as the stream's own activity, or nudging a quiet stream
+// would make it look busy and reset the very staleness that triggered the reminder.
+func (s *Store) RecentEventStamps(ctx context.Context, scope Scope, lookback time.Duration, limit int) ([]EventStamp, error) {
+	tenantID, ownerID := scopeArgs(scope)
+	if limit <= 0 {
+		limit = 2000
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT e.context_id, e.kind, e.created_at
+		FROM wc_events e
+		JOIN wc_contexts c ON c.tenant_id = e.tenant_id AND c.id = e.context_id
+		WHERE c.tenant_id = ? AND c.owner_id = ? AND c.status <> 'archived'
+			AND e.created_at >= ?
+		ORDER BY e.created_at DESC
+		LIMIT ?`, tenantID, ownerID, time.Now().Add(-lookback).UTC().Format(time.RFC3339Nano), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []EventStamp{}
+	for rows.Next() {
+		var stamp EventStamp
+		var createdAt string
+		if err := rows.Scan(&stamp.ContextID, &stamp.Kind, &createdAt); err != nil {
+			return nil, err
+		}
+		at, ok := ParseDueAt(createdAt)
+		if !ok {
+			// An unparseable timestamp is skipped rather than treated as "now": a cadence
+			// built on a bad value would silently move a threshold.
+			continue
+		}
+		stamp.At = at
+		out = append(out, stamp)
+	}
+	return out, rows.Err()
+}
+
 // CountEventsByKindSinceForContext counts nudges already delivered for ONE stream
 // since a time. The sweep uses it so a single busy stream cannot spend the owner's
 // entire daily notification budget on its own.

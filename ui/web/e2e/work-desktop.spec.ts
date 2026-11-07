@@ -101,6 +101,20 @@ function checkpoint(body: Record<string, unknown>, revision: number) {
   };
 }
 
+// entryKeyOf mirrors the server's per-entry action key ("{kind}:{context_id}:{entity_id}").
+// It returns undefined when the item carries no entity id, which is exactly the free-text
+// case that must have no per-entry verbs.
+function entryKeyOf(item: Record<string, unknown>): string | undefined {
+  const entityId = item.entity_id as string | undefined;
+  if (!entityId) return undefined;
+  return `${item.kind as string}:${item.context_id as string}:${entityId}`;
+}
+
+// keepingGroupClaim reports whether a group-level claim should stay on the surviving row.
+function keepingGroupClaim(action: { verb: string; until_at: string } | undefined): boolean {
+  return action?.verb === "claim";
+}
+
 // handleWorkContext implements the documented API over the in-memory store. Anything it
 // does not own falls back to the shared mockBackend handler.
 function handleWorkContext(store: Store) {
@@ -230,19 +244,19 @@ function handleWorkContext(store: Store) {
         const ctx = delegationCtx(delegation);
         const card = store.cards[delegation.card_id];
         if (!card) {
-          raw.push({ kind: "delegation_missing", priority: "normal", context_id: ctx, context_title: titleOf(ctx), title: delegation.title, detail: "委派卡已丢失", tab: "delegations" });
+          raw.push({ kind: "delegation_missing", priority: "normal", context_id: ctx, context_title: titleOf(ctx), title: delegation.title, detail: "委派卡已丢失", tab: "delegations", entity_id: delegation.card_id });
           continue;
         }
         if (card.status !== "in_review") continue;
-        raw.push({ kind: "delegation_review", priority: "high", context_id: ctx, context_title: titleOf(ctx), title: card.title, detail: "等待验收", tab: "tasks" });
+        raw.push({ kind: "delegation_review", priority: "high", context_id: ctx, context_title: titleOf(ctx), title: card.title, detail: "等待验收", tab: "tasks", entity_id: card.id });
       }
       for (const fact of store.facts) {
         if (fact.status !== "candidate") continue;
-        raw.push({ kind: "fact_review", priority: "normal", context_id: fact.context_id, context_title: titleOf(fact.context_id), title: fact.title, detail: "待审核事实", tab: "knowledge" });
+        raw.push({ kind: "fact_review", priority: "normal", context_id: fact.context_id, context_title: titleOf(fact.context_id), title: fact.title, detail: "待审核事实", tab: "knowledge", entity_id: fact.id });
       }
       for (const todo of store.todos) {
         if (todo.status === "blocked") {
-          raw.push({ kind: "todo_blocked", priority: "normal", context_id: todo.context_id, context_title: titleOf(todo.context_id), title: todo.text, detail: "计划项受阻", due_at: todo.due_at, tab: "plan" });
+          raw.push({ kind: "todo_blocked", priority: "normal", context_id: todo.context_id, context_title: titleOf(todo.context_id), title: todo.text, detail: "计划项受阻", due_at: todo.due_at, tab: "plan", entity_id: todo.id });
           continue;
         }
         if (!todo.due_at || todo.status === "done") continue;
@@ -252,7 +266,7 @@ function handleWorkContext(store: Store) {
           kind: due <= Date.now() ? "todo_overdue" : "todo_soon",
           priority: due <= Date.now() ? "normal" : "low", context_id: todo.context_id,
           context_title: titleOf(todo.context_id),
-          title: todo.text, detail: due <= Date.now() ? "已过期" : "即将到期", due_at: todo.due_at, tab: "plan",
+          title: todo.text, detail: due <= Date.now() ? "已过期" : "即将到期", due_at: todo.due_at, tab: "plan", entity_id: todo.id,
         });
       }
       for (const ctx of store.contexts) {
@@ -263,6 +277,9 @@ function handleWorkContext(store: Store) {
         for (const [kind, priority, detail] of groups) {
           const entries = kind === "checkpoint_blocker" ? ctx.checkpoint.blockers : ctx.checkpoint.open_questions;
           for (const entry of entries) {
+            // Deliberately NO entity_id: these are free text in the checkpoint, so they have
+            // no per-entry identity and can only be ruled on as a group. The mock mirrors
+            // that limit so a UI that wrongly offers per-entry verbs here would fail.
             raw.push({ kind, priority, context_id: ctx.id, context_title: ctx.title, title: entry, detail, tab: "overview" });
           }
         }
@@ -279,9 +296,18 @@ function handleWorkContext(store: Store) {
           continue;
         }
         const merged = items[at]!;
-        merged.count = ((merged.count as number) ?? 1) + 1;
+        if (merged.count === undefined) {
+          // The first entry is only now known to be part of a group, so backfill it:
+          // the collapsed row must stand for every entry, not all-but-the-first.
+          merged.count = 1;
+          merged.entries = [{ key: entryKeyOf(merged), title: merged.title, detail: merged.detail, due_at: merged.due_at }];
+        }
+        merged.count = (merged.count as number) + 1;
         const also = (merged.also as string[]) ?? [];
         if (also.length < 4) merged.also = [...also, item.title as string];
+        const entries = (merged.entries as Record<string, unknown>[]) ?? [];
+        if (entries.length < 20) entries.push({ key: entryKeyOf(item), title: item.title, detail: item.detail, due_at: item.due_at });
+        merged.entries = entries;
       }
       // Leverage: how many other streams declare depends_on onto each stream.
       const leverage: Record<string, number> = {};
@@ -319,18 +345,54 @@ function handleWorkContext(store: Store) {
       for (const item of items) {
         const key = `${item.kind as string}:${item.context_id as string}`;
         item.item_key = key;
-        const action = store.attentionActions[key];
-        if (!action || (action.verb === "snooze" && !(action.until_at > NOW))) {
-          active.push(item);
+        const groupAction = store.attentionActions[key];
+        const entries = (item.entries as Record<string, unknown>[]) ?? [];
+
+        // A single-entry row: the group verdict is the only verdict there is.
+        if (!entries.length) {
+          if (!groupAction || (groupAction.verb === "snooze" && !(groupAction.until_at > NOW))) {
+            active.push(item);
+            continue;
+          }
+          if (groupAction.verb === "claim") {
+            item.action = groupAction;
+            active.push(item);
+            continue;
+          }
+          deferred.push({ item, action: groupAction });
           continue;
         }
-        if (action.verb === "claim") {
-          // A claim is still work, so it stays listed carrying its state.
-          item.action = action;
-          active.push(item);
-          continue;
+
+        // A grouped row: partition entries by whether each one is deferred, honouring
+        // the entry verdict over the group verdict (the more specific statement wins).
+        const remaining: Record<string, unknown>[] = [];
+        for (const entry of entries) {
+          const entryAction = entry.key ? store.attentionActions[entry.key as string] : undefined;
+          const verdict = entryAction ?? groupAction;
+          const applies = verdict && !(verdict.verb === "snooze" && !(verdict.until_at > NOW));
+          if (!applies || verdict.verb === "claim") {
+            remaining.push({ ...entry, action: applies ? verdict : undefined });
+            continue;
+          }
+          deferred.push({
+            item: {
+              kind: item.kind, priority: item.priority, context_id: item.context_id,
+              context_title: item.context_title, title: entry.title, detail: entry.detail,
+              due_at: entry.due_at, tab: item.tab, item_key: entry.key,
+            },
+            action: verdict,
+          });
         }
-        deferred.push({ item, action });
+        if (!remaining.length) continue;
+        const keeper = { ...item, entries: remaining.length > 1 ? remaining : undefined };
+        keeper.title = remaining[0]!.title;
+        keeper.detail = remaining[0]!.detail;
+        keeper.due_at = remaining[0]!.due_at;
+        keeper.count = remaining.length > 1 ? remaining.length : undefined;
+        keeper.also = remaining.length > 1 ? remaining.slice(1, 5).map((entry) => entry.title) : undefined;
+        if (keepingGroupClaim(groupAction)) keeper.action = groupAction;
+        if (remaining.length === 1 && remaining[0]!.action) keeper.action = remaining[0]!.action;
+        active.push(keeper);
       }
       return json({ items: active, unread, aged, deferred, counts: {}, metrics, generated_at: NOW });
     }
@@ -1017,6 +1079,76 @@ test("groups repeated reminders from one stream and shows dependency leverage", 
   // It appears on every row of that stream (each row belongs to it), so the assertion
   // is deliberately scoped with .first() rather than demanding a single match.
   await expect(inbox.getByText("阻塞 1 条主线", { exact: true }).first()).toBeVisible();
+});
+
+test("a collapsed row can be ruled on entry by entry, and the row survives for the rest", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  const store = await install(page, seededStore());
+  for (const [index, text] of ["逐条 A", "逐条 B", "逐条 C"].entries()) {
+    store.todos.push({
+      id: `todo-e${index}`, context_id: "ctx-1", text, status: "todo", owner: "",
+      due_at: "2026-10-01T00:00:00Z", source: "human", position: index, version: 1, created_at: NOW, updated_at: NOW,
+    });
+  }
+  await openSection(page, "待处理");
+
+  const inbox = boards(page).locator(".wd-attention");
+  const row = inbox.locator(".wd-attention-item").filter({ hasText: "共 3 条" });
+  await expect(row).toBeVisible();
+  // Per-entry verbs are opt-in: most rows are ruled on as a whole, so the entry plane
+  // starts collapsed rather than stacking three verbs per entry into a triage list.
+  await expect(row.locator(".wd-attention-entries")).toHaveCount(0);
+  await row.getByRole("button", { name: "展开逐条处理（3 条）", exact: true }).click();
+
+  const entries = row.locator(".wd-attention-entry");
+  await expect(entries).toHaveCount(3);
+  const target = entries.filter({ hasText: "逐条 B" });
+  await target.getByRole("button", { name: "不再需要", exact: true }).click();
+  // The reason rule applies at the entry level too — it is the same verbs helper, so the
+  // protection against silently dropping work cannot drift between the two levels.
+  const confirm = page.getByRole("button", { name: "不再需要", exact: true }).last();
+  await expect(confirm).toBeDisabled();
+  await page.getByPlaceholder("为什么这条不需要处理？（可撤销）").fill("这条已手工处理");
+  await confirm.click();
+
+  // The verdict is stored against THAT entry's key, not against the row.
+  expect(Object.keys(store.attentionActions)).toContain("todo_overdue:ctx-1:todo-e1");
+  expect(Object.keys(store.attentionActions)).not.toContain("todo_overdue:ctx-1");
+  // The row SURVIVES with the entries nobody ruled on: dropping it would hide work the
+  // user never decided about.
+  const survivors = inbox.locator(".wd-attention-item").filter({ hasText: "共 2 条" });
+  await expect(survivors).toBeVisible();
+  await expect(survivors).not.toContainText("逐条 B");
+  await expect(survivors).toContainText("逐条 A");
+  // And the ruled-on entry stays reported, with its reason readable back.
+  const deferredFold = inbox.locator(".wd-attention-deferred");
+  await deferredFold.locator(".wd-fold-toggle").click();
+  await expect(deferredFold.getByText("逐条 B", { exact: false })).toBeVisible();
+  await expect(deferredFold.getByText("这条已手工处理", { exact: false })).toBeVisible();
+});
+
+test("free-text checkpoint entries offer no per-entry verbs, only the group", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  const store = await install(page, seededStore());
+  // Two open questions: free text inside the checkpoint, so they have no stable id.
+  store.contexts[0]!.checkpoint.open_questions = ["问题一", "问题二"];
+  await openSection(page, "待处理");
+
+  const inbox = boards(page).locator(".wd-attention");
+  const row = inbox.locator(".wd-attention-item").filter({ hasText: "共 2 条" }).first();
+  await expect(row).toBeVisible();
+  await row.getByRole("button", { name: "展开逐条处理（2 条）", exact: true }).click();
+
+  const entries = row.locator(".wd-attention-entry");
+  await expect(entries).toHaveCount(2);
+  await expect(entries.first()).toBeVisible();
+  // The honest limit: these entries offer NO verbs rather than buttons that would fail,
+  // and the row says why. Inventing a title-hash identity would look like a solution and
+  // silently detach the verdict the moment the text is edited.
+  await expect(entries.first().getByRole("button", { name: "我接手", exact: true })).toHaveCount(0);
+  await expect(entries.first()).toContainText("只能整组处理");
+  // The row itself is still actionable, so it is not a dead end.
+  await expect(row.getByRole("button", { name: "我接手", exact: true })).toHaveCount(1);
 });
 
 test("the rail unread badge leads to the changes it counts", async ({ page }) => {

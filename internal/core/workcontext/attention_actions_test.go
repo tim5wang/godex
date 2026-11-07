@@ -237,6 +237,59 @@ func TestAttentionItemKeyRoundTrip(t *testing.T) {
 	}
 }
 
+// TestAttentionEntryKeyRequiresAnEntityID pins the honest limit of per-entry verbs: a
+// kind whose entries have no stable identity gets NO entry key rather than a synthetic
+// one. A title hash would look like a solution and silently detach the verdict the
+// moment the text is edited.
+func TestAttentionEntryKeyRequiresAnEntityID(t *testing.T) {
+	if got := AttentionEntryKeyFor("todo_overdue", "ctx-1", "todo-7"); got != "todo_overdue:ctx-1:todo-7" {
+		t.Fatalf("unexpected entry key %q", got)
+	}
+	if got := AttentionEntryKeyFor("checkpoint_question", "ctx-1", ""); got != "" {
+		t.Fatalf("a kind without an entity id must yield no entry key, got %q", got)
+	}
+}
+
+// TestAttentionGroupKeyOfStripsTheEntryID pins that a per-entry verdict can still be
+// attributed to its row, which the sweep relies on to not push about something the user
+// already ruled on.
+func TestAttentionGroupKeyOfStripsTheEntryID(t *testing.T) {
+	cases := map[string]string{
+		"todo_overdue:ctx-1:todo-7": "todo_overdue:ctx-1",
+		"todo_overdue:ctx-1":        "todo_overdue:ctx-1",
+		"todo_overdue":              "todo_overdue",
+		"kind:context:entry":        "kind:context",
+	}
+	for in, want := range cases {
+		if got := AttentionGroupKeyOf(in); got != want {
+			t.Fatalf("AttentionGroupKeyOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestAttentionActionForPrefersTheEntryVerdict pins the precedence rule the read path
+// and the sweep share: the more specific statement wins. If these two disagreed, a row
+// could be hidden from the inbox and still pushed about.
+func TestAttentionActionForPrefersTheEntryVerdict(t *testing.T) {
+	group := AttentionAction{ItemKey: "todo_overdue:ctx-1", Verb: AttentionVerbDismiss}
+	entry := AttentionAction{ItemKey: "todo_overdue:ctx-1:todo-7", Verb: AttentionVerbClaim}
+	actions := map[string]AttentionAction{group.ItemKey: group, entry.ItemKey: entry}
+
+	got, ok := AttentionActionFor(actions, entry.ItemKey, group.ItemKey)
+	if !ok || got.Verb != AttentionVerbClaim {
+		t.Fatalf("the entry verdict must win, got %+v (ok=%v)", got, ok)
+	}
+	// Without an entry verdict, the group verdict applies.
+	got, ok = AttentionActionFor(actions, "todo_overdue:ctx-1:other", group.ItemKey)
+	if !ok || got.Verb != AttentionVerbDismiss {
+		t.Fatalf("the group verdict must apply when no entry verdict exists, got %+v (ok=%v)", got, ok)
+	}
+	// With neither, nothing applies.
+	if _, ok := AttentionActionFor(actions, "", "todo_soon:ctx-1"); ok {
+		t.Fatal("no recorded verdict should report ok=false")
+	}
+}
+
 // TestCountAttentionActionsSinceUsesSupliedClock pins the metric's day boundary: it
 // counts decisions at or after the instant given, which is what makes "today's
 // decisions" mean the caller's day rather than the server's.

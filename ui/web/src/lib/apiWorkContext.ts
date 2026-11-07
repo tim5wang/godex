@@ -473,6 +473,21 @@ export function markWorkContextSeen(token: string | null, contextId: string) {
 // tab that resolves it, so the desktop can jump straight to where the work is
 // done instead of to the stream's default tab.
 export type AttentionPriority = "high" | "normal" | "low";
+// AttentionEntry is ONE entry inside a grouped inbox row.
+//
+// It exists so a verdict can be scoped to a single entry ("ignore this one, not all
+// three") without weakening the group-level verbs. Key is empty when the kind has no
+// stable entity id — the stream's own recorded blockers/open questions are free text
+// inside the checkpoint, so they can only be ruled on as a group.
+export interface AttentionEntry {
+  key?: string;
+  title: string;
+  detail?: string;
+  due_at?: string;
+  /** The verdict recorded on THIS entry (not on the row), when there is one. */
+  action?: AttentionAction;
+}
+
 export interface AttentionItem {
   kind: string;
   priority: AttentionPriority;
@@ -482,6 +497,9 @@ export interface AttentionItem {
   /** The owner's recorded verb on this row, when there is one. A claim keeps the
    *  row actionable, so it stays listed carrying its state. */
   action?: AttentionAction;
+  /** The individual entries a grouped row stands for. Present only when the row
+   *  actually collapsed more than one, and what makes a per-entry verdict possible. */
+  entries?: AttentionEntry[];
   context_id: string;
   context_title: string;
   title: string;

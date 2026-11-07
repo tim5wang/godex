@@ -1,6 +1,6 @@
 # 工作桌面的注意力经济学（Attention Economics）：现状核查与增强方案
 
-> 状态：Partial（§3 为代码实证基线；**AE1、AE3、AE4、AE5 已实施**，见 §6.1–§6.3；AE2（收件箱动词）仍为待评审方案）
+> 状态：Partial（§3 为代码实证基线；**AE1、AE3、AE4、AE5 已实施**，见 §6.1–§6.3；**AE2 已完成前置调研并给出带取舍的选型建议，见 §7，尚未实施**）
 > 日期：2026-11-07
 > 关联：[work-context-desktop-design.md](./work-context-desktop-design.md)（工作桌面主设计）、[taskboard-plugin-design.md](./taskboard-plugin-design.md)（委派执行器）、[memory-design-principles.md](./memory-design-principles.md)（记忆治理）、[agent-role-and-bundle-design.md](./agent-role-and-bundle-design.md)（Agent 模板/多入口）
 > 定位：解释「工作桌面」这一层在注意力经济中的位置，指出现有实现的杠杆缺口，并给出可分期落地的增强方案。本文不引入第二套 Agent Runtime，不改变既有权限与执行边界。
@@ -234,7 +234,48 @@ Agent     = 条目的生产者（delegate / executor / flow_inspect / 记忆候�
 - **反向验证过非空洞**：临时把 `reveal={pendingReveal}` 改成 `reveal={false}` 后，`data-flash` 断言**真失败**，恢复后通过——即该断言真的在守护这个 bug。
 - **flake 判定用 A/B 对照而非名字**：全量中 `TestScreenUserInputHookFireAndForgetShadow` 失败并不等于本轮引入。我的改动 `-count=5` 失败 2 次，stash 后基线 `-count=5` 也失败 1 次 → 既有 flake（根因：shadow screener 的后台分类 goroutine 在测试结束后才写盘，与 `t.TempDir` 清理竞态，见 `security_screener_test.go:73`）。只看名字会「猜对而推理错」。
 
-## 7. 非目标与风险
+## 7. AE2 前置调研：动词状态放哪（2026-11-07，仅静态核查，未写码）
+
+**问题**。AE2 要给收件箱加动词（claim / snooze / dismiss）。真正决定成本的不是接口数量，而是**状态放哪**：snooze 是「持续到某时刻」的状态，与既有「读时投影」的 read model 不同类。
+
+### 7.1 实证发现（代码核查）
+
+1. **`AttentionItem` 没有稳定 id，而且它代表一组而不是一行**。字段为 `{kind, priority, context_id, context_title, title, detail, due_at, tab, count, blocked_count, also}`；`groupAttention` 按 `(kind, context_id)` 合并同类多条并写入 `count`/`also`。所以「给这一行加已忽略/稍后」在今天没有可挂的对象——必须先定义 item key，且必须决定**动作作用于组还是组内每一条**。
+2. **提醒侧有稳定 key，读路径没有**。sweep 用 `nudge:card:{cardID}:v{version}` / `nudge:todo:{todoID}:{dueAt}:{state}` 作 `wc_events.dedup_key`（该列有 `UNIQUE(tenant_id, context_id, dedup_key)`）。读路径 8 类条目里，todo_* 可回指 `wc_todos.id`，delegation_* 可回指卡 id，fact_review 可回指 fact id，而 **checkpoint_blocker / checkpoint_question 指向的是检查点 JSON 里的一段文本，没有 id**。
+3. **全仓没有 snooze/claim 先例**（`temp/orca` 是无关参考代码，非本仓机制）。`wc_todos` 已有 `assignee` 字段，是唯一近似 claim 的既有载体，但只覆盖计划项。
+4. **「不新增 migration」是自设边界，不是技术约束**。迁移机制现成：`schemaVersion=3` + 有序 `migrations` map，事务内应用并记 `wc_schema_migrations`；新增一版约 20 行 DDL。
+5. **已有「状态表」先例，其写法正是为了绕开版本号**：`wc_seen(tenant_id, context_id, owner_id, last_seen_at)`，注释明说「放在自己的表里，好让浏览不 bump 上下文版本（浏览不是编辑）」。snooze 的状态与它同类——是「人对条目的处理状态」，不是流内容。
+
+### 7.2 三个选项与取舍
+
+| 选项 | 做法 | 代价 | 结论 |
+|---|---|---|---|
+| A 事件派生 | 动作写 `wc_events`，`dedup_key` 形如 `action:snooze:{itemKey}`，读时查最新一条 | 零新 schema；但见下方致命副作用 | ❌ 不建议 |
+| B 新表 | `wc_attention_actions(tenant, context, item_key, verb, until_at, reason, actor, created_at)`，PK 三列；读路径 LEFT JOIN | migration 4（~20 行 DDL）+ 需定 item_key | ✅ 建议 |
+| C 复用 wc_todos | snooze=改 `due_at`，claim=写 `assignee` | 只能覆盖计划项 | 仅作 todo_* 快捷路径，不能当统一底座 |
+
+**选项 A 的致命副作用（实证）**：`wc_events` 同时是「未读计数」与「变了什么」的来源，而 `UnreadCounts` 的查询**不带 kind 过滤**（`attention.go:238-247`，只按 `created_at > last_seen_at` 分组）。把动作写进 wc_events，会让你**自己的 snooze 变成一条未读变动**，污染未读账本与 AE5 度量。要绕开就得给未读查询加 kind 白名单，把复杂度转移到读路径；此外 snooze 的「到点复现」还要额外 sweep，且日志无界增长需压实。
+
+**选项 B 的好处**：动作与内容分离（不污染未读/变更流）；动作表天然就是 AE5「注意力收益率」的账本；与 `wc_seen` 先例同构。snooze 的「到期复现」改为**读时判断**（未到点则不投影），省掉一个后台唤醒任务及其不变式。
+
+### 7.3 item_key 怎么定（A/B 都绕不开，这才是真正的设计决定）
+
+- 必须**稳定**（同一件事跨两次读是同一 key）且**幂等**（重复动作不产生第二份状态）。
+- 候选：`{kind}:{context_id}:{entity_id}`（todo id / card id / fact id）；checkpoint 类无实体 id，退化为 `{kind}:{context_id}:{hash(title)}`——文本变了就换 key（可接受：内容变了本就是新问题）。
+- **组的语义要显式**：建议动作作用于**组**（`{kind}:{context_id}`），因为用户看到的就是一行；为组内单条建状态会让状态数膨胀，且与「折叠为一行」的 UI 自相矛盾。
+- 权衡：作用于组意味着「组里只有一条想忽略」会忽略全组。因此 dismiss 必须带 reason，且**动作可撤销**（撤销=删该行状态）。
+
+### 7.4 对既有不变量的影响
+
+- snooze 必须在**写提醒事件之前**生效（延续 `pushNudge` 既有顺序：纪律检查在写事件之前），否则被 snooze 的提醒已被记为「已送达」、永久吞掉——正是 `pushNudge` 注释点名最不能出的结果。
+- 动作不得推进 seen 水位（`wc_seen` 仍只由显式 `MarkSeen` 改）。
+- owner 隔离：动作表必须带 tenant/owner 并 JOIN `wc_contexts` 过滤（沿用 `attention_signals.go` 既有做法）。
+
+**建议顺序**：① 先定 item_key（组级）+ 撤销语义；② 选 B（新表）；③ snooze 到期复现用读时判断。
+
+**未验证**：以上均为代码静态核查，**未写码、未跑测**；选项 A 的「未读污染」是从查询无 kind 过滤推断（未构造数据实测）；B 的实际行数与读路径 JOIN 成本未评估。
+
+## 8. 非目标与风险
 
 - **不做** LLM 判断「什么时候该提醒」（不确定、要定时起模型、会幻觉）——沿用既有决策。
 - **不做** 通用 IM 集成；不新建提醒实体（复用 `wc_todos.due_at` 与 `wc_events`，维持「无新 migration」的既有约束）。

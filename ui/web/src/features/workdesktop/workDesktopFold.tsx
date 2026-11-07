@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Card } from "antd";
 import { DownOutlined, RightOutlined } from "@ant-design/icons";
 
@@ -11,41 +11,68 @@ import { DownOutlined, RightOutlined } from "@ant-design/icons";
  * open. Folding is opt-in (defaultOpen) rather than the default — this panel is
  * work MEMORY, and silently hiding remembered content is a worse failure than a
  * long list.
+ *
+ * A revealed card also flashes briefly (see REVEAL_FLASH_MS below): opening and
+ * scrolling are not enough on their own, because landing inside a long single-column
+ * panel still leaves the user hunting for WHAT changed.
  */
+
+/**
+ * How long a revealed card stays visibly highlighted. Long enough to catch the
+ * eye after a jump (the whole point), short enough that it never becomes another
+ * permanent decoration competing for attention.
+ */
+const REVEAL_FLASH_MS = 2000;
+
 export function FoldCard(props: {
   title: ReactNode;
   extra?: ReactNode;
   className?: string;
   defaultOpen?: boolean;
-  /** Bumped externally to force this card open — used when something else links
-   *  TO this card (e.g. the rail's unread badge), where landing on a folded card
-   *  would hide the very content the link promised. */
-  revealNonce?: number;
+  /** True while an external actor wants this card revealed NOW (e.g. the rail's unread
+   *  badge). A boolean rather than a nonce because the caller decides when it is
+   *  pending: passing a nonce forced a mount-value comparison, which silently dropped
+   *  the reveal whenever the card was MOUNTED by the request (the rail switches to
+   *  Overview and reveals in one click, so the panel is created by the very request
+   *  it was supposed to react to). */
+  reveal?: boolean;
   /** Labels for the toggle's accessible name (it is the only control that folds). */
   openLabel: string;
   closeLabel: string;
   children: ReactNode;
 }) {
-  const { title, extra, className, defaultOpen = true, revealNonce = 0, openLabel, closeLabel, children } = props;
+  const { title, extra, className, defaultOpen = true, reveal = false, openLabel, closeLabel, children } = props;
   const [open, setOpen] = useState(defaultOpen);
+  const [flash, setFlash] = useState(false);
 
-  // Only an actual BUMP forces the card open. Comparing against the mount value (via
-  // ref) rather than truthiness matters: a non-zero nonce stays non-zero forever, so
-  // a plain `if (revealNonce)` would re-open the card on every remount and override
-  // a collapse the user had since chosen.
-  const lastReveal = useRef(revealNonce);
+  // Fires on mount when the card IS the result of a reveal, and on every later
+  // false->true transition. Only the true direction acts, so answering the request
+  // (reveal going back to false) never fights the user's own collapse.
   useEffect(() => {
-    if (revealNonce !== lastReveal.current) {
-      lastReveal.current = revealNonce;
-      setOpen(true);
-    }
-  }, [revealNonce]);
+    if (!reveal) return;
+    setOpen(true);
+    // Opening is not enough on its own: the reveal scrolls the card into view inside
+    // a long single-column panel, and the user (rightly) reported that landing on the
+    // section still left them hunting for WHAT changed. So the reveal also marks the
+    // card for a moment — "this is the thing you clicked for".
+    setFlash(true);
+  }, [reveal]);
+
+  // The highlight is deliberately transient rather than a persistent "focused"
+  // state: a lasting marker would become a second thing to dismiss, and the work
+  // desktop's whole premise is that it does not add chores.
+  useEffect(() => {
+    if (!flash) return undefined;
+    const timer = window.setTimeout(() => setFlash(false), REVEAL_FLASH_MS);
+    return () => window.clearTimeout(timer);
+  }, [flash]);
 
   return (
     <Card
       size="small"
-      className={`wd-fold${className ? ` ${className}` : ""}`}
+      className={`wd-fold${className ? ` ${className}` : ""}${flash ? " wd-reveal-flash" : ""}`}
       data-folded={open ? "false" : "true"}
+      data-flash={flash ? "true" : "false"}
       title={
         <span className="wd-fold-head">
           <button

@@ -47,6 +47,10 @@ type Store = {
   // false so only the restart-scenario test is affected.
   coldStart: boolean;
   resident: string[];
+  // Models aging explicitly rather than by timestamp: the store's NOW is in the past, so
+  // deriving staleness from the clock would age the seeded data and silently change
+  // every unread assertion. Empty by default, exactly like the server's "nothing aged".
+  aged: string[]; nudgesToday: number;
   checkpointHistory: Record<string, unknown[]>;
   writes: string[];
   failNextPatch: boolean;
@@ -77,7 +81,7 @@ function baseContext(overrides: Partial<Ctx> & { id: string; title: string }): C
 }
 
 function newStore(seed: Partial<Store> = {}): Store {
-  return { contexts: [], resources: [], relations: [], facts: [], sessions: {}, delegations: [], cards: {}, events: {}, todos: [], seen: {}, queuedTurns: [], coldStart: false, resident: [], checkpointHistory: {}, writes: [], failNextPatch: false, ...seed };
+  return { contexts: [], resources: [], relations: [], facts: [], sessions: {}, delegations: [], cards: {}, events: {}, todos: [], seen: {}, queuedTurns: [], coldStart: false, resident: [], aged: [], nudgesToday: 0, checkpointHistory: {}, writes: [], failNextPatch: false, ...seed };
 }
 
 function checkpoint(body: Record<string, unknown>, revision: number) {
@@ -290,7 +294,20 @@ function handleWorkContext(store: Store) {
         const seen = store.seen[context.id] ?? "";
         unread[context.id] = (store.events[context.id] ?? []).filter((event) => event.created_at > seen).length;
       }
-      return json({ items, unread, counts: {}, generated_at: NOW });
+      // Aging is a DEMOTION, not a deletion: an aged stream keeps its count, and only
+      // streams that actually have unread work can be aged.
+      const aged: Record<string, boolean> = {};
+      for (const id of store.aged) if (unread[id]) aged[id] = true;
+      let unreadTotal = 0;
+      for (const id of Object.keys(unread)) unreadTotal += unread[id] ?? 0;
+      const metrics = {
+        nudges_today: store.nudgesToday,
+        owner_cap: 12,
+        per_stream_cap: 4,
+        unread_total: unreadTotal,
+        aged_streams: Object.keys(aged).length,
+      };
+      return json({ items, unread, aged, counts: {}, metrics, generated_at: NOW });
     }
     if (path === "/v1/work-contexts" && method === "GET") return json(store.contexts);
     if (path === "/v1/work-contexts" && method === "POST") {
@@ -962,6 +979,9 @@ test("the rail unread badge leads to the changes it counts", async ({ page }) =>
   // Collapse the card that actually explains the count.
   const focusCard = boards(page).locator(".wd-focus-card");
   await expect(focusCard).toHaveAttribute("data-folded", "false");
+  // Nothing has been revealed yet, so the highlight must be OFF: the flash is a
+  // response to a click, not a permanent state on the card.
+  await expect(focusCard).toHaveAttribute("data-flash", "false");
   await focusCard.locator(".wd-fold-toggle").click();
   await expect(focusCard).toHaveAttribute("data-folded", "true");
 
@@ -972,6 +992,10 @@ test("the rail unread badge leads to the changes it counts", async ({ page }) =>
   await badge.click();
   await expect(sections(page).locator(".ant-segmented-item-selected")).toHaveText("概览");
   await expect(focusCard.getByText("检查点 r3 已保存", { exact: true })).toBeVisible();
+  // Reaching the right card is not enough by itself — landing on a long overview still
+  // left the user hunting for WHAT changed. The reveal therefore also MARKS the card
+  // for a moment, and the marker is what this asserts.
+  await expect(focusCard).toHaveAttribute("data-flash", "true");
 
   // Clicking again while already on Overview re-reveals a card the user collapsed:
   // this is the path where nothing remounts, so the reveal has to be explicit.
@@ -982,6 +1006,48 @@ test("the rail unread badge leads to the changes it counts", async ({ page }) =>
 
   // Looking at the count is a read: it must not silently mark the stream seen.
   expect(store.seen["ctx-1"]).toBeUndefined();
+});
+
+test("an aged unread count is demoted to a quiet number instead of a red dot", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  const store = await install(page, seededStore());
+  // Aging is decided by the server (unreadAgingAfter); the mock states it directly so
+  // this test is about the UI's response, not about the clock.
+  store.aged = ["ctx-1"];
+  await openDesktop(page);
+
+  // The accessible name changes with the styling, so a screen-reader user is told the
+  // same thing the appearance says: stale, not urgent.
+  const aged = rail(page).getByRole("button", { name: "1 条陈旧变动" });
+  await expect(aged).toBeVisible();
+  // The demanding part — the red dot — is gone...
+  await expect(aged.locator(".ant-badge")).toHaveCount(0);
+  // ...while the count itself survives: aging is a demotion, not a deletion.
+  await expect(aged.locator(".wd-rail-unread-muted")).toHaveText("1");
+  // And it still LEADS somewhere, so a stale count is never a dead end.
+  await aged.click();
+  await expect(sections(page).locator(".ant-segmented-item-selected")).toHaveText("概览");
+});
+
+test("keeps the attention ledger folded until asked, and reports spend against its cap", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  const store = await install(page, seededStore());
+  store.nudgesToday = 5;
+  await openSection(page, "待处理");
+
+  // Folded by default: the ledger answers an occasional question ("is my attention
+  // being spent well?") and is not worth permanent screen space, so the board renders
+  // exactly as it did before this feature unless the user opens it.
+  const ledger = boards(page).locator(".wd-metrics");
+  await expect(ledger).toHaveAttribute("data-folded", "true");
+  await expect(ledger.getByText("今日提醒", { exact: true })).toHaveCount(0);
+
+  await ledger.locator(".wd-fold-toggle").click();
+  await expect(ledger).toHaveAttribute("data-folded", "false");
+  // A bare count invites the wrong conclusion, so spend is always shown with its cap.
+  await expect(ledger.getByText("5 / 12", { exact: true })).toBeVisible();
+  await expect(ledger.getByText("每条主线上限 4 条", { exact: true })).toBeVisible();
+  await expect(ledger.getByText("未读变动", { exact: true })).toBeVisible();
 });
 
 test("selecting another desktop in the rail swaps the boards to it", async ({ page }) => {

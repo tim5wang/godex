@@ -82,6 +82,13 @@ interface WorkDesktopState {
    *  (i.e. clicked a rail unread badge). A monotonically increasing nonce rather
    *  than a boolean, so repeated clicks re-trigger the reveal. */
   changesFocusNonce: number;
+  /** The nonce the Overview board has already answered. It lives in the store rather
+   *  than a component ref because the request and the mount happen in the SAME click:
+   *  the rail switches to Overview and bumps the nonce together, so the panel is
+   *  created BY the request. A ref initialised from the nonce would therefore always
+   *  read "already handled" and silently drop the reveal — which is exactly the bug
+   *  where jumping to the changes showed no marker at all. */
+  changesFocusAck: number;
   setContextId: (id: string) => void;
   setSection: (section: WorkDesktopSection) => void;
   openEditor: (editor: WorkDesktopEditor, reviewTargetId?: string) => void;
@@ -92,6 +99,8 @@ interface WorkDesktopState {
   setAttentionScope: (scope: "current" | "all") => void;
   setSearch: (search: string) => void;
   revealChanges: () => void;
+  /** Mark the pending reveal as answered, so it is not repeated on every remount. */
+  ackChangesFocus: () => void;
 }
 
 export const useWorkDesktopStore = create<WorkDesktopState>((set) => ({
@@ -105,6 +114,7 @@ export const useWorkDesktopStore = create<WorkDesktopState>((set) => ({
   attentionScope: "all",
   search: "",
   changesFocusNonce: 0,
+  changesFocusAck: 0,
   setContextId: (id) => set({ contextId: id, briefOpen: false }),
   setSection: (section) => set({ section }),
   openEditor: (editor, reviewTargetId = "") => set({ editor, reviewTargetId }),
@@ -115,6 +125,7 @@ export const useWorkDesktopStore = create<WorkDesktopState>((set) => ({
   setAttentionScope: (attentionScope) => set({ attentionScope }),
   setSearch: (search) => set({ search }),
   revealChanges: () => set((state) => ({ changesFocusNonce: state.changesFocusNonce + 1 })),
+  ackChangesFocus: () => set((state) => ({ changesFocusAck: state.changesFocusNonce })),
 }));
 
 /** Attention-inbox items name the desktop tab where they resolve. The old tabs

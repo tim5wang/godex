@@ -1,6 +1,6 @@
 # 工作桌面的注意力经济学（Attention Economics）：现状核查与增强方案
 
-> 状态：Partial（§3 为代码实证基线；**AE1、AE3 已实施**，见 §6.1/§6.2；AE2、AE4、AE5 仍为待评审方案）
+> 状态：Partial（§3 为代码实证基线；**AE1、AE3、AE4、AE5 已实施**，见 §6.1–§6.3；AE2（收件箱动词）仍为待评审方案）
 > 日期：2026-11-07
 > 关联：[work-context-desktop-design.md](./work-context-desktop-design.md)（工作桌面主设计）、[taskboard-plugin-design.md](./taskboard-plugin-design.md)（委派执行器）、[memory-design-principles.md](./memory-design-principles.md)（记忆治理）、[agent-role-and-bundle-design.md](./agent-role-and-bundle-design.md)（Agent 模板/多入口）
 > 定位：解释「工作桌面」这一层在注意力经济中的位置，指出现有实现的杠杆缺口，并给出可分期落地的增强方案。本文不引入第二套 Agent Runtime，不改变既有权限与执行边界。
@@ -163,8 +163,8 @@ Agent     = 条目的生产者（delegate / executor / flow_inspect / 记忆候�
 | AE1 | L1 完整化 + 合批 + 杠杆排序 | 无新采集 | ✅ 已实施（2026-11-07），见 §6.1 |
 | AE2 | L1 动词（claim/snooze/dismiss/委托） | 需新增少量接口（动作本身要落审计） | 动作幂等 + owner 隔离 + 不推进 seen 水位 |
 | AE3 | L2 验收包 + 证据徽章 | 复用卡 Execution/Checklist | ✅ 已实施（2026-11-07），见 §6.2 |
-| AE4 | L3 digest + 配额 + 老化降级 | 依赖 AE1 排序 | 静默时段不烧提醒的不变量仍成立 |
-| AE5 | L4 度量 | 依赖 AE2 动作记录 | 指标可复算；不引入新的埋点隐私面 |
+| AE4 | L3 digest + 配额 + 老化降级 | 依赖 AE1 排序 | ✅ 已实施（2026-11-07，仅老化降级 + 按主线配额；每日 digest 未做），见 §6.3 |
+| AE5 | L4 度量 | 依赖 AE2 动作记录 | ✅ 已实施（2026-11-07，部分：预算/未读/老化三项，依赖 AE2 的「注意力收益率」未做），见 §6.3 |
 
 通用门禁（延续既有约定）：
 
@@ -209,6 +209,30 @@ Agent     = 条目的生产者（delegate / executor / flow_inspect / 记忆候�
 - 新增纯函数单测 6 条（装配、无证据不算、未勾选证据不算且路径不重复、无执行时 summary 留空、取最后一条非空 summary、冲突标签回退）；`workDesktopView.test.ts` 13 通过。
 - 前端：`pnpm typecheck` 通过；`vitest run` 49 文件 / 503 通过；i18n 中英对齐通过。
 - `playwright work-desktop` **三端 29 passed / 40 skipped / 0 failed**；新增两条用例：「展示验收包且把主张与证据分开」（断言证据可见、「（未附证据）」被标出、observed/declared 分区、重叠路径只列一次、未决与冲突可见）与「卡上没有可核验项时直接明说」（种子卡的验收项未勾选且无证据）。
+
+### 6.3 聚焦修复 + AE4 老化/配额 + AE5 度量（2026-11-07）
+
+用户实测反馈：「点击桌面消息数能联动概览，但概览里的内容还缺聚焦/高亮，就是只能看到」。三项一次性实施，均按「低认知负担」定形：
+
+**一、修复揭示缺聚焦（真 bug，不只是缺高亮）。** 根因不是样式，而是**揭示请求被静默丢弃**：`WorkDesktopRail.openUnreadChanges` 在同一次点击里既 `setSection("overview")` 又 `revealChanges()`，于是 OverviewPanel **是被这次请求创建出来的**；`FoldCard` 用 `useRef(revealNonce)` 与挂载值比较，挂载时读到的已是最新 nonce → 判定「已处理」→ 展开与标记都不触发。此前用例之所以看着通过，只是因为新卡默认 `defaultOpen=true`，看起来像展开了——**从其它板块点未读气泡这条最常见路径上，卡片没有任何标记**。
+
+- 修法：把「待回应的揭示请求」从组件 ref 移到 store（`changesFocusNonce` + `changesFocusAck` + `ackChangesFocus`），面板消费后确认；`FoldCard` 的 `revealNonce` 换成布尔 `reveal`（只在 true 方向动作，回应请求的回落不会与用户自己的折叠打架）。
+- 高亮本身：一次性瞬时高亮（accent 描边 + 淡出，2s）后自动消失，**不新增常驻 UI**；带 `prefers-reduced-motion` 降级（保留标记、去掉动画）。
+
+**二、AE4：老化降级 + 按主线配额（每日 digest 未做）。**
+
+- **老化降级**（`unreadAgingAfter = 72h`）：超过 3 天的未读不再当作待办提醒，红点降级为**静音数字**（可点、计数仍真实）。这是「老化」而非「隐藏」——净不掉的标记长期存在会从「请求」变成「背景负债感」。服务端算（`NewestUnreadEventAt`），两个视图不会对「哪条主线陈旧」得出不同结论。**空未读的主线永不被标陈旧**，否则安静主线会永久带灰点。
+- **按主线配额**（`attentionPerStreamDailyCap = 4`）：只有 owner 级全局上限时，**哪条主线碰巧到期项最多就吃光全天预算、其它主线永远不说话**。两道限额都在**写事件之前**检查，保留「静默时段不烧提醒」不变量（`pushAllowed` 现在收 contextID）。
+
+**三、AE5：注意力度量卡（默认折叠、可隐藏）。** 今日提醒**带上限显示**（`5 / 12`——光一个数字会引来错误结论）、未读总量、陈旧主线数。三项均由收件箱已读数据导出，不是第二事实源。**默认折叠**，折叠就是「支持隐藏」的全部实现：不加关闭按钮、不落持久化偏好，不用它的人看到的界面与从前完全一致。计数失败时退化为 0，不让 ledger 把整个收件箱带挂。
+
+验证（2026-11-07）：
+
+- 新增后端测试 4 条：`TestAttentionInboxAgesStaleUnread`（陈旧被标出、计数不丢）、`TestAttentionInboxNeverAgesAStreamWithNothingUnread`、`TestAttentionMetricsReportSpendAgainstCap`（用量与上限同报）、`TestPushPerStreamCapBoundsOneBusyStream`（忙碌主线上限用尽后另一条主线仍能进来）。
+- 前端：`pnpm typecheck` 通过；`vitest run` 49 文件 / 503 通过；i18n 中英对齐通过。
+- `playwright work-desktop` **三端 31 passed / 44 skipped / 0 failed**；新增/加强：揭示标记断言（`data-flash`）、陈旧计数降级（无 Badge、有静音数字、仍可点）、度量卡默认折叠及「5 / 12」与每主线上限。
+- **反向验证过非空洞**：临时把 `reveal={pendingReveal}` 改成 `reveal={false}` 后，`data-flash` 断言**真失败**，恢复后通过——即该断言真的在守护这个 bug。
+- **flake 判定用 A/B 对照而非名字**：全量中 `TestScreenUserInputHookFireAndForgetShadow` 失败并不等于本轮引入。我的改动 `-count=5` 失败 2 次，stash 后基线 `-count=5` 也失败 1 次 → 既有 flake（根因：shadow screener 的后台分类 goroutine 在测试结束后才写盘，与 `t.TempDir` 清理竞态，见 `security_screener_test.go:73`）。只看名字会「猜对而推理错」。
 
 ## 7. 非目标与风险
 

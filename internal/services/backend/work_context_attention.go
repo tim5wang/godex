@@ -39,6 +39,16 @@ const (
 	dueSoonWindow = 24 * time.Hour
 	// attentionDailyCap bounds non-urgent nudges per owner per local day.
 	attentionDailyCap = 12
+	// attentionPerStreamDailyCap bounds one stream's share of that budget. Without
+	// it one busy stream can spend every nudge the owner gets in a day, and the
+	// other streams go silent — the exact unfairness a single global cap hides.
+	attentionPerStreamDailyCap = 4
+	// unreadAgingAfter is how long an unread change keeps calling for action. Past
+	// it the count is reported as aged: the badge is demoted to a muted summary
+	// instead of a red dot, because a marker nobody clears stops being a request
+	// and becomes background debt. It is NOT hidden — hiding remembering content
+	// would be the worse failure.
+	unreadAgingAfter = 72 * time.Hour
 	// quiet hours are in server-local time.
 	quietHoursStart = 22
 	quietHoursEnd   = 8
@@ -100,13 +110,35 @@ type AttentionItem struct {
 	Also []string `json:"also,omitempty"`
 }
 
+// AttentionMetrics is the attention ledger: how much of the day's notification
+// budget has been spent, and how much unread work is open. It is computed from
+// data the inbox already reads, so showing it costs no extra query and no second
+// source of truth.
+type AttentionMetrics struct {
+	// NudgesToday is how many notifications the sweep has delivered to this owner
+	// since local midnight. The caps are reported alongside it so the number is
+	// readable as "N of M" rather than as a bare figure with no scale.
+	NudgesToday  int `json:"nudges_today"`
+	OwnerCap     int `json:"owner_cap"`
+	PerStreamCap int `json:"per_stream_cap"`
+	// UnreadTotal sums the per-stream unread counts; AgedStreams counts streams
+	// whose unread work has gone stale (see unreadAgingAfter).
+	UnreadTotal int `json:"unread_total"`
+	AgedStreams int `json:"aged_streams"`
+}
+
 // AttentionView is the inbox plus per-stream unread counts, so the desktop wall
 // can show a badge for every stream from the same request.
 type AttentionView struct {
-	Items       []AttentionItem `json:"items"`
-	Unread      map[string]int  `json:"unread"`
-	Counts      map[string]int  `json:"counts"`
-	GeneratedAt string          `json:"generated_at"`
+	Items  []AttentionItem `json:"items"`
+	Unread map[string]int  `json:"unread"`
+	// Aged names the streams whose unread changes have gone stale (see
+	// unreadAgingAfter). The count is still reported in Unread; this only tells the
+	// UI to render it as a muted summary rather than an alert.
+	Aged        map[string]bool  `json:"aged"`
+	Counts      map[string]int   `json:"counts"`
+	Metrics     AttentionMetrics `json:"metrics"`
+	GeneratedAt string           `json:"generated_at"`
 }
 
 // NudgeNotifier delivers a notification to one owner's browsers. Narrow on
@@ -190,11 +222,60 @@ func (s *Service) AttentionInbox(ctx context.Context, scope workcontext.Scope) (
 	if err != nil {
 		return AttentionView{}, err
 	}
+	aged, err := s.agedUnreadStreams(ctx, store, scope, now)
+	if err != nil {
+		return AttentionView{}, err
+	}
 	counts := map[string]int{}
 	for _, item := range items {
 		counts[item.Kind]++
 	}
-	return AttentionView{Items: items, Unread: unread, Counts: counts, GeneratedAt: now.UTC().Format(time.RFC3339Nano)}, nil
+	metrics, err := s.attentionMetrics(ctx, store, scope, now, unread, aged)
+	if err != nil {
+		return AttentionView{}, err
+	}
+	return AttentionView{Items: items, Unread: unread, Aged: aged, Counts: counts, Metrics: metrics, GeneratedAt: now.UTC().Format(time.RFC3339Nano)}, nil
+}
+
+// attentionMetrics builds the attention ledger from data already read above, plus
+// one cheap count of today's delivered nudges. A failed count degrades to zero
+// spent rather than failing the whole inbox: the inbox is the useful part and a
+// missing ledger must not take it down.
+func (s *Service) attentionMetrics(ctx context.Context, store *workcontext.Store, scope workcontext.Scope,
+	now time.Time, unread map[string]int, aged map[string]bool) (AttentionMetrics, error) {
+	metrics := AttentionMetrics{
+		OwnerCap:     attentionDailyCap,
+		PerStreamCap: attentionPerStreamDailyCap,
+		AgedStreams:  len(aged),
+	}
+	for _, count := range unread {
+		metrics.UnreadTotal += count
+	}
+	// The inbox is read-only and must not be the thing that decides whether a nudge
+	// was delivered, so a failed count is swallowed into 0.
+	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	if sent, err := store.CountEventsByKindSince(ctx, scope, nudgeEventKind, midnight); err == nil {
+		metrics.NudgesToday = sent
+	}
+	return metrics, nil
+}
+
+// agedUnreadStreams reports which streams have unread changes older than
+// unreadAgingAfter. A stream with NO unread is never aged: there is nothing to
+// demote, and reporting it would put a permanent grey marker on quiet streams.
+func (s *Service) agedUnreadStreams(ctx context.Context, store *workcontext.Store, scope workcontext.Scope, now time.Time) (map[string]bool, error) {
+	newest, err := store.NewestUnreadEventAt(ctx, scope)
+	if err != nil {
+		return nil, err
+	}
+	cutoff := now.Add(-unreadAgingAfter)
+	aged := map[string]bool{}
+	for id, at := range newest {
+		if at.Before(cutoff) {
+			aged[id] = true
+		}
+	}
+	return aged, nil
 }
 
 // delegationAttention collects delegated cards: the ones awaiting a human, and the
@@ -583,7 +664,7 @@ func (s *Service) pushNudge(ctx context.Context, store *workcontext.Store, scope
 	if notifier == nil {
 		return
 	}
-	if !s.pushAllowed(ctx, store, scope, now) {
+	if !s.pushAllowed(ctx, store, scope, contextID, now) {
 		return
 	}
 	isNew, err := store.RecordEventIfNew(ctx, scope, contextID, kind, title, "attention", dedup)
@@ -595,11 +676,18 @@ func (s *Service) pushNudge(ctx context.Context, store *workcontext.Store, scope
 	}
 }
 
-// pushAllowed applies quiet hours and the per-day cap to non-decision nudges.
+// pushAllowed applies quiet hours, the owner's per-day cap and a per-stream share
+// of that cap to non-decision nudges.
+//
 // Decision-class items bypass the cap in principle, but they are requested with
 // the same helper today because their dedup key already bounds them to one per
 // card version.
-func (s *Service) pushAllowed(ctx context.Context, store *workcontext.Store, scope workcontext.Scope, now time.Time) bool {
+//
+// The per-stream share exists because one global cap is unfairly silent: with only
+// an owner-level budget, whichever stream happens to have the most due items
+// consumes it and the other streams never speak. Both limits are applied here,
+// BEFORE the event is recorded — see pushNudge on why that ordering matters.
+func (s *Service) pushAllowed(ctx context.Context, store *workcontext.Store, scope workcontext.Scope, contextID string, now time.Time) bool {
 	if inQuietHours(now) {
 		return false
 	}
@@ -609,7 +697,14 @@ func (s *Service) pushAllowed(ctx context.Context, store *workcontext.Store, sco
 		// Counting failed: staying silent is the safer failure for a notifier.
 		return false
 	}
-	return sent < attentionDailyCap
+	if sent >= attentionDailyCap {
+		return false
+	}
+	streamSent, err := store.CountEventsByKindSinceForContext(ctx, scope, contextID, nudgeEventKind, midnight)
+	if err != nil {
+		return false
+	}
+	return streamSent < attentionPerStreamDailyCap
 }
 
 // inQuietHours reports whether local time falls in the silent window. The window

@@ -15,6 +15,7 @@ import {
 import { InfoHint } from "./workDesktopHints";
 import { AcceptancePanel } from "./AcceptancePanel";
 import { AttentionInbox } from "./AttentionInbox";
+import { AttentionLedger } from "./AttentionLedger";
 import { KnowledgeCard } from "./KnowledgeCard";
 import { InlineEdit } from "./workDesktopInline";
 import { LinkSessionPicker } from "./LinkSessionPicker";
@@ -59,7 +60,7 @@ export function WorkDesktopSectionBoard(props: { section: string; data: WorkDesk
   const {
     tr, trLabel, selected, readOnly, contextId, contexts,
     facts, relations, sessions, delegations, events, todos, focusChanges, lastSeenAt,
-    scopedAttention, attentionQuery, contextResources, recallResult,
+    scopedAttention, attentionQuery, attentionMetrics, contextResources, recallResult,
   } = data;
   const openEditor = useWorkDesktopStore((state) => state.openEditor);
   const setSection = useWorkDesktopStore((state) => state.setSection);
@@ -218,13 +219,20 @@ export function WorkDesktopSectionBoard(props: { section: string; data: WorkDesk
 
   if (props.section === "attention") {
     return (
-      <AttentionInbox
-        items={scopedAttention}
-        loading={attentionQuery.isLoading}
-        onOpen={(id, target) => { setContextId(id); setSection(sectionForTarget(target)); }}
-        scope={attentionScope}
-        onScopeChange={setAttentionScope}
-      />
+      <div className="wd-stack">
+        <AttentionInbox
+          items={scopedAttention}
+          loading={attentionQuery.isLoading}
+          onOpen={(id, target) => { setContextId(id); setSection(sectionForTarget(target)); }}
+          scope={attentionScope}
+          onScopeChange={setAttentionScope}
+        />
+        {/* The ledger sits UNDER the list and starts folded: it answers "is my
+            attention being spent well?", which is worth asking occasionally and not
+            worth permanent screen space. It renders nothing until the numbers exist,
+            so a failed read degrades to exactly the old inbox rather than an empty box. */}
+        {attentionMetrics ? <AttentionLedger metrics={attentionMetrics} tr={tr} /> : null}
+      </div>
     );
   }
 

@@ -490,12 +490,27 @@ export interface AttentionItem {
   also?: string[];
 }
 
+// AttentionMetrics is the attention ledger: how much of today's notification budget
+// has been spent and how much unread work is open. Every number is derived from data
+// the inbox already reads, so it needs no second source of truth.
+export interface AttentionMetrics {
+  nudges_today: number;
+  owner_cap: number;
+  per_stream_cap: number;
+  unread_total: number;
+  aged_streams: number;
+}
+
 // WorkAttention is the inbox plus per-stream unread counts, so the desktop wall
 // badges every stream from the same request that built the list.
 export interface WorkAttention {
   items: AttentionItem[];
   unread: Record<string, number>;
+  /** Streams whose unread changes have gone stale: their count is still reported,
+   *  but the UI demotes it from an alert to a muted summary. */
+  aged: Record<string, boolean>;
   counts: Record<string, number>;
+  metrics: AttentionMetrics;
   generated_at: string;
 }
 

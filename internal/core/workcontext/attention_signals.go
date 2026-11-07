@@ -2,6 +2,9 @@ package workcontext
 
 import (
 	"context"
+	"database/sql"
+	"strings"
+	"time"
 )
 
 // This file extends the cross-stream attention read models beyond cards and due
@@ -132,4 +135,59 @@ func (s *Store) DownstreamBlockedCounts(ctx context.Context, scope Scope) (map[s
 		out[id] = count
 	}
 	return out, rows.Err()
+}
+
+// NewestUnreadEventAt returns, per non-archived stream, the timestamp of its most
+// recent unread event. It is the input to aging: a badge nobody can clear stops
+// being a call to action once it is old, and an aged count is rendered as a
+// de-emphasised summary instead of a red dot.
+//
+// A stream with nothing unread is ABSENT from the map rather than present with a
+// zero time, so callers cannot mistake "never happened" for "long ago".
+func (s *Store) NewestUnreadEventAt(ctx context.Context, scope Scope) (map[string]time.Time, error) {
+	tenantID, ownerID := scopeArgs(scope)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.id, MAX(e.created_at)
+		FROM wc_contexts c
+		LEFT JOIN wc_seen s ON s.tenant_id = c.tenant_id AND s.context_id = c.id
+		LEFT JOIN wc_events e ON e.tenant_id = c.tenant_id AND e.context_id = c.id
+			AND e.created_at > COALESCE(s.last_seen_at, '')
+		WHERE c.tenant_id = ? AND c.owner_id = ? AND c.status <> 'archived'
+		GROUP BY c.id`, tenantID, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]time.Time{}
+	for rows.Next() {
+		var id string
+		var latest sql.NullString
+		if err := rows.Scan(&id, &latest); err != nil {
+			return nil, err
+		}
+		// A stream with no unread rows yields NULL, which must not become a time.
+		if !latest.Valid {
+			continue
+		}
+		if parsed, ok := ParseDueAt(latest.String); ok {
+			out[id] = parsed
+		}
+	}
+	return out, rows.Err()
+}
+
+// CountEventsByKindSinceForContext counts nudges already delivered for ONE stream
+// since a time. The sweep uses it so a single busy stream cannot spend the owner's
+// entire daily notification budget on its own.
+func (s *Store) CountEventsByKindSinceForContext(ctx context.Context, scope Scope, contextID, kind string, since time.Time) (int, error) {
+	tenantID, ownerID := scopeArgs(scope)
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM wc_events e
+		JOIN wc_contexts c ON c.tenant_id = e.tenant_id AND c.id = e.context_id
+		WHERE e.tenant_id = ? AND c.owner_id = ? AND e.context_id = ?
+		  AND e.kind = ? AND e.created_at >= ?`,
+		tenantID, ownerID, strings.TrimSpace(contextID), strings.TrimSpace(kind),
+		since.UTC().Format(time.RFC3339Nano)).Scan(&count)
+	return count, err
 }

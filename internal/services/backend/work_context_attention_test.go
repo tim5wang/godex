@@ -354,6 +354,131 @@ func hasEventKind(events []workcontext.Event, kind string) bool {
 	return false
 }
 
+// TestAttentionInboxAgesStaleUnread covers aging: an unread badge that nobody has
+// cleared for days stops being a call to action, so the inbox demotes it to a muted
+// summary. It is NOT hidden — the count stays real and the events stay readable;
+// only the demand for action goes away.
+func TestAttentionInboxAgesStaleUnread(t *testing.T) {
+	// Real "now", because events are stamped by the wall clock while the inbox reads
+	// s.now(): only a service clock set relative to real time can age a fresh event.
+	base := time.Now()
+	service, _, scope := newAttentionService(t, base)
+	mustStream(t, service, scope, "刚有变动")
+
+	view, err := service.AttentionInbox(context.Background(), scope)
+	if err != nil {
+		t.Fatalf("AttentionInbox: %v", err)
+	}
+	if view.Metrics.UnreadTotal == 0 {
+		t.Fatal("a never-seen stream should report unread changes")
+	}
+	// A fresh change is not aged: the marker must still be a call to action.
+	if len(view.Aged) != 0 {
+		t.Fatalf("a just-written change must not be aged, got %+v", view.Aged)
+	}
+
+	// Move the service clock past the aging window. The events themselves are
+	// unchanged, which is exactly the situation aging describes.
+	service.now = fixedNow(base.Add(unreadAgingAfter + time.Hour))
+	view, err = service.AttentionInbox(context.Background(), scope)
+	if err != nil {
+		t.Fatalf("AttentionInbox after aging: %v", err)
+	}
+	if len(view.Aged) != 1 {
+		t.Fatalf("the stream should be reported as aged, got %+v", view.Aged)
+	}
+	if view.Metrics.AgedStreams != 1 {
+		t.Fatalf("the ledger should count one aged stream, got %d", view.Metrics.AgedStreams)
+	}
+	// Aged is a DEMOTION, not a deletion: the count must survive.
+	if view.Metrics.UnreadTotal == 0 {
+		t.Fatal("aging must not erase the unread count")
+	}
+}
+
+// TestAttentionInboxNeverAgesAStreamWithNothingUnread is the other half of the
+// rule: a quiet stream must not acquire a permanent grey marker.
+func TestAttentionInboxNeverAgesAStreamWithNothingUnread(t *testing.T) {
+	base := time.Now()
+	service, _, scope := newAttentionService(t, base)
+	store, _ := service.WorkContexts()
+	stream := mustStream(t, service, scope, "已读且安静")
+	if _, err := store.MarkSeen(context.Background(), scope, stream.ID); err != nil {
+		t.Fatalf("MarkSeen: %v", err)
+	}
+
+	service.now = fixedNow(base.Add(unreadAgingAfter * 10))
+	view, err := service.AttentionInbox(context.Background(), scope)
+	if err != nil {
+		t.Fatalf("AttentionInbox: %v", err)
+	}
+	if len(view.Aged) != 0 {
+		t.Fatalf("a stream with nothing unread must never be aged, got %+v", view.Aged)
+	}
+}
+
+// TestAttentionMetricsReportSpendAgainstCap pins the ledger figures. A bare count
+// with no scale invites the wrong conclusion, so the caps ship with the numbers.
+func TestAttentionMetricsReportSpendAgainstCap(t *testing.T) {
+	base := time.Date(2026, 10, 31, 12, 0, 0, 0, time.Local)
+	service, notifier, scope := newAttentionService(t, base)
+	store, _ := service.WorkContexts()
+	stream := mustStream(t, service, scope, "度量")
+	if _, err := store.CreateTodo(context.Background(), scope, stream.ID, workcontext.TodoInput{
+		Text: "过期项", DueAt: base.Add(-time.Hour).Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("CreateTodo: %v", err)
+	}
+
+	service.sweepAttentionOnce(context.Background())
+	view, err := service.AttentionInbox(context.Background(), scope)
+	if err != nil {
+		t.Fatalf("AttentionInbox: %v", err)
+	}
+	if view.Metrics.NudgesToday != notifier.count() {
+		t.Fatalf("ledger nudges = %d, deliveries = %d", view.Metrics.NudgesToday, notifier.count())
+	}
+	if view.Metrics.OwnerCap != attentionDailyCap || view.Metrics.PerStreamCap != attentionPerStreamDailyCap {
+		t.Fatalf("ledger must report the caps it is measured against, got %+v", view.Metrics)
+	}
+}
+
+// TestPushPerStreamCapBoundsOneBusyStream is why a per-stream share exists at all:
+// with only an owner-level budget, whichever stream happens to have the most due
+// items eats it and the other streams never speak.
+func TestPushPerStreamCapBoundsOneBusyStream(t *testing.T) {
+	base := time.Date(2026, 10, 31, 12, 0, 0, 0, time.Local)
+	service, notifier, scope := newAttentionService(t, base)
+	store, _ := service.WorkContexts()
+	busy := mustStream(t, service, scope, "忙碌主线")
+	quiet := mustStream(t, service, scope, "安静主线")
+
+	past := base.Add(-time.Hour).Format(time.RFC3339)
+	// Twice the per-stream share, in ONE stream.
+	for i := 0; i < attentionPerStreamDailyCap*2; i++ {
+		if _, err := store.CreateTodo(context.Background(), scope, busy.ID, workcontext.TodoInput{
+			Text: "忙碌过期项", DueAt: past,
+		}); err != nil {
+			t.Fatalf("CreateTodo: %v", err)
+		}
+	}
+	if _, err := store.CreateTodo(context.Background(), scope, quiet.ID, workcontext.TodoInput{
+		Text: "安静过期项", DueAt: past,
+	}); err != nil {
+		t.Fatalf("CreateTodo quiet: %v", err)
+	}
+
+	service.sweepAttentionOnce(context.Background())
+	// The busy stream is capped at its share, not at the owner's whole budget.
+	if got := notifier.count(); got != attentionPerStreamDailyCap+1 {
+		t.Fatalf("expected the per-stream share then the other stream, got %d deliveries", got)
+	}
+	// The quiet stream still got through, which is the fairness this cap buys.
+	if !strings.Contains(notifier.allBodies(), "安静过期项") {
+		t.Fatalf("the per-stream cap must leave room for other streams, got %q", notifier.allBodies())
+	}
+}
+
 // TestAttentionInboxSurfacesFactsBlockersAndQuestions pins the coverage that made
 // the inbox worth opening: the signals that used to live only inside one stream's
 // boards (a fact awaiting review, a blocked plan item, the stream's own recorded

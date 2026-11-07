@@ -71,19 +71,26 @@ export function OverviewPanel(props: {
 
   const seenLabel = lastSeenAt ? formatTimestamp(lastSeenAt) : tr("lastSeenNever");
 
-  // The rail's unread badge lands here, so this card must force itself open and
-  // scroll into view when asked: it is where "N unread changes" are actually read.
-  // Ref-compared against the mount value, so a stale non-zero nonce does not scroll
-  // the panel on every mount (e.g. after switching desktops and back).
+  // The rail's unread badge lands here, so this card must force itself open, scroll
+  // into view AND mark itself when asked: it is where "N unread changes" are read.
+  //
+  // The pending request lives in the STORE, not in a component ref. The rail switches
+  // to Overview and bumps the nonce in the same click, so this panel is MOUNTED BY the
+  // request — a ref initialised from the nonce would read "already handled" and drop
+  // the reveal on the most common path (jumping from another board).
   const changesFocusNonce = useWorkDesktopStore((state) => state.changesFocusNonce);
+  const changesFocusAck = useWorkDesktopStore((state) => state.changesFocusAck);
+  const ackChangesFocus = useWorkDesktopStore((state) => state.ackChangesFocus);
   const changesRef = useRef<HTMLDivElement>(null);
-  const lastChangesFocus = useRef(changesFocusNonce);
+  const pendingReveal = changesFocusNonce > changesFocusAck;
   useEffect(() => {
-    if (changesFocusNonce !== lastChangesFocus.current) {
-      lastChangesFocus.current = changesFocusNonce;
-      changesRef.current?.scrollIntoView({ block: "center" });
-    }
-  }, [changesFocusNonce]);
+    if (!pendingReveal) return;
+    changesRef.current?.scrollIntoView({ block: "center" });
+    // Acknowledging here (rather than in the rail) is what makes the request
+    // one-shot: the card opens and marks itself once, and a later remount does not
+    // re-open a card the user has since collapsed.
+    ackChangesFocus();
+  }, [pendingReveal, ackChangesFocus]);
 
   return <div className="wd-stack">
     <FoldCard
@@ -124,7 +131,7 @@ export function OverviewPanel(props: {
       <FoldCard
         {...foldProps}
         className="wd-focus-card"
-        revealNonce={changesFocusNonce}
+        reveal={pendingReveal}
         title={<Space size={6}><ThunderboltOutlined aria-hidden="true" />{tr("changesSinceTitle")}<span className="wd-muted">{seenLabel}</span></Space>}
         extra={!readOnly && focusChanges.length > 0 ? <Button size="small" loading={markSeenPending} onClick={onMarkSeen}>{tr("markSeen")}</Button> : null}
       >

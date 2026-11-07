@@ -560,6 +560,21 @@ WD3.8 之后，收件箱只覆盖三类信号（待验收委派、过期/即将�
 - **隔离边界（范围变更）**：「flow 失败 run」原计划并入，实施前核对发现 `flowRunRecord`（`internal/agent/flow_store.go`）**无 tenant/owner 字段**、且 flow 与 work stream 无数据模型关联；按 owner 隔离面投影无归属信号 = 跨用户泄露，故**不做**（前提是先给 flow run 建归属）。
 - 无新 migration；不碰巡检/推送/静默时段/日上限。细节与验证见 [work-context-attention-economics.md](./work-context-attention-economics.md) §6.1。
 
+### WD3.17 验收包 + 未读聚焦修复 + 老化/配额/度量（AE3/AE4/AE5，2026-11-07）
+
+按 [work-context-attention-economics.md](./work-context-attention-economics.md) §AE3–AE5 实施。用户实测反馈（「点消息数能联动概览，但概览内容缺聚焦，只能看到」）修出一个真 bug。细节与验证见该文档 §6.2/§6.3。
+
+- **AE3 验收包（纯渲染层，无后端改动）**：委派卡不再只列验收条件文本。关键发现是**渲染时把已有字段丢了**——`WorkDelegationView.Card` 就是完整 `taskboard.Card`，而卡片只渲染 `checklist[].text`，`evidence` / `observed_paths` / `research.open_questions` / `merge_report` / `executions[].summary` 全部未用。新增 `acceptancePackage()` + `AcceptancePanel`，并守一条诚实规则：**不给「勾选但无证据」背书**（`hasEvidence` 仅在已勾选且有证据时为真；无证据时面板明说「没有可核验的证据」）。observed（gate 3）与 declared（gate 1）分开展示且去重。
+- **未读聚焦修复（真 bug）**：`openUnreadChanges` 在同一次点击里既切板块又 bump nonce，使 Overview 面板**是被该请求创建出来的**；`FoldCard` 用 `useRef(nonce)` 与挂载值比较 → 判定「已处理」→ 展开与高亮都不触发。此前用例看着通过只因新卡默认展开。修法：待回应请求移到 store（`changesFocusNonce` + `changesFocusAck`），`revealNonce` 改为布尔 `reveal`；并新增一次性瞬时高亮（2s 自动消失，不新增常驻 UI，`prefers-reduced-motion` 保留标记去动画）。
+- **AE4 老化降级 + 按主线配额**：未读超 72h 不再当作待办，红点降级为静音数字（计数仍真实、仍可点）；无未读的主线永不被标陈旧。新增 `attentionPerStreamDailyCap = 4`：只有 owner 级上限时，哪条主线到期项最多就吃光全天预算。两道限额仍在**写事件之前**检查。每日 digest 未做。
+- **AE5 度量卡**：今日提醒用量**带上限同报**（`5 / 12`）+ 未读总量 + 陈旧主线数，均由收件箱已读数据导出。**默认折叠**即「支持隐藏」的全部实现（不加关闭按钮、不落偏好），不用它的人看到的界面与从前完全一致。
+
+验证（2026-11-07）：
+
+- 后端新增 4 测试（老化标记与「空未读不陈旧」、度量报告上限、按主线配额保留其它主线）；`go build`/`vet` 通过；core/workcontext 与 httpapi 全量通过。
+- 前端：`pnpm typecheck` 通过；`vitest run` 49 文件 / 503 通过；i18n 中英对齐通过；`playwright work-desktop` **三端 31 passed / 44 skipped / 0 failed**。
+- 揭示标记断言**反向验证过非空洞**（改回 `reveal={false}` 后真失败）。
+
 ### 11.5 后续实现门禁
 
 - 后端：SQLite migrations/reopen/version CAS、同事务事件、租户与来源鉴权、依赖环、幂等补偿、来源删除、事实时间范围；使用实际 modernc SQLite，不只 mock。

@@ -374,6 +374,11 @@ export function useWorkDesktopData() {
   const lastSeenAt = focusQuery.data?.last_seen_at ?? "";
   const attentionItems = attentionQuery.data?.items ?? [];
   const unreadByContext = attentionQuery.data?.unread ?? {};
+  // Streams whose unread work has gone stale. Their count is still real, but the UI
+  // demotes it from an alert to a muted summary: a marker nobody clears stops being
+  // a request and becomes background debt.
+  const agedByContext = attentionQuery.data?.aged ?? {};
+  const attentionMetrics = attentionQuery.data?.metrics;
   const scopedAttention = attentionScope === "all" ? attentionItems : attentionItems.filter((item) => item.context_id === contextId);
   const pendingReview = delegationsNeedingReview(delegations);
   const filteredContexts = useMemo(() => filterContexts(contexts, search), [contexts, search]);
@@ -391,7 +396,7 @@ export function useWorkDesktopData() {
     // selection + derived
     contexts, selected, contextId, readOnly, invalidContext, filteredContexts,
     detail, facts, relations, sessions, delegations, events, todos, focusChanges, lastSeenAt,
-    attentionItems, unreadByContext, scopedAttention, pendingReview, contextResources, filesRoot,
+    attentionItems, unreadByContext, agedByContext, attentionMetrics, scopedAttention, pendingReview, contextResources, filesRoot,
     // query state (for loading/error surfaces)
     contextsQuery, detailQuery, attentionQuery, recallResult, briefQuery, focusQuery, projectsQuery, templatesQuery,
     // mutations

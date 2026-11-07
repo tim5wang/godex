@@ -45,7 +45,7 @@ export function WorkDesktopRail(props: { collapsed: boolean; viewSwitcher: React
   const activateDockTab = useConversationLayoutStore((state) => state.activateDockTab);
   const {
     tr, trLabel, filteredContexts, contextId, readOnly, invalidContext,
-    unreadByContext, sessions, contextsQuery, unlinkSessionMutation,
+    unreadByContext, agedByContext, sessions, contextsQuery, unlinkSessionMutation,
   } = data;
 
   // The editor modal is owned by the rail: the rail is mounted whenever the desktop
@@ -130,6 +130,11 @@ export function WorkDesktopRail(props: { collapsed: boolean; viewSwitcher: React
             {filteredContexts.map((item) => {
               const active = item.id === contextId;
               const unread = unreadByContext[item.id] ?? 0;
+              // An aged count is still real, but it is no longer a call to action:
+              // it renders as a muted number instead of a red dot. Counting happens
+              // on the server (see unreadAgingAfter), so the two views cannot
+              // disagree about which streams are stale.
+              const aged = agedByContext[item.id] === true;
               // Only the ACTIVE desktop shows its linked conversations inline; showing
               // every desktop's conversations at once would turn the list into a wall.
               const linked = active ? sessions : [];
@@ -139,14 +144,22 @@ export function WorkDesktopRail(props: { collapsed: boolean; viewSwitcher: React
                       nested in a button is invalid HTML, which is why it could not be
                       clicked before. Its accessible name says what it does. */}
                   {unread > 0 ? (
-                    <Tooltip title={tr("attentionUnreadHint", { count: unread })}>
+                    <Tooltip title={aged
+                      ? tr("attentionUnreadAgedHint", { count: unread })
+                      : tr("attentionUnreadHint", { count: unread })}>
                       <button
                         type="button"
-                        className="wd-rail-unread"
-                        aria-label={tr("attentionUnread", { count: unread })}
+                        className={`wd-rail-unread${aged ? " wd-rail-unread-aged" : ""}`}
+                        aria-label={aged
+                          ? tr("attentionUnreadAged", { count: unread })
+                          : tr("attentionUnread", { count: unread })}
                         onClick={() => openUnreadChanges(item.id)}
                       >
-                        <Badge count={unread} size="small" />
+                        {/* A stale count is shown as plain text, not a Badge: the red
+                            dot is the part that demands action, and this no longer does. */}
+                        {aged
+                          ? <span className="wd-rail-unread-muted">{unread}</span>
+                          : <Badge count={unread} size="small" />}
                       </button>
                     </Tooltip>
                   ) : null}

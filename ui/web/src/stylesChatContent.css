@@ -167,22 +167,29 @@
   margin-right: 4px;
 }
 
-/* Changed-files card (turn tail) + inline diff view */
-.changes-card {
-  margin: 4px 0 2px;
-  border: 1px solid var(--godex-border);
-  border-radius: 8px;
-  background: var(--godex-panel-muted);
-  padding: 8px 10px;
-  min-width: 0;
-}
-
+/* The header is the collapse toggle. It has to undo the browser's button defaults
+   (centred text, border, background) or the card head would jump to a raised grey bar
+   in the middle of the feed; it stays a real <button> so keyboard and screen readers
+   get the disclosure for free. */
 .changes-card-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 6px;
+  width: 100%;
+  margin: 0 0 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
+/* Collapsed there is no list below, so the header's own margin would leave a gap. */
+.changes-card[data-expanded="false"] .changes-card-header { margin-bottom: 0; }
+/* The counts ride the right edge, so the title stays put when they widen. */
+.changes-card-summary { margin-left: auto; }
+.changes-card-header:hover .ant-typography strong { color: var(--godex-accent); }
 
 .changes-card-list {
   display: flex;

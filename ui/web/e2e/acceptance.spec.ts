@@ -9,6 +9,53 @@ async function resetBrowserState(page: import("@playwright/test").Page) {
   });
 }
 
+const DOCK_TAB_IDS: Record<string, string> = {
+  Files: "files",
+  Terminal: "terminal",
+  "Work desktop": "workdesk",
+  Preview: "preview",
+  Status: "status",
+  Browser: "browser",
+};
+
+/**
+ * Open a right-dock tab and wait for its pane.
+ *
+ * Queries the ALWAYS-PRESENT `.chat-v2-right` to read state, rather than a locator scoped
+ * to the target tab: `[data-active-tab="terminal"]` only matches once that tab is
+ * already active, so waiting on it before clicking deadlocks (the element it needs is
+ * the one the click would create).
+ *
+ * Reads state before clicking because the tab's click TOGGLES: clicking an
+ * already-active tab collapses the dock, which would fail the assertion below for a
+ * reason unrelated to the feature under test.
+ */
+async function openDock(page: import("@playwright/test").Page, label: keyof typeof DOCK_TAB_IDS) {
+  const id = DOCK_TAB_IDS[label]!;
+  const panel = page.locator(".chat-v2-right").first();
+  const active = await panel.getAttribute("data-active-tab");
+  const collapsed = await panel.getAttribute("data-collapsed");
+  if (active !== id || collapsed !== "false") {
+    await page.locator(`.chat-v2-topbar-tab[aria-label="${label}"]`).click();
+  }
+  await expect(panel).toHaveAttribute("data-active-tab", id);
+  await expect(panel).toHaveAttribute("data-collapsed", "false");
+  return panel;
+}
+
+/**
+ * M0 acceptance checklist, rewritten against the CURRENT shell.
+ *
+ * The previous revision asserted against `CenterGrid` — the 2×2/3×3 grid that the
+ * work-desktop fusion retired. That component is now an orphan (nothing imports it),
+ * so those assertions could not pass no matter how healthy the app was: the failures
+ * were a stale spec, not a broken page. This revision tests the shell that actually
+ * ships: AppNav + chat centre + right dock + left rail (chat v2).
+ *
+ * It also covers a real defect found while doing it: the mobile nav Drawer defaulted
+ * to OPEN (it read the PC inspector flag, which starts expanded), covering the app —
+ * and because the mask swallows clicks, the dock strip underneath was untappable.
+ */
 test.describe("M0 Acceptance Checklist — PC (Desktop Chrome 1440×900)", () => {
   test.beforeEach(async ({ page }) => {
     // These tests require a desktop viewport. Skip on mobile.
@@ -56,189 +103,84 @@ test.describe("M0 Acceptance Checklist — PC (Desktop Chrome 1440×900)", () =>
   });
 
   test("Chat workspace area renders the main content", async ({ page }) => {
-    // The main content area should be visible.
+    // The chat is the centre column of the shell, so "did the page render" is
+    // answered by the feed area plus a usable composer.
     const content = page.locator(".godex-content");
     await expect(content).toBeVisible({ timeout: 5000 });
-    await expect(page.locator(".godex-header")).toContainText("/tmp/godex-playwright");
+    await expect(page.locator(".chat-composer")).toBeVisible({ timeout: 5000 });
     await page.waitForTimeout(1000);
     await expect(content).not.toContainText(/crashed|Maximum update depth exceeded|Element type is invalid/i);
   });
 
-  test("CenterGrid panel titlebar exposes move menu", async ({ page }) => {
-    const filesMenu = page.locator('[data-testid="center-grid-panel-menu-topLeft"]');
-    await expect(filesMenu).toBeVisible({ timeout: 5000 });
-    await filesMenu.click();
-    await page.getByText("Swap with Chat in Top right").click();
-    await expect(page.locator('[data-testid="center-grid-panel-topRight"]')).toHaveAttribute("data-panel", "files");
-    await expect(page.locator('[data-testid="center-grid-action-feedback"]')).toContainText("Files swapped with Chat");
-  });
-
-  test("CenterGrid files panel renders expanded inside the grid", async ({ page }) => {
-    await expect(page.locator('[data-testid="center-grid-bookmarks"]')).toBeVisible({ timeout: 5000 });
-    await expect(page.locator('[data-testid="center-grid-panel-topLeft"]')).toHaveAttribute("data-panel", "files");
-    await expect(page.locator('[data-testid="files-panel-dock"]')).toBeVisible({ timeout: 5000 });
-    await expect(page.locator('[data-testid="files-panel-dock-collapsed"]')).toHaveCount(0);
-  });
-
-  test("CenterGrid files panel collapses to a bookmark and restores", async ({ page }) => {
-    await page.locator('[data-testid="center-grid-panel-collapse-topLeft"]').click();
-    await expect(page.locator('[data-testid="center-grid-panel-topLeft"]')).toHaveAttribute("data-panel", "");
-    await expect(page.locator('[data-testid="center-grid-bookmark-files"]')).toBeVisible({ timeout: 3000 });
-    await expect(page.locator('[data-testid="files-panel-dock"]')).toHaveCount(0);
-
-    await page.locator('[data-testid="center-grid-bookmark-files"]').click();
-    await expect(page.locator('[data-testid="center-grid-panel-topLeft"]')).toHaveAttribute("data-panel", "files");
-    await expect(page.locator('[data-testid="files-panel-dock"]')).toBeVisible({ timeout: 5000 });
-  });
-
-  test("CenterGrid chat panel collapses to a bookmark and restores", async ({ page }) => {
-    await page.locator('[data-testid="center-grid-panel-collapse-topRight"]').click();
-    await expect(page.locator('[data-testid="center-grid-panel-topRight"]')).toHaveAttribute("data-panel", "");
-    await expect(page.locator('[data-testid="center-grid-bookmarks"]')).toBeVisible();
-    await expect(page.locator('[data-testid="center-grid-bookmark-chat"]')).toBeVisible({ timeout: 3000 });
-
-    await page.locator('[data-testid="center-grid-bookmark-chat"]').click();
-    await expect(page.locator('[data-testid="center-grid-panel-topRight"]')).toHaveAttribute("data-panel", "chat");
-    await expect(page.locator(".chat-composer")).toBeVisible({ timeout: 5000 });
-  });
-
-  test("CenterGrid files panel uses a collapsible side-by-side file tree", async ({ page }) => {
+  test("Right dock opens the Files panel as a side-by-side tree and preview", async ({ page }) => {
+    await openDock(page, "Files");
     const tree = page.locator('[data-testid="files-panel-tree"]');
     const preview = page.locator('[data-testid="files-panel-preview-pane"]');
     await expect(tree).toBeVisible({ timeout: 5000 });
     await expect(preview).toBeVisible({ timeout: 5000 });
+
+    // Side by side, not stacked: the dock is the only home these panels have now.
     const treeBox = await tree.boundingBox();
     const previewBox = await preview.boundingBox();
     expect(treeBox).not.toBeNull();
     expect(previewBox).not.toBeNull();
     expect(treeBox!.x + treeBox!.width).toBeLessThanOrEqual(previewBox!.x + 4);
     expect(Math.abs(treeBox!.y - previewBox!.y)).toBeLessThan(48);
+  });
+
+  test("Files panel previews the selected file", async ({ page }) => {
+    await openDock(page, "Files");
+    await page.getByText("SPEC.md").first().click();
+    await expect(page.locator('[data-testid="files-panel-preview-path"]')).toContainText("SPEC.md");
+    await expect(page.locator('[data-testid="files-panel-preview"]')).toContainText("GoDex Web UI");
+  });
+
+  test("Files panel tree collapses to a compact rail and restores", async ({ page }) => {
+    await openDock(page, "Files");
+    const tree = page.locator('[data-testid="files-panel-tree"]');
+    await expect(tree).toBeVisible({ timeout: 5000 });
 
     await page.locator('[data-testid="files-panel-tree-collapse"]').click();
     await expect(page.locator('[data-testid="files-panel-tree-collapsed"]')).toBeVisible({ timeout: 3000 });
     await expect(tree).toHaveCount(0);
+
+    // The preview must NOT go with it: collapsing the tree is about reclaiming width,
+    // and losing the file you are reading to do that would be a bug.
+    await expect(page.locator('[data-testid="files-panel-preview-pane"]')).toBeVisible();
+
     await page.locator('[data-testid="files-panel-tree-collapsed"] button').click();
     await expect(tree).toBeVisible({ timeout: 3000 });
   });
 
-  test("CenterGrid files panel previews and attaches selected files", async ({ page }) => {
-    await page.getByText("SPEC.md").click();
-    await expect(page.locator('[data-testid="files-panel-preview-path"]')).toContainText("SPEC.md");
-    await expect(page.locator('[data-testid="files-panel-preview"]')).toContainText("GoDex Web UI");
-    await page.locator('[data-testid="files-panel-attach-selected"]').click();
-    await expect(page.locator(".chat-composer")).toContainText("SPEC.md");
-  });
-
-  test("CenterGrid files panel switches preview between selected files", async ({ page }) => {
-    await page.getByText("SPEC.md").click();
-    await expect(page.locator('[data-testid="files-panel-preview"]')).toContainText("GoDex Web UI");
-    await page.getByText("Makefile").click();
-    await expect(page.locator('[data-testid="files-panel-preview-path"]')).toContainText("Makefile");
-    await expect(page.locator('[data-testid="files-panel-preview"]')).toContainText("pnpm --dir ui/web");
-  });
-
-  test("CenterGrid chat cell pins composer to the bottom of the panel", async ({ page }) => {
-    const chatBox = await page.locator('[data-testid="center-grid-panel-topRight"]').boundingBox();
-    const composerBox = await page.locator(".chat-composer").boundingBox();
-    expect(chatBox).not.toBeNull();
-    expect(composerBox).not.toBeNull();
-    expect(Math.abs((composerBox!.y + composerBox!.height) - (chatBox!.y + chatBox!.height))).toBeLessThan(20);
-  });
-
-  test("CenterGrid terminal panel exposes connection status", async ({ page }) => {
+  test("Terminal dock reports connection status", async ({ page }) => {
+    await openDock(page, "Terminal");
     await expect(page.locator('[data-testid="terminal-status"]')).toContainText(/connected|ready/i, { timeout: 7000 });
   });
 
-  test("CenterGrid terminal panel sends typed input to the backend", async ({ page }) => {
-    const inputRequest = page.waitForRequest((request) => request.url().includes("/v1/terminal/term-playwright/input") && request.method() === "POST");
-    // Click the xterm surface to focus the terminal's internal textarea.
-    await page.locator('[data-testid="terminal-panel-surface"]').click();
-    await page.keyboard.type("pwd");
-    await page.keyboard.press("Enter");
-    await inputRequest;
+  test("Right dock collapses and restores", async ({ page }) => {
+    const panel = await openDock(page, "Files");
+    await page.getByRole("button", { name: "Toggle right panel" }).click();
+    await expect(panel).toHaveAttribute("data-collapsed", "true");
+    await page.getByRole("button", { name: "Toggle right panel" }).click();
+    await expect(panel).toHaveAttribute("data-collapsed", "false");
   });
 
-  test("CenterGrid splitter double-click collapse persists across reload", async ({ page }) => {
-    const outerDragger = page.locator('.center-grid > .ant-splitter-vertical > .ant-splitter-bar .ant-splitter-bar-dragger').first();
-    await expect(outerDragger).toBeVisible({ timeout: 5000 });
-    await outerDragger.dblclick();
-    await expect.poll(async () => page.evaluate(() => {
-      const raw = window.localStorage.getItem("godex.web.layout.v1");
-      return raw ? JSON.parse(raw).centerGridRatios.outerSplit : null;
-    })).toBe(0);
+  test("Left rail collapses to a compact strip and expands", async ({ page }) => {
+    const rail = page.locator(".chat-v2-left");
+    await expect(rail).toHaveAttribute("data-collapsed", "false");
 
-    await page.reload();
-    await page.waitForSelector(".godex-sider", { timeout: 10000 });
-    await expect.poll(async () => page.evaluate(() => {
-      const raw = window.localStorage.getItem("godex.web.layout.v1");
-      return raw ? JSON.parse(raw).centerGridRatios.outerSplit : null;
-    })).toBe(0);
-  });
+    const toggle = page.getByRole("button", { name: "Toggle sidebar" });
+    await toggle.click();
+    await expect(rail).toHaveAttribute("data-collapsed", "true");
+    const collapsedBox = await rail.boundingBox();
+    expect(collapsedBox).not.toBeNull();
+    expect(collapsedBox!.width).toBeLessThan(80);
 
-  test("CenterGrid splitter drag ratio persists across reload", async ({ page }) => {
-    const outerDragger = page.locator('.center-grid > .ant-splitter-vertical > .ant-splitter-bar .ant-splitter-bar-dragger').first();
-    await expect(outerDragger).toBeVisible({ timeout: 5000 });
-    const box = await outerDragger.boundingBox();
-    expect(box).not.toBeNull();
-    await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2 + 120, { steps: 8 });
-    await page.mouse.up();
-    await expect.poll(async () => page.evaluate(() => {
-      const raw = window.localStorage.getItem("godex.web.layout.v1");
-      return raw ? JSON.parse(raw).centerGridRatios.outerSplit : null;
-    })).not.toBeNull();
-    const persisted = await page.evaluate(() => {
-      const raw = window.localStorage.getItem("godex.web.layout.v1");
-      return raw ? JSON.parse(raw).centerGridRatios.outerSplit as number : null;
-    });
-    expect(persisted).not.toBeNull();
-    expect(Math.abs(persisted! - 0.6)).toBeGreaterThan(0.03);
-
-    await page.reload();
-    await page.waitForSelector(".godex-sider", { timeout: 10000 });
-    const afterReload = await page.evaluate(() => {
-      const raw = window.localStorage.getItem("godex.web.layout.v1");
-      return raw ? JSON.parse(raw).centerGridRatios.outerSplit as number : null;
-    });
-    expect(afterReload).toBeCloseTo(persisted!, 2);
-  });
-
-  test("CenterGrid splitter near-zero drag collapses to a restorable bookmark", async ({ page }) => {
-    const topDragger = page.locator('.center-grid-top-splitter .ant-splitter-bar .ant-splitter-bar-dragger').first();
-    await expect(topDragger).toBeVisible({ timeout: 5000 });
-    const box = await topDragger.boundingBox();
-    expect(box).not.toBeNull();
-
-    await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(1, box!.y + box!.height / 2, { steps: 10 });
-    await page.mouse.up();
-
-    await expect(page.locator('[data-testid="center-grid-bookmark-files"]')).toBeVisible({ timeout: 3000 });
-    await expect(page.locator('[data-testid="center-grid-panel-topLeft"]')).toHaveAttribute("data-panel", "");
-    await page.locator('[data-testid="center-grid-bookmark-files"]').click();
-    await expect(page.locator('[data-testid="center-grid-panel-topLeft"]')).toHaveAttribute("data-panel", "files");
-
-    const restoredBox = await page.locator('[data-testid="center-grid-panel-topLeft"]').boundingBox();
-    expect(restoredBox).not.toBeNull();
-    expect(restoredBox!.width).toBeGreaterThan(80);
-  });
-
-  test("CenterGrid panel titlebar drag swaps panels", async ({ page }) => {
-    const dragHandle = page.locator('[data-testid="center-grid-panel-drag-topLeft"]');
-    const dropTarget = page.locator('[data-testid="center-grid-panel-topRight"]');
-    await expect(dragHandle).toHaveAttribute("draggable", "true");
-    const sourceBox = await dragHandle.boundingBox();
-    const targetBox = await dropTarget.boundingBox();
-    expect(sourceBox).not.toBeNull();
-    expect(targetBox).not.toBeNull();
-    await page.mouse.move(sourceBox!.x + sourceBox!.width / 2, sourceBox!.y + sourceBox!.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(targetBox!.x + targetBox!.width / 2, targetBox!.y + targetBox!.height / 2, { steps: 8 });
-    await page.mouse.up();
-    await expect(dropTarget).toHaveAttribute("data-panel", "files");
-    await expect(page.locator('[data-testid="center-grid-action-feedback"]')).toContainText("Files swapped with Chat");
+    await toggle.click();
+    await expect(rail).toHaveAttribute("data-collapsed", "false");
+    const expandedBox = await rail.boundingBox();
+    expect(expandedBox).not.toBeNull();
+    expect(expandedBox!.width).toBeGreaterThan(120);
   });
 
   test("Layout persists collapsed state across reload", async ({ page }) => {
@@ -257,21 +199,21 @@ test.describe("M0 Acceptance Checklist — PC (Desktop Chrome 1440×900)", () =>
     expect(box!.width).toBeLessThan(80);
   });
 
-  test("Session list collapses to a compact rail and expands", async ({ page }) => {
-    const rail = page.locator('[data-testid="sessions-rail"]');
-    await page.locator('[data-testid="sessions-collapse"]').click();
-    await expect(rail).toHaveAttribute("data-collapsed", "true");
-    const collapsedBox = await rail.boundingBox();
-    expect(collapsedBox).not.toBeNull();
-    expect(collapsedBox!.width).toBeLessThanOrEqual(48);
+  test("Chat rail and dock collapsed state persists across reload", async ({ page }) => {
+    // Both rails are chat-v2 state with its own storage key; the AppNav assertion above
+    // would not catch a regression in this one.
+    await openDock(page, "Files");
+    await page.getByRole("button", { name: "Toggle sidebar" }).click();
+    await expect(page.locator(".chat-v2-left")).toHaveAttribute("data-collapsed", "true");
+    await page.getByRole("button", { name: "Toggle right panel" }).click();
+    await expect(page.locator(".chat-v2-right")).toHaveAttribute("data-collapsed", "true");
 
-    await page.locator('[data-testid="sessions-expand"]').click();
-    await expect(rail).toHaveAttribute("data-collapsed", "false");
-    const expandedBox = await rail.boundingBox();
-    expect(expandedBox).not.toBeNull();
-    expect(expandedBox!.width).toBeGreaterThan(120);
+    await page.reload();
+    await page.waitForSelector(".godex-sider", { timeout: 10000 });
+
+    await expect(page.locator(".chat-v2-left")).toHaveAttribute("data-collapsed", "true");
+    await expect(page.locator(".chat-v2-right")).toHaveAttribute("data-collapsed", "true");
   });
-
 });
 
 test.describe("M0 Acceptance Checklist — Mobile (Pixel 7 375×812)", () => {
@@ -294,9 +236,16 @@ test.describe("M0 Acceptance Checklist — Mobile (Pixel 7 375×812)", () => {
     await expect(hamburger).toBeVisible({ timeout: 5000 });
   });
 
-  test("Header title is visible on mobile", async ({ page }) => {
-    const headerTitle = page.locator(".godex-header-title");
-    await expect(headerTitle).toBeVisible({ timeout: 5000 });
+  test("Mobile nav drawer starts closed so the app is usable on load", async ({ page }) => {
+    // Regression guard for the real defect: the mobile Drawer used to read the PC
+    // inspector flag (which defaults to OPEN), so the app loaded behind a full-screen
+    // nav overlay whose mask swallowed every tap on the content underneath.
+    await expect(page.locator(".ant-drawer").first()).toBeHidden({ timeout: 3000 });
+    await expect(page.locator(".chat-v2-center-wrap")).toBeVisible();
+
+    // And it still opens on demand.
+    await page.locator('.godex-header button[aria-label*="Open navigation"]').click();
+    await expect(page.locator('[data-testid="mobile-appnav-drawer"]')).toBeVisible({ timeout: 3000 });
   });
 
   test("Every mobile dock provides a reachable Back to chat action", async ({ page }) => {

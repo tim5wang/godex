@@ -56,13 +56,22 @@ export default function App() {
   const setWebToken = useSettingsStore((state) => state.setToken);
   const clearToken = useSettingsStore((state) => state.clearToken);
   const screens = Grid.useBreakpoint();
-  // The legacy layout drawer flag is now only used for the mobile
-  // AppNav drawer. PC TaskCenter lives inside ChatPage's shared
-  // inspector panel, not in an App-level Drawer.
-  const drawerOpen = useLayoutStore((state) => state.taskCenterDrawerOpen);
+  // The legacy layout drawer flag is now only used to keep the PC inspector in sync when
+  // the mobile nav sheet opens (see setMobileNavOpen). PC TaskCenter lives inside
+  // ChatPage's shared inspector panel, not in an App-level Drawer.
   const closeTaskCenterDrawer = useLayoutStore((state) => state.closeTaskCenterDrawer);
   const openTaskCenterDrawer = useLayoutStore((state) => state.openTaskCenterDrawer);
+  // The mobile AppNav drawer used to read `taskCenterDrawerOpen` directly, and that flag
+  // defaults to OPEN because the PC inspector starts expanded. On a phone the same flag
+  // therefore rendered as a full-screen nav overlay covering the app the moment it
+  // loaded — and since the mask swallows clicks, the dock tab strip underneath could not
+  // be tapped at all (a real dead end on mobile, not just a cosmetic problem). The PC
+  // inspector and the mobile nav sheet are different affordances, so the sheet keeps its
+  // own state and starts CLOSED. The store flag is still set on open so the desktop
+  // inspector stays in sync when the same build runs on a wide viewport.
+  const [mobileNavOpen, setMobileNavOpenState] = useState(false);
   const setMobileNavOpen = (open: boolean) => {
+    setMobileNavOpenState(open);
     if (open) {
       openTaskCenterDrawer();
     } else {
@@ -381,8 +390,8 @@ export default function App() {
                   title={<Brand compact />}
                   placement="left"
                   width="100vw"
-                  open={drawerOpen}
-                  onClose={closeTaskCenterDrawer}
+                  open={mobileNavOpen}
+                  onClose={() => setMobileNavOpen(false)}
                   data-testid="mobile-appnav-drawer"
                   data-mode="mobile-appnav"
                 >

@@ -359,10 +359,19 @@
 .wd-attention-deferred-text { display: flex; align-items: baseline; gap: 8px; }
 .wd-attention-item .wd-muted { font-size: 12px; }
 /* In the right column the inbox is narrow, so rows wrap instead of squeezing the
-   title flat, and the redundant "open" link is dropped (the row itself opens it). */
-.wd-sidebar .wd-attention { margin-bottom: 0; }
-.wd-sidebar .wd-attention-item { flex-wrap: wrap; row-gap: 2px; }
-.wd-sidebar .wd-attention-item .ant-btn-link { padding: 0; height: auto; }
+   title flat. The parent is `.wd-dock` (the panel that the chat's right dock mounts);
+   the earlier `.wd-sidebar` rules never matched anything, because that class belongs
+   to the retired standalone desktop page — so at dock width the row kept its
+   single-line layout and the title was squeezed to nothing. */
+.wd-dock .wd-attention { margin-bottom: 0; }
+.wd-dock .wd-attention-item { flex-wrap: wrap; row-gap: 2px; }
+.wd-dock .wd-attention-item .ant-btn-link { padding: 0; height: auto; }
+/* The title takes the full first line when the row wraps: `flex: 1` alone lets a long
+   tag row push it down to a sliver, which is how the triage line became unreadable. */
+.wd-dock .wd-attention-main { flex: 1 1 100%; }
+/* Verbs follow the text instead of being pinned to the row's right edge, so they stay
+   adjacent to the item they act on once the row has wrapped. */
+.wd-dock .wd-attention-verbs { margin-left: auto; }
 
 /* --- Fill the viewport (desktop) -------------------------------------------
    Must stay after the base rules above: `.wd-layout { align-items: start }` and the

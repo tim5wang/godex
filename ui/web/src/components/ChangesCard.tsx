@@ -46,10 +46,17 @@ export function ChangesCard({ segments, workspaceDir, token, isLatestTurn = fals
   });
   const [diffState, setDiffState] = useState<Record<string, GitDiffResponse | "loading">>({});
   const [expanded, setExpanded] = useState<string | null>(null);
+  // Collapsed by default: the card is a summary at the tail of every finished turn, and
+  // an expanded per-file list on each of them turns the feed into a changelog the user
+  // has to scroll past. The header keeps the two numbers that make it worth a glance
+  // (file count, +added −deleted), so collapsing hides detail and not information.
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     setDiffState({});
     setExpanded(null);
+    // A new set of paths is a new turn's card, so it starts collapsed like every other.
+    setOpen(false);
   }, [pathsKey, workspaceDir, token, isLatestTurn]);
 
   useEffect(() => {
@@ -111,10 +118,22 @@ export function ChangesCard({ segments, workspaceDir, token, isLatestTurn = fals
   };
 
   return (
-    <div className="changes-card">
-      <div className="changes-card-header">
+    <div className="changes-card" data-expanded={open ? "true" : "false"}>
+      {/* The whole header is the toggle, following the knowledge card's convention: the
+          card's own title is the natural click target, and a separate link would
+          compete with the file rows for attention. Deliberately no aria-label — that
+          would override the accessible name and hide the title from screen readers;
+          aria-expanded carries the state and `title` the hover hint. */}
+      <button
+        type="button"
+        className="changes-card-header"
+        aria-expanded={open}
+        title={open ? "Collapse" : "Expand"}
+        onClick={() => setOpen((prev) => !prev)}
+      >
+        {open ? <DownOutlined aria-hidden="true" /> : <RightOutlined aria-hidden="true" />}
         <Typography.Text strong>Changed files</Typography.Text>
-        <Space size={6}>
+        <Space size={6} className="changes-card-summary">
           {isLatestTurn && statsState.key === pathsKey && statsState.loading ? <Spin size="small" /> : null}
           {statsReady && stats?.repo ? (
             <Tag className="changes-card-total-stats">
@@ -123,74 +142,80 @@ export function ChangesCard({ segments, workspaceDir, token, isLatestTurn = fals
           ) : null}
           <Tag>{files.length}</Tag>
         </Space>
-      </div>
+      </button>
+      {/* A failed stats read stays visible while collapsed: it explains why the summary
+          is missing, and folding it away would be indistinguishable from "no changes". */}
       {isLatestTurn && stats?.error ? <Alert type="error" showIcon message={stats.error} /> : null}
-      {!isLatestTurn ? (
-        <Typography.Text type="secondary" className="changes-card-historical-note">
-          Historical turn: showing recorded file operations only.
-        </Typography.Text>
-      ) : null}
-      <div className="changes-card-list">
-        {files.map((file) => {
-          const isOpen = expanded === file.path;
-          const state = diffState[file.path];
-          const repoUnavailable = state && state !== "loading" && !state.repo;
-          const fileStats = statsByPath.get(file.path);
-          return (
-            <div key={file.path} className="changes-card-file">
-              <div className="changes-card-file-row">
-                {isLatestTurn ? (
-                  <Button type="text" size="small" className="changes-card-file-toggle" onClick={() => toggle(file.path)}>
-                    {isOpen ? <DownOutlined /> : <RightOutlined />}
-                    <Typography.Text code className="changes-card-file-path">
-                      {file.path}
-                    </Typography.Text>
-                  </Button>
-                ) : (
-                  <Typography.Text code className="changes-card-file-path">
-                    {file.path}
-                  </Typography.Text>
-                )}
-                <Tag color={file.op === "write" ? "blue" : "green"} className="changes-card-file-op">
-                  {file.op}
-                </Tag>
-                {isLatestTurn && state === "loading" ? (
-                  <Spin size="small" />
-                ) : isLatestTurn && fileStats ? (
-                  <Typography.Text className="changes-card-file-stats" type="secondary">
-                    <span className="changes-stat-added">+{fileStats.added}</span>
-                    <span className="changes-stat-deleted"> −{fileStats.deleted}</span>
-                  </Typography.Text>
-                ) : null}
-                {onOpenInFiles ? (
-                  <Tooltip title="Open in Files">
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<FolderOpenOutlined />}
-                      aria-label={`Open ${file.path} in Files`}
-                      onClick={() => onOpenInFiles(file.path)}
-                    />
-                  </Tooltip>
-                ) : null}
-              </div>
-              {isLatestTurn && isOpen ? (
-                <div className="changes-card-file-diff">
-                  {state === "loading" ? (
-                    <Spin size="small" />
-                  ) : state === undefined ? null : state.error ? (
-                    <Alert type="error" showIcon message={state.error} />
-                  ) : repoUnavailable ? (
-                    <Alert type="info" showIcon message="Not a git repository — diff unavailable" />
-                  ) : (
-                    <DiffView diff={state.diff ?? ""} />
-                  )}
+      {open ? (
+        <>
+          {!isLatestTurn ? (
+            <Typography.Text type="secondary" className="changes-card-historical-note">
+              Historical turn: showing recorded file operations only.
+            </Typography.Text>
+          ) : null}
+          <div className="changes-card-list">
+            {files.map((file) => {
+              const isOpen = expanded === file.path;
+              const state = diffState[file.path];
+              const repoUnavailable = state && state !== "loading" && !state.repo;
+              const fileStats = statsByPath.get(file.path);
+              return (
+                <div key={file.path} className="changes-card-file">
+                  <div className="changes-card-file-row">
+                    {isLatestTurn ? (
+                      <Button type="text" size="small" className="changes-card-file-toggle" onClick={() => toggle(file.path)}>
+                        {isOpen ? <DownOutlined /> : <RightOutlined />}
+                        <Typography.Text code className="changes-card-file-path">
+                          {file.path}
+                        </Typography.Text>
+                      </Button>
+                    ) : (
+                      <Typography.Text code className="changes-card-file-path">
+                        {file.path}
+                      </Typography.Text>
+                    )}
+                    <Tag color={file.op === "write" ? "blue" : "green"} className="changes-card-file-op">
+                      {file.op}
+                    </Tag>
+                    {isLatestTurn && state === "loading" ? (
+                      <Spin size="small" />
+                    ) : isLatestTurn && fileStats ? (
+                      <Typography.Text className="changes-card-file-stats" type="secondary">
+                        <span className="changes-stat-added">+{fileStats.added}</span>
+                        <span className="changes-stat-deleted"> −{fileStats.deleted}</span>
+                      </Typography.Text>
+                    ) : null}
+                    {onOpenInFiles ? (
+                      <Tooltip title="Open in Files">
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<FolderOpenOutlined />}
+                          aria-label={`Open ${file.path} in Files`}
+                          onClick={() => onOpenInFiles(file.path)}
+                        />
+                      </Tooltip>
+                    ) : null}
+                  </div>
+                  {isLatestTurn && isOpen ? (
+                    <div className="changes-card-file-diff">
+                      {state === "loading" ? (
+                        <Spin size="small" />
+                      ) : state === undefined ? null : state.error ? (
+                        <Alert type="error" showIcon message={state.error} />
+                      ) : repoUnavailable ? (
+                        <Alert type="info" showIcon message="Not a git repository — diff unavailable" />
+                      ) : (
+                        <DiffView diff={state.diff ?? ""} />
+                      )}
+                    </div>
+                  ) : null}
                 </div>
-              ) : null}
-            </div>
-          );
-        })}
-      </div>
+              );
+            })}
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

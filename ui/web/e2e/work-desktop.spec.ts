@@ -68,7 +68,17 @@ const NOW = "2026-10-30T09:00:00Z";
 const CHAT_MESSAGES = Array.from({ length: 40 }, (_, index) => ({
   id: `m-${index + 1}`,
   role: index % 2 === 0 ? "user" : "assistant",
-  content: [{ type: "text", text: `消息 ${index + 1}` }],
+  // Message 2 is the one turn that WROTE a file, so the turn-tail "Changed files"
+  // card has something to build itself from (it is derived from write_file /
+  // edit_file tool segments, not from a separate API). Left on a single message so
+  // the change is incidental to every other assertion about the feed.
+  content: index === 1
+    ? [
+        { type: "text", text: "消息 2" },
+        { type: "tool_use", id: "tu-1", name: "write_file", input: { path: "src/features/chat/Foo.tsx" } },
+        { type: "tool_result", tool_use_id: "tu-1", content: "ok" },
+      ]
+    : [{ type: "text", text: `消息 ${index + 1}` }],
   created_at: NOW,
 }));
 
@@ -1579,4 +1589,77 @@ test("scrolls a long conversation and keeps the composer in view", async ({ page
 
   // The composer stays on screen without scrolling the page.
   await expect(page.locator(".chat-v2-center-wrap .chat-composer").first()).toBeInViewport();
+});
+
+// The dock is much narrower than the retired standalone desktop page, so the attention
+// rows have to WRAP there. The rules that did this targeted `.wd-sidebar`, a class no
+// component has rendered since the desktop was fused into the chat — so at dock width the
+// row kept its single-line layout and squeezed the title into a sliver. These assertions
+// pin the geometry rather than the class name, so renaming the container cannot quietly
+// drop them again.
+test("the dock's attention list wraps its rows instead of squeezing the title", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  const store = await install(page, seededStore());
+  store.todos.push({
+    id: "todo-wrap-1", context_id: "ctx-1", text: "补齐离线评测脚本并固定权重对比参数以便复现结论", status: "todo", owner: "",
+    due_at: "2026-10-01T00:00:00Z", source: "human", position: 0, version: 1, created_at: NOW, updated_at: NOW,
+  });
+  await openSection(page, "待处理");
+
+  const row = boards(page).locator(".wd-attention-item").first();
+  await expect(row).toBeVisible();
+  const shape = await row.evaluate((el) => {
+    const main = el.querySelector(".wd-attention-main") as HTMLElement | null;
+    const rowBox = el.getBoundingClientRect();
+    const mainBox = main?.getBoundingClientRect();
+    return {
+      wrap: getComputedStyle(el).flexWrap,
+      rowWidth: rowBox.width,
+      mainWidth: mainBox?.width ?? -1,
+      rowHeight: rowBox.height,
+    };
+  });
+  expect(shape.wrap).toBe("wrap");
+  // The title owns a full line: a bare `flex: 1` would let the tag row push it down to
+  // whatever is left, which is exactly how the row became unreadable in the dock.
+  expect(shape.mainWidth).toBeGreaterThanOrEqual(shape.rowWidth * 0.9);
+});
+
+// The turn-tail "Changed files" card must be COLLAPSED by default: it appears under every
+// finished turn, so an expanded per-file list on each of them turns the feed into a
+// changelog the reader has to scroll past. The summary (count + +/- stats) stays visible,
+// because collapsing should hide detail, not information.
+test("the Changed files card is collapsed until asked, and keeps its summary visible", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  await install(page, seededStore());
+  // Line counts come from a batched read; without it the card would show a spinner and
+  // the assertion below could pass for the wrong reason.
+  await page.route("**/api/git/diff-stats**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ repo: true, files: [{ path: "src/features/chat/Foo.tsx", added: 12, deleted: 3 }] }),
+    }),
+  );
+  await openDesktopRail(page, "/chat/web/wc-topic-1");
+
+  const card = page.locator(".changes-card").first();
+  await expect(card).toBeVisible();
+  // Collapsed on arrival, with the header saying what is inside.
+  await expect(card).toHaveAttribute("data-expanded", "false");
+  await expect(card.locator(".changes-card-header")).toContainText("Changed files");
+  await expect(card.locator(".changes-card-list")).toHaveCount(0);
+  // The summary numbers are the reason it is worth a glance while folded.
+  await expect(card.locator(".changes-card-header")).toContainText("1");
+
+  // Expanding reveals the changed path...
+  await card.locator(".changes-card-header").click();
+  await expect(card).toHaveAttribute("data-expanded", "true");
+  await expect(card.locator(".changes-card-list")).toBeVisible();
+  await expect(card.getByText("src/features/chat/Foo.tsx")).toBeVisible();
+
+  // ...and the header toggles it shut again.
+  await card.locator(".changes-card-header").click();
+  await expect(card).toHaveAttribute("data-expanded", "false");
+  await expect(card.locator(".changes-card-list")).toHaveCount(0);
 });

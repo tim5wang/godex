@@ -108,6 +108,12 @@ type AttentionItem struct {
 	// Also lists the collapsed titles (capped), so a grouped row is still readable
 	// without opening the stream.
 	Also []string `json:"also,omitempty"`
+	// ItemKey is the group-scoped identity a verb is stored against
+	// ("{kind}:{context_id}"), so the UI acts on exactly the row it renders.
+	ItemKey string `json:"item_key"`
+	// Action is the owner's recorded verb on this row, when there is one. A claim
+	// keeps the row actionable, so it stays in Items carrying its state.
+	Action *workcontext.AttentionAction `json:"action,omitempty"`
 }
 
 // AttentionMetrics is the attention ledger: how much of the day's notification
@@ -125,6 +131,22 @@ type AttentionMetrics struct {
 	// whose unread work has gone stale (see unreadAgingAfter).
 	UnreadTotal int `json:"unread_total"`
 	AgedStreams int `json:"aged_streams"`
+	// ActionsToday is the DENOMINATOR of the attention-yield ratio: how many
+	// decisions the human actually made today (each claim/snooze/dismiss counts
+	// once, since a row holds one verb). The numerator (finished work) is not
+	// available cheaply on this path, so it is deliberately not faked here.
+	ActionsToday int `json:"actions_today"`
+}
+
+// DeferredAttention is a row the owner has already ruled on (snoozed until later,
+// or dismissed with a reason), together with the decision that deferred it.
+//
+// Deferred rows are reported rather than dropped: a suggestion that silently
+// disappears is indistinguishable from a bug, and the reason a whole group was
+// dismissed is exactly the context needed to undo it.
+type DeferredAttention struct {
+	Item   AttentionItem               `json:"item"`
+	Action workcontext.AttentionAction `json:"action"`
 }
 
 // AttentionView is the inbox plus per-stream unread counts, so the desktop wall
@@ -135,10 +157,15 @@ type AttentionView struct {
 	// Aged names the streams whose unread changes have gone stale (see
 	// unreadAgingAfter). The count is still reported in Unread; this only tells the
 	// UI to render it as a muted summary rather than an alert.
-	Aged        map[string]bool  `json:"aged"`
-	Counts      map[string]int   `json:"counts"`
-	Metrics     AttentionMetrics `json:"metrics"`
-	GeneratedAt string           `json:"generated_at"`
+	Aged map[string]bool `json:"aged"`
+	// Deferred holds the rows the owner has already ruled on (snoozed, or
+	// dismissed with a reason). They are reported rather than dropped so a deferred
+	// item is visibly deferred instead of looking like it vanished, and so the
+	// reason can be read back when undoing it.
+	Deferred    []DeferredAttention `json:"deferred"`
+	Counts      map[string]int      `json:"counts"`
+	Metrics     AttentionMetrics    `json:"metrics"`
+	GeneratedAt string              `json:"generated_at"`
 }
 
 // NudgeNotifier delivers a notification to one owner's browsers. Narrow on
@@ -160,6 +187,21 @@ func (s *Service) notifier() NudgeNotifier {
 	s.nudgeMu.Lock()
 	defer s.nudgeMu.Unlock()
 	return s.nudgeNotifier
+}
+
+// RecordAttentionAction applies one verb to one inbox row on behalf of the owner.
+//
+// It lives on the Service rather than being called on the store from the route
+// because every time-dependent decision in this subsystem must read the SAME clock
+// the inbox projection reads: the "is this wake time in the future?" validation here
+// and the "is this snooze still in force?" check on read would otherwise be able to
+// disagree about what "now" is.
+func (s *Service) RecordAttentionAction(ctx context.Context, scope workcontext.Scope, contextID string, input workcontext.AttentionActionInput) (workcontext.AttentionAction, error) {
+	store, err := s.WorkContexts()
+	if err != nil {
+		return workcontext.AttentionAction{}, err
+	}
+	return store.UpsertAttentionAction(ctx, scope, contextID, input, s.now())
 }
 
 // AttentionInbox assembles the cross-stream "needs me" list for one owner.
@@ -213,10 +255,43 @@ func (s *Service) AttentionInbox(ctx context.Context, scope workcontext.Scope) (
 		return AttentionView{}, err
 	}
 	items = groupAttention(items)
+	// Every row's identity is stamped in ONE place (right after grouping) rather
+	// than at each of the seven construction sites: the key is group-scoped by
+	// definition, so deriving it here is what guarantees the UI acts on exactly the
+	// row it renders.
 	for i := range items {
+		items[i].ItemKey = workcontext.AttentionItemKey(items[i].Kind, items[i].ContextID)
 		items[i].BlockedCount = leverage[items[i].ContextID]
 	}
-	sortAttention(items, leverage)
+
+	// Apply the owner's recorded verbs. This is where a snooze expires: the wake time
+	// is compared against now while READING, so no background job has to wake up and
+	// no scheduled task can be missed — the row simply reappears once due.
+	actions, err := store.AttentionActionIndex(ctx, scope)
+	if err != nil {
+		return AttentionView{}, err
+	}
+	active := make([]AttentionItem, 0, len(items))
+	deferred := []DeferredAttention{}
+	for _, item := range items {
+		action, hasAction := actions[item.ItemKey]
+		switch {
+		case !hasAction || !workcontext.AttentionActionActive(action, now):
+			active = append(active, item)
+		case action.Verb == workcontext.AttentionVerbClaim:
+			// A claim is still actionable work — it is the opposite of deferral. It
+			// stays on the list carrying its state so "I took this" is visible
+			// rather than making the row disappear the moment it was picked up.
+			claimed := item
+			claimed.Action = &action
+			active = append(active, claimed)
+		default:
+			// Snoozed (still inside its window) or dismissed: off the working list, but
+			// reported so deferral is visible and undoable.
+			deferred = append(deferred, DeferredAttention{Item: item, Action: action})
+		}
+	}
+	sortAttention(active, leverage)
 
 	unread, err := store.UnreadCounts(ctx, scope)
 	if err != nil {
@@ -227,14 +302,14 @@ func (s *Service) AttentionInbox(ctx context.Context, scope workcontext.Scope) (
 		return AttentionView{}, err
 	}
 	counts := map[string]int{}
-	for _, item := range items {
+	for _, item := range active {
 		counts[item.Kind]++
 	}
-	metrics, err := s.attentionMetrics(ctx, store, scope, now, unread, aged)
+	metrics, err := s.attentionMetrics(ctx, store, scope, now, unread, aged, len(deferred))
 	if err != nil {
 		return AttentionView{}, err
 	}
-	return AttentionView{Items: items, Unread: unread, Aged: aged, Counts: counts, Metrics: metrics, GeneratedAt: now.UTC().Format(time.RFC3339Nano)}, nil
+	return AttentionView{Items: active, Unread: unread, Aged: aged, Deferred: deferred, Counts: counts, Metrics: metrics, GeneratedAt: now.UTC().Format(time.RFC3339Nano)}, nil
 }
 
 // attentionMetrics builds the attention ledger from data already read above, plus
@@ -242,7 +317,7 @@ func (s *Service) AttentionInbox(ctx context.Context, scope workcontext.Scope) (
 // spent rather than failing the whole inbox: the inbox is the useful part and a
 // missing ledger must not take it down.
 func (s *Service) attentionMetrics(ctx context.Context, store *workcontext.Store, scope workcontext.Scope,
-	now time.Time, unread map[string]int, aged map[string]bool) (AttentionMetrics, error) {
+	now time.Time, unread map[string]int, aged map[string]bool, deferred int) (AttentionMetrics, error) {
 	metrics := AttentionMetrics{
 		OwnerCap:     attentionDailyCap,
 		PerStreamCap: attentionPerStreamDailyCap,
@@ -256,6 +331,11 @@ func (s *Service) attentionMetrics(ctx context.Context, store *workcontext.Store
 	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	if sent, err := store.CountEventsByKindSince(ctx, scope, nudgeEventKind, midnight); err == nil {
 		metrics.NudgesToday = sent
+	}
+	// Decisions the human made today — the denominator of the attention-yield
+	// ratio. Counted from recorded verbs, so only the owner's own actions count.
+	if made, err := store.CountAttentionActionsSince(ctx, scope, midnight); err == nil {
+		metrics.ActionsToday = made
 	}
 	return metrics, nil
 }
@@ -595,6 +675,18 @@ func (s *Service) sweepScope(ctx context.Context, store *workcontext.Store, scop
 	now := s.now()
 	ledger := s.TaskboardLedger()
 
+	// The owner's recorded verbs, read ONCE for the whole pass. Suppression is
+	// checked from this snapshot, and it is checked in pushNudge BEFORE the event is
+	// recorded — recording first would mark a snoozed reminder as "already sent",
+	// which is the permanent-swallow failure pushNudge's ordering exists to prevent.
+	actions, err := store.AttentionActionIndex(ctx, scope)
+	if err != nil {
+		if ctx.Err() == nil {
+			logger.Warnf("attention sweep: read actions: %v", err)
+		}
+		return
+	}
+
 	// Progress from delegated work. This is the fix for "progress only appears
 	// once you open the desktop": the event is written here, on a timer, using
 	// the SAME dedup key the read path uses — so reading the desktop later does
@@ -623,7 +715,8 @@ func (s *Service) sweepScope(ctx context.Context, store *workcontext.Store, scop
 			if isNew && card.Status == taskboard.StatusInReview {
 				s.pushNudge(ctx, store, scope, now, nudgeEventKind, link.ContextID,
 					fmt.Sprintf("nudge:card:%s:v%d", card.ID, card.Version),
-					card.Title+" 等待验收", "委派任务已完成，等待你验收（"+link.ContextTitle+"）")
+					AttentionKindDelegationReview,
+					card.Title+" 等待验收", "委派任务已完成，等待你验收（"+link.ContextTitle+"）", actions)
 			}
 		}
 	}
@@ -642,24 +735,38 @@ func (s *Service) sweepScope(ctx context.Context, store *workcontext.Store, scop
 			continue
 		}
 		body := "计划项即将到期"
+		itemKind := AttentionKindTodoSoon
 		if state == workcontext.DueOverdue {
 			body = "计划项已过期"
+			itemKind = AttentionKindTodoOverdue
 		}
 		s.pushNudge(ctx, store, scope, now, nudgeEventKind, todo.ContextID,
 			fmt.Sprintf("nudge:todo:%s:%s:%s", todo.ID, todo.DueAt, state),
-			body+": "+todo.Text, todo.ContextTitle)
+			itemKind, body+": "+todo.Text, todo.ContextTitle, actions)
 	}
 }
 
 // pushNudge delivers a reminder, at most once.
 //
-// Ordering matters and is deliberate: the discipline check runs BEFORE the event
-// is recorded. Recording first would make a quiet-hours-blocked reminder count as
-// "already sent" forever, silently swallowing it — the one outcome a reminder
-// feature must never produce. This way a blocked nudge simply retries on the next
-// sweep, while a delivered one is deduplicated permanently by its dedup key.
+// Ordering matters and is deliberate, in TWO steps. The owner's verb is honoured
+// first (a snoozed or dismissed row is not a reminder at all), then the discipline
+// check, and only then is the event recorded. Recording before the discipline check
+// would make a quiet-hours-blocked reminder count as "already sent" forever,
+// silently swallowing it — the one outcome a reminder feature must never produce.
+// This way a blocked nudge simply retries on the next sweep, while a delivered one
+// is deduplicated permanently by its dedup key.
+//
+// itemKind is the inbox row kind this notification corresponds to. It is needed
+// here because verbs are stored against inbox rows ("{kind}:{context_id}"), and the
+// sweep must respect a verb the user applied from the inbox rather than inventing a
+// second, event-shaped identity for the same thing.
 func (s *Service) pushNudge(ctx context.Context, store *workcontext.Store, scope workcontext.Scope,
-	now time.Time, kind, contextID, dedup, title, body string) {
+	now time.Time, kind, contextID, dedup, itemKind, title, body string,
+	actions map[string]workcontext.AttentionAction) {
+	if action, ok := actions[workcontext.AttentionItemKey(itemKind, contextID)]; ok &&
+		workcontext.AttentionActionActive(action, now) {
+		return
+	}
 	notifier := s.notifier()
 	if notifier == nil {
 		return

@@ -29,12 +29,15 @@ import {
   patchWorkTodo,
   promoteWorkFactMemoryCandidate,
   recallWorkFacts,
+  recordWorkAttentionAction,
   removeWorkRelation,
   removeWorkResource,
   reviewWorkFact,
   saveCheckpoint,
+  undoWorkAttentionAction,
   unlinkWorkSession,
   workContextQueryKey,
+  type AttentionVerb,
   type CheckpointInput,
   type WorkContext,
   type WorkContextDetail,
@@ -304,6 +307,25 @@ export function useWorkDesktopData() {
     onError: (error) => fail(error, "saveFailed"),
   });
 
+  // Attention verbs. They refresh the inbox (the row moves between the working list
+  // and the deferred list) but never touch the stream's version or seen watermark —
+  // ruling on a row is not reading the stream, and it is not an edit of the work.
+  const attentionActionMutation = useMutation({
+    mutationFn: (values: { contextId: string; itemKey: string; verb: AttentionVerb; reason?: string }) =>
+      recordWorkAttentionAction(token || null, values.contextId, {
+        item_key: values.itemKey, verb: values.verb, reason: values.reason,
+      }),
+    onSuccess: () => { void attentionQuery.refetch(); },
+    onError: (error) => fail(error, "saveFailed"),
+  });
+
+  const attentionUndoMutation = useMutation({
+    mutationFn: (values: { contextId: string; itemKey: string }) =>
+      undoWorkAttentionAction(token || null, values.contextId, values.itemKey),
+    onSuccess: () => { void attentionQuery.refetch(); void message.success(tr("attentionUndone")); },
+    onError: (error) => fail(error, "saveFailed"),
+  });
+
   const sessionMutation = useMutation({
     mutationFn: (values: EditorValues) => linkWorkSession(token || null, contextId!, { topic: values.topic!.trim(), workspace_dir: values.workspaceDir?.trim() ?? "", session_id: values.sessionId?.trim() ?? "" }),
     onSuccess: () => { invalidateDetail(); useWorkDesktopStore.getState().closeEditor(); void message.success(tr("saved")); },
@@ -379,7 +401,13 @@ export function useWorkDesktopData() {
   // a request and becomes background debt.
   const agedByContext = attentionQuery.data?.aged ?? {};
   const attentionMetrics = attentionQuery.data?.metrics;
+  // Rows the owner already ruled on. Kept separate from scopedAttention so a deferred
+  // row is never counted or rendered as work still waiting on them.
+  const deferredAttention = attentionQuery.data?.deferred ?? [];
   const scopedAttention = attentionScope === "all" ? attentionItems : attentionItems.filter((item) => item.context_id === contextId);
+  // Deferred rows are scoped by the SAME switch as the list, so "this desktop" does not
+  // show verdicts taken on other streams.
+  const scopedDeferred = attentionScope === "all" ? deferredAttention : deferredAttention.filter((entry) => entry.item.context_id === contextId);
   const pendingReview = delegationsNeedingReview(delegations);
   const filteredContexts = useMemo(() => filterContexts(contexts, search), [contexts, search]);
   const contextResources = useMemo(
@@ -396,7 +424,7 @@ export function useWorkDesktopData() {
     // selection + derived
     contexts, selected, contextId, readOnly, invalidContext, filteredContexts,
     detail, facts, relations, sessions, delegations, events, todos, focusChanges, lastSeenAt,
-    attentionItems, unreadByContext, agedByContext, attentionMetrics, scopedAttention, pendingReview, contextResources, filesRoot,
+    attentionItems, unreadByContext, agedByContext, attentionMetrics, deferredAttention, scopedAttention, scopedDeferred, pendingReview, contextResources, filesRoot,
     // query state (for loading/error surfaces)
     contextsQuery, detailQuery, attentionQuery, recallResult, briefQuery, focusQuery, projectsQuery, templatesQuery,
     // mutations
@@ -404,7 +432,7 @@ export function useWorkDesktopData() {
     resourceMutation, removeResourceMutation, resourceUpdateMutation,
     relationMutation, removeRelationMutation, factMutation, reviewMutation, promoteMutation,
     organizeMutation, todoCreateMutation, todoPatchMutation, todoDeleteMutation,
-    markSeenMutation, sessionMutation, unlinkSessionMutation, delegationMutation,
+    markSeenMutation, attentionActionMutation, attentionUndoMutation, sessionMutation, unlinkSessionMutation, delegationMutation,
     executeMutation, reviewCardMutation,
     // helpers
     submitEditor, invalidateAll, invalidateDetail, tr, trLabel, fail, isConflict,

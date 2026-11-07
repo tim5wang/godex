@@ -48,6 +48,13 @@ export function AttentionLedger(props: {
           <div className="wd-muted">{tr("metricsAged")}</div>
           <strong>{metrics.aged_streams}</strong>
         </div>
+        {/* Decisions made today — the denominator of the yield ratio. Shown next to
+            the supply-side numbers so "how much was spent" and "what did I decide"
+            are read together; either alone invites the wrong conclusion. */}
+        <div className="wd-metrics-cell">
+          <div className="wd-muted">{tr("metricsDecisions")}</div>
+          <strong>{metrics.actions_today}</strong>
+        </div>
       </div>
     </FoldCard>
   );

@@ -1,9 +1,11 @@
-import { Badge, Button, Card, Segmented, Space, Tag, Typography } from "antd";
+import { useState } from "react";
+import { Badge, Button, Card, Input, Popconfirm, Segmented, Space, Tag, Typography } from "antd";
 import { ThunderboltOutlined } from "@ant-design/icons";
 import { useI18n } from "../../i18n";
 import { InfoHint } from "./workDesktopHints";
+import { FoldCard } from "./workDesktopFold";
 import { formatTimestamp } from "./workDesktopView";
-import type { AttentionItem } from "../../lib/apiWorkContext";
+import type { AttentionItem, AttentionVerb, DeferredAttention } from "../../lib/apiWorkContext";
 
 /**
  * AttentionInbox is the cross-stream "needs me" list.
@@ -21,10 +23,18 @@ export function AttentionInbox(props: {
   /** Which streams the list covers: everything, or only the open desktop. */
   scope: "current" | "all";
   onScopeChange: (scope: "current" | "all") => void;
+  /** Rows the owner already ruled on, reported so deferral is visible and undoable. */
+  deferred?: DeferredAttention[];
+  onAction?: (contextId: string, itemKey: string, verb: AttentionVerb, reason?: string) => void;
+  onUndo?: (contextId: string, itemKey: string) => void;
 }) {
-  const { items, loading, onOpen, scope, onScopeChange } = props;
+  const { items, loading, onOpen, scope, onScopeChange, deferred = [], onAction, onUndo } = props;
   const { t } = useI18n();
   const tr = (key: string, vars?: Record<string, string | number>) => t(`workDesktop.${key}`, vars);
+  // The dismiss reason lives here rather than in the server payload because it is
+  // typed into a popover: a blank reason must not become a recorded verdict, so the
+  // confirm button stays disabled until something is written.
+  const [dismissReason, setDismissReason] = useState<Record<string, string>>({});
 
   const label = (item: AttentionItem) => {
     switch (item.kind) {
@@ -95,10 +105,98 @@ export function AttentionInbox(props: {
               <Button size="small" type="link" onClick={() => onOpen(item.context_id, item.tab)}>
                 {tr("attentionOpen")}
               </Button>
+              {/* The verbs. Each one is a recorded decision, so the row must say which
+                  one a single click applies — no verb silently defaults. They only
+                  appear when a handler is wired, so the board degrades to the old
+                  read-only list instead of offering buttons that do nothing. */}
+              {onAction ? (
+                <Space size={2} className="wd-attention-verbs">
+                  {item.action?.verb === "claim" ? (
+                    // A claim is still work (the opposite of deferral), so it stays on
+                    // the list and says so rather than vanishing when picked up.
+                    <Tag color="processing" className="wd-attention-claimed">{tr("attentionClaimed")}</Tag>
+                  ) : (
+                    <Button size="small" type="link" onClick={() => onAction(item.context_id, item.item_key, "claim")}>
+                      {tr("attentionClaim")}
+                    </Button>
+                  )}
+                  <Button
+                    size="small"
+                    type="link"
+                    title={tr("attentionSnoozeHint")}
+                    onClick={() => onAction(item.context_id, item.item_key, "snooze")}
+                  >
+                    {tr("attentionSnooze")}
+                  </Button>
+                  {/* Dismiss hides the whole group, so it takes a reason first: a
+                      verdict with no recorded reason is indistinguishable from
+                      losing the work, and this is what makes undo meaningful. */}
+                  <Popconfirm
+                    title={tr("attentionDismissTitle")}
+                    description={(
+                      <Input
+                        size="small"
+                        value={dismissReason[item.item_key] ?? ""}
+                        placeholder={tr("attentionDismissPlaceholder")}
+                        onChange={(event) => setDismissReason((prev) => ({ ...prev, [item.item_key]: event.target.value }))}
+                      />
+                    )}
+                    okText={tr("attentionDismiss")}
+                    cancelText={tr("attentionCancel")}
+                    okButtonProps={{ disabled: !(dismissReason[item.item_key] ?? "").trim() }}
+                    onConfirm={() => {
+                      const reason = (dismissReason[item.item_key] ?? "").trim();
+                      if (!reason) return;
+                      onAction(item.context_id, item.item_key, "dismiss", reason);
+                      setDismissReason((prev) => ({ ...prev, [item.item_key]: "" }));
+                    }}
+                  >
+                    <Button size="small" type="link">{tr("attentionDismiss")}</Button>
+                  </Popconfirm>
+                </Space>
+              ) : null}
             </li>
           ))}
         </ul>
       )}
+      {/* Deferred rows sit behind their own fold and start CLOSED: they are a record
+          of decisions already made, not work waiting on the user. Reporting them at
+          all is the point — a verdict that makes an item disappear looks like a bug. */}
+      {deferred.length ? (
+        <FoldCard
+          className="wd-attention-deferred"
+          defaultOpen={false}
+          openLabel={tr("foldExpand")}
+          closeLabel={tr("foldCollapse")}
+          title={<Space size={6}>{tr("attentionDeferredTitle")}<Badge count={deferred.length} size="small" /></Space>}
+        >
+          <ul className="wd-attention-list">
+            {deferred.map((entry) => (
+              <li key={entry.item.item_key} className="wd-attention-item wd-attention-deferred-row">
+                <Tag>{entry.action.verb === "snooze" ? tr("attentionDeferredSnoozed") : tr("attentionDeferredDismissed")}</Tag>
+                <span className="wd-attention-main wd-attention-deferred-text">
+                  <strong>{entry.item.title}</strong>
+                  <span className="wd-muted">{entry.item.context_title}</span>
+                </span>
+                {/* The wake time (or the reason) is the context needed to trust the
+                    deferral: "snoozed" alone does not say until when, and a dismissed
+                    group with no reason cannot be judged. */}
+                {entry.action.verb === "snooze" && entry.action.until_at ? (
+                  <span className="wd-muted">{tr("attentionDeferredUntil", { time: formatTimestamp(entry.action.until_at) })}</span>
+                ) : null}
+                {entry.action.verb === "dismiss" && entry.action.reason ? (
+                  <span className="wd-muted wd-wrap">{tr("attentionDeferredReason", { reason: entry.action.reason })}</span>
+                ) : null}
+                {onUndo ? (
+                  <Button size="small" type="link" onClick={() => onUndo(entry.item.context_id, entry.item.item_key)}>
+                    {tr("attentionUndo")}
+                  </Button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </FoldCard>
+      ) : null}
     </Card>
   );
 }

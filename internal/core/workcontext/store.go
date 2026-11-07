@@ -18,7 +18,7 @@ import (
 )
 
 // schemaVersion is the current ordered migration version.
-const schemaVersion = 3
+const schemaVersion = 4
 
 // statusArkid is the terminal read-only status.
 const statusArchived = "archived"
@@ -449,6 +449,33 @@ var migrations = map[int][]string{
 			last_seen_at TEXT NOT NULL DEFAULT '',
 			PRIMARY KEY (tenant_id, context_id)
 		)`,
+	},
+	4: {
+		// Attention verbs (claim / snooze / dismiss) in their own table.
+		//
+		// NOT wc_events: UnreadCounts and Focus.changes are kind-agnostic, so a verb
+		// recorded as an event would make the user's own dismissal come back as an
+		// unread change (see unread_kinds_test.go). Like wc_seen, this table holds how
+		// the OWNER relates to a row rather than what the stream contains, so it never
+		// bumps the context version and viewing/acting is not an edit of the work.
+		//
+		// The primary key is (tenant, context, item_key) so a row has exactly ONE
+		// verb that the write path replaces, and so applying the same verb twice is
+		// idempotent.
+		`CREATE TABLE IF NOT EXISTS wc_attention_actions (
+			tenant_id TEXT NOT NULL,
+			context_id TEXT NOT NULL,
+			owner_id TEXT NOT NULL,
+			item_key TEXT NOT NULL,
+			verb TEXT NOT NULL DEFAULT '',
+			until_at TEXT NOT NULL DEFAULT '',
+			reason TEXT NOT NULL DEFAULT '',
+			actor_id TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (tenant_id, context_id, item_key)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_wc_attention_actions_owner ON wc_attention_actions(tenant_id, owner_id, updated_at DESC)`,
 	},
 }
 

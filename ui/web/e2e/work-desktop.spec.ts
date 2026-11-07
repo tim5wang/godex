@@ -51,6 +51,10 @@ type Store = {
   // deriving staleness from the clock would age the seeded data and silently change
   // every unread assertion. Empty by default, exactly like the server's "nothing aged".
   aged: string[]; nudgesToday: number;
+  // Owners' recorded verdicts on inbox rows, keyed by the group-scoped item_key
+  // ("{kind}:{context_id}") exactly like the server. Modelling the key here rather
+  // than an index matters: the UI must act on the row it renders.
+  attentionActions: Record<string, { context_id: string; kind: string; verb: string; until_at: string; reason: string; actor_id: string; created_at: string; updated_at: string }>;
   checkpointHistory: Record<string, unknown[]>;
   writes: string[];
   failNextPatch: boolean;
@@ -81,7 +85,7 @@ function baseContext(overrides: Partial<Ctx> & { id: string; title: string }): C
 }
 
 function newStore(seed: Partial<Store> = {}): Store {
-  return { contexts: [], resources: [], relations: [], facts: [], sessions: {}, delegations: [], cards: {}, events: {}, todos: [], seen: {}, queuedTurns: [], coldStart: false, resident: [], aged: [], nudgesToday: 0, checkpointHistory: {}, writes: [], failNextPatch: false, ...seed };
+  return { contexts: [], resources: [], relations: [], facts: [], sessions: {}, delegations: [], cards: {}, events: {}, todos: [], seen: {}, queuedTurns: [], coldStart: false, resident: [], aged: [], nudgesToday: 0, attentionActions: {}, checkpointHistory: {}, writes: [], failNextPatch: false, ...seed };
 }
 
 function checkpoint(body: Record<string, unknown>, revision: number) {
@@ -306,8 +310,29 @@ function handleWorkContext(store: Store) {
         per_stream_cap: 4,
         unread_total: unreadTotal,
         aged_streams: Object.keys(aged).length,
+        actions_today: Object.keys(store.attentionActions).length,
       };
-      return json({ items, unread, aged, counts: {}, metrics, generated_at: NOW });
+      // Apply the owner's recorded verbs. The clock comparison uses this mock's own NOW
+      // (not the real date), so a snooze created here stays inside its window.
+      const active: Record<string, unknown>[] = [];
+      const deferred: Record<string, unknown>[] = [];
+      for (const item of items) {
+        const key = `${item.kind as string}:${item.context_id as string}`;
+        item.item_key = key;
+        const action = store.attentionActions[key];
+        if (!action || (action.verb === "snooze" && !(action.until_at > NOW))) {
+          active.push(item);
+          continue;
+        }
+        if (action.verb === "claim") {
+          // A claim is still work, so it stays listed carrying its state.
+          item.action = action;
+          active.push(item);
+          continue;
+        }
+        deferred.push({ item, action });
+      }
+      return json({ items: active, unread, aged, deferred, counts: {}, metrics, generated_at: NOW });
     }
     if (path === "/v1/work-contexts" && method === "GET") return json(store.contexts);
     if (path === "/v1/work-contexts" && method === "POST") {
@@ -389,6 +414,39 @@ function handleWorkContext(store: Store) {
         const previous = store.seen[ctx.id] ?? "";
         store.seen[ctx.id] = NOW;
         return json({ previous_last_seen_at: previous });
+      }
+      // Attention verbs. The mock mirrors the server's two contract points that the UI
+      // depends on: the verb is stored against the group-scoped item_key, and applying
+      // it does NOT touch the stream's events or seen watermark (ruling on a row is
+      // neither reading the stream nor editing the work).
+      if (sub === "/attention-actions" && method === "POST") {
+        const input = body();
+        const itemKey = String(input.item_key ?? "");
+        const verb = String(input.verb ?? "");
+        if (!itemKey || !["claim", "snooze", "dismiss"].includes(verb)) {
+          return json({ error: "work context: invalid input: unsupported verb" }, 400);
+        }
+        if (verb === "dismiss" && !String(input.reason ?? "").trim()) {
+          return json({ error: "work context: invalid input: reason is required" }, 400);
+        }
+        const untilAt = verb === "snooze"
+          ? String(input.until_at ?? "") || new Date(Date.parse(NOW) + 3 * 24 * 3600 * 1000).toISOString()
+          : "";
+        const action = {
+          context_id: ctx.id, kind: itemKey.split(":")[0]!, verb, until_at: untilAt,
+          reason: String(input.reason ?? ""), actor_id: String(input.actor_id ?? "local-operator"),
+          created_at: NOW, updated_at: NOW,
+        };
+        store.attentionActions[itemKey] = action;
+        store.writes.push(`POST /v1/work-contexts/${ctx.id}/attention-actions`);
+        return json({ item_key: itemKey, ...action }, 201);
+      }
+      const actionMatch = sub.match(/^\/attention-actions\/(.+)$/);
+      if (actionMatch && method === "DELETE") {
+        // Idempotent, like the server: undoing what is not recorded is not an error.
+        delete store.attentionActions[decodeURIComponent(actionMatch[1]!)];
+        store.writes.push(`DELETE /v1/work-contexts/${ctx.id}/attention-actions`);
+        return json({ ok: true });
       }
       if (sub === "/resources" && method === "POST") {
         const input = body();
@@ -1048,6 +1106,90 @@ test("keeps the attention ledger folded until asked, and reports spend against i
   await expect(ledger.getByText("5 / 12", { exact: true })).toBeVisible();
   await expect(ledger.getByText("每条主线上限 4 条", { exact: true })).toBeVisible();
   await expect(ledger.getByText("未读变动", { exact: true })).toBeVisible();
+});
+
+test("snoozing a row takes it off the list without losing it, and it comes back on its own", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  const store = await install(page, seededStore());
+  await openSection(page, "待处理");
+
+  const inbox = boards(page).locator(".wd-attention");
+  // seededStore's candidate fact (ctx-1) is one actionable row; its verb buttons live
+  // on that row.
+  const row = inbox.locator(".wd-attention-item").filter({ hasText: "退化可能来自解码参数" });
+  await expect(row).toBeVisible();
+  await row.getByRole("button", { name: "稍后", exact: true }).click();
+
+  // The verb is stored against the row's group-scoped item_key — the identity the UI
+  // renders — not against an index or a title.
+  expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/attention-actions");
+  expect(Object.keys(store.attentionActions)).toContain("fact_review:ctx-1");
+
+  // It leaves the working list...
+  await expect(row).toHaveCount(0);
+  // ...and stays REPORTED, because a verdict that makes an item disappear is
+  // indistinguishable from a bug. The deferred fold starts closed.
+  const deferredFold = inbox.locator(".wd-attention-deferred");
+  await expect(deferredFold).toHaveAttribute("data-folded", "true");
+  await deferredFold.locator(".wd-fold-toggle").click();
+  await expect(deferredFold.getByText("推迟中", { exact: true })).toBeVisible();
+  // "Snoozed" alone does not say until when, so the wake time is shown.
+  await expect(deferredFold.getByText("后重新出现", { exact: false })).toBeVisible();
+  // Ruling on a row is not reading the stream, so the unread badge must not move.
+  await expect(rail(page).getByRole("button", { name: "1 条未读变动" })).toBeVisible();
+
+  // Undo restores it: the verdict was recorded, not merely hidden.
+  await deferredFold.getByRole("button", { name: "撤销", exact: true }).click();
+  await expect(row).toBeVisible();
+});
+
+test("a snooze is one decision, not a change, and claiming keeps the row listed", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  const store = await install(page, seededStore());
+  await openSection(page, "待处理");
+
+  const inbox = boards(page).locator(".wd-attention");
+  const row = inbox.locator(".wd-attention-item").filter({ hasText: "退化可能来自解码参数" });
+  await row.getByRole("button", { name: "我接手", exact: true }).click();
+
+  // A claim is the OPPOSITE of deferral: it is work the user just took on, so the row
+  // stays on the list and says so instead of vanishing when it was picked up.
+  const claimed = inbox.locator(".wd-attention-item").filter({ hasText: "退化可能来自解码参数" });
+  await expect(claimed).toBeVisible();
+  await expect(claimed.locator(".wd-attention-claimed")).toHaveText("已接手");
+  await expect(inbox.locator(".wd-attention-deferred")).toHaveCount(0);
+
+  // The recorded verdict is a human decision, so it counts in the ledger denomindaor.
+  await boards(page).locator(".wd-metrics").locator(".wd-fold-toggle").click();
+  await expect(boards(page).locator(".wd-metrics").getByText("今日决策", { exact: true })).toBeVisible();
+});
+
+test("dismissing a row needs a recorded reason before it can be confirmed", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  const store = await install(page, seededStore());
+  await openSection(page, "待处理");
+
+  const inbox = boards(page).locator(".wd-attention");
+  const row = inbox.locator(".wd-attention-item").filter({ hasText: "退化可能来自解码参数" });
+  await row.getByRole("button", { name: "不再需要", exact: true }).click();
+
+  // Dismiss hides a whole GROUP of work, so an empty reason must not be recordable:
+  // without one the verdict is indistinguishable from losing the work, and undo has
+  // nothing to explain. The confirm button stays disabled until something is typed.
+  const confirm = page.getByRole("button", { name: "不再需要", exact: true }).last();
+  await expect(confirm).toBeDisabled();
+  await page.getByPlaceholder("为什么这条不需要处理？（可撤销）").fill("已手工验证，无需再跟");
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
+
+  // Nothing was recorded until the reason existed.
+  expect(store.attentionActions["fact_review:ctx-1"]?.reason).toBe("已手工验证，无需再跟");
+  await expect(row).toHaveCount(0);
+  const deferredFold = inbox.locator(".wd-attention-deferred");
+  await deferredFold.locator(".wd-fold-toggle").click();
+  await expect(deferredFold.getByText("已忽略", { exact: true })).toBeVisible();
+  // The reason is readable back, which is what makes the verdict auditable.
+  await expect(deferredFold.getByText("已手工验证，无需再跟", { exact: false })).toBeVisible();
 });
 
 test("selecting another desktop in the rail swaps the boards to it", async ({ page }) => {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/tim5wang/godex/internal/core/workcontext"
@@ -208,5 +209,36 @@ func registerWorkContextRoutes(mux *http.ServeMux, service *backend.Service, pro
 			return nil, err
 		}
 		return map[string]any{"previous_last_seen_at": previous}, nil
+	})
+	// Attention verbs: the owner rules on one inbox row (claim / snooze / dismiss).
+	// Stored per (stream, item_key) in their own table rather than as events, so a
+	// verb never shows up as an unread change — see §7 of the attention-economics
+	// doc and internal/core/workcontext/attention_actions.go.
+	//
+	// This is a WRITE, but it is not an edit of the work: it deliberately does not
+	// bump the context version and does not advance the seen watermark, so a row can
+	// be ruled on without pretending the stream was read.
+	handle("POST /v1/work-contexts/{id}/attention-actions", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
+		var input workcontext.AttentionActionInput
+		if err := decodeJSON(r, &input); err != nil {
+			return nil, invalidJSON(err)
+		}
+		// Through the service so the verb is validated against the SAME clock the
+		// inbox reads at (see backend.RecordAttentionAction).
+		return service.RecordAttentionAction(r.Context(), scope, id(r), input)
+	})
+	// Undo a verb. Idempotent: undoing something that is not recorded is already the
+	// desired state, so a repeat call is not an error.
+	handle("DELETE /v1/work-contexts/{id}/attention-actions/{itemKey}", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
+		// The item key is group-scoped ("{kind}:{context_id}") and therefore contains a
+		// colon, so it is matched as a whole path segment and may arrive percent-encoded.
+		itemKey := r.PathValue("itemKey")
+		if decoded, err := url.PathUnescape(itemKey); err == nil {
+			itemKey = decoded
+		}
+		if err := s.DeleteAttentionAction(r.Context(), scope, id(r), itemKey); err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true}, nil
 	})
 }

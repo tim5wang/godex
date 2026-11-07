@@ -354,6 +354,219 @@ func hasEventKind(events []workcontext.Event, kind string) bool {
 	return false
 }
 
+// mustOverdueTodo creates one overdue plan item, which is what the sweep turns into
+// a nudge. Overdue (rather than due-soon) is used because it exercises the same
+// path with a clearer dedup key.
+func mustOverdueTodo(t *testing.T, service *Service, scope workcontext.Scope, contextID, text string, at time.Time) {
+	t.Helper()
+	store, err := service.WorkContexts()
+	if err != nil {
+		t.Fatalf("WorkContexts: %v", err)
+	}
+	if _, err := store.CreateTodo(context.Background(), scope, contextID, workcontext.TodoInput{
+		Text: text, DueAt: at.Add(-time.Hour).Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("CreateTodo: %v", err)
+	}
+}
+
+// TestAttentionSnoozeSuppressesBeforeTheEventIsRecorded is the ordering test that
+// matters most: a snoozed reminder must not be recorded as delivered, because the
+// event's dedup key would then suppress it FOREVER — the reminder would be silently
+// swallowed rather than delivered later. It is the attention equivalent of the
+// quiet-hours ordering pin.
+func TestAttentionSnoozeSuppressesBeforeTheEventIsRecorded(t *testing.T) {
+	base := time.Date(2026, 10, 31, 12, 0, 0, 0, time.Local)
+	service, notifier, scope := newAttentionService(t, base)
+	store, err := service.WorkContexts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := mustStream(t, service, scope, "被推迟的主线")
+	mustOverdueTodo(t, service, scope, stream.ID, "过期项", base)
+
+	// The owner snoozes the overdue row from the inbox.
+	key := workcontext.AttentionItemKey(AttentionKindTodoOverdue, stream.ID)
+	if _, err := service.RecordAttentionAction(context.Background(), scope, stream.ID, workcontext.AttentionActionInput{
+		ItemKey: key, Verb: workcontext.AttentionVerbSnooze,
+		UntilAt: base.Add(48 * time.Hour).UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("snooze: %v", err)
+	}
+
+	// A sweep inside the snooze window must deliver NOTHING.
+	service.sweepAttentionOnce(context.Background())
+	if notifier.count() != 0 {
+		t.Fatalf("a snoozed row must not notify, got %q", notifier.allBodies())
+	}
+	// And crucially it must not have written the nudge event either: recording it
+	// would occupy the dedup key and swallow the reminder permanently.
+	detail, err := store.Get(context.Background(), scope, stream.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasEventKind(detail.Events, nudgeEventKind) {
+		t.Fatal("a snoozed nudge must NOT be recorded as delivered (its dedup key would swallow it forever)")
+	}
+
+	// Once the snooze expires, the reminder is delivered — nothing was lost.
+	service.now = fixedNow(base.Add(49 * time.Hour))
+	service.sweepAttentionOnce(context.Background())
+	if notifier.count() != 1 {
+		t.Fatalf("after the snooze expires the reminder must be delivered, got %d", notifier.count())
+	}
+}
+
+// TestAttentionSnoozeExpiresOnReadWithoutASweep pins that expiry is decided while
+// READING: no scheduled job has to fire, so a snooze cannot be missed because a
+// background pass did not run.
+func TestAttentionSnoozeExpiresOnReadWithoutASweep(t *testing.T) {
+	base := time.Date(2026, 10, 31, 12, 0, 0, 0, time.Local)
+	service, _, scope := newAttentionService(t, base)
+	if _, err := service.WorkContexts(); err != nil {
+		t.Fatal(err)
+	}
+	stream := mustStream(t, service, scope, "读时到期")
+	mustOverdueTodo(t, service, scope, stream.ID, "过期项", base)
+	key := workcontext.AttentionItemKey(AttentionKindTodoOverdue, stream.ID)
+	if _, err := service.RecordAttentionAction(context.Background(), scope, stream.ID, workcontext.AttentionActionInput{
+		ItemKey: key, Verb: workcontext.AttentionVerbSnooze,
+		UntilAt: base.Add(24 * time.Hour).UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("snooze: %v", err)
+	}
+
+	view, err := service.AttentionInbox(context.Background(), scope)
+	if err != nil {
+		t.Fatalf("AttentionInbox: %v", err)
+	}
+	if len(view.Deferred) != 1 || len(view.Items) != 0 {
+		t.Fatalf("inside the window the row is deferred: items=%d deferred=%d", len(view.Items), len(view.Deferred))
+	}
+	if view.Deferred[0].Action.Verb != workcontext.AttentionVerbSnooze {
+		t.Fatalf("the deferred row must carry its verb, got %+v", view.Deferred[0].Action)
+	}
+
+	// Only the clock moves. No sweep runs.
+	service.now = fixedNow(base.Add(25 * time.Hour))
+	view, err = service.AttentionInbox(context.Background(), scope)
+	if err != nil {
+		t.Fatalf("AttentionInbox after expiry: %v", err)
+	}
+	if len(view.Items) != 1 {
+		t.Fatalf("the row must reappear once due, got %d items", len(view.Items))
+	}
+	if len(view.Deferred) != 0 {
+		t.Fatalf("an expired snooze must not still be reported as deferred, got %d", len(view.Deferred))
+	}
+	// The row carries its group-scoped identity, so the UI acts on exactly what it renders.
+	if view.Items[0].ItemKey != key {
+		t.Fatalf("the row must carry its item key %q, got %q", key, view.Items[0].ItemKey)
+	}
+}
+
+// TestAttentionClaimKeepsTheRowAndDismissHidesIt covers the two other verbs: a claim
+// is still work and must stay on the list (carrying its state), while a dismiss
+// takes the row off the list WITHOUT losing it.
+func TestAttentionClaimKeepsTheRowAndDismissHidesIt(t *testing.T) {
+	base := time.Date(2026, 10, 31, 12, 0, 0, 0, time.Local)
+	service, _, scope := newAttentionService(t, base)
+	if _, err := service.WorkContexts(); err != nil {
+		t.Fatal(err)
+	}
+	claimed := mustStream(t, service, scope, "我接手了")
+	dismissed := mustStream(t, service, scope, "我不做了")
+	mustOverdueTodo(t, service, scope, claimed.ID, "过期项 A", base)
+	mustOverdueTodo(t, service, scope, dismissed.ID, "过期项 B", base)
+
+	claimKey := workcontext.AttentionItemKey(AttentionKindTodoOverdue, claimed.ID)
+	if _, err := service.RecordAttentionAction(context.Background(), scope, claimed.ID, workcontext.AttentionActionInput{
+		ItemKey: claimKey, Verb: workcontext.AttentionVerbClaim, ActorID: "local-operator",
+	}); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	dismissKey := workcontext.AttentionItemKey(AttentionKindTodoOverdue, dismissed.ID)
+	if _, err := service.RecordAttentionAction(context.Background(), scope, dismissed.ID, workcontext.AttentionActionInput{
+		ItemKey: dismissKey, Verb: workcontext.AttentionVerbDismiss, Reason: "已手工处理",
+	}); err != nil {
+		t.Fatalf("dismiss: %v", err)
+	}
+
+	view, err := service.AttentionInbox(context.Background(), scope)
+	if err != nil {
+		t.Fatalf("AttentionInbox: %v", err)
+	}
+	// A claim stays visible: it is the opposite of deferral.
+	var claimedItem *AttentionItem
+	for i := range view.Items {
+		if view.Items[i].ContextID == claimed.ID {
+			claimedItem = &view.Items[i]
+		}
+		if view.Items[i].ContextID == dismissed.ID {
+			t.Fatal("a dismissed row must not remain on the working list")
+		}
+	}
+	if claimedItem == nil {
+		t.Fatal("a claimed row must stay on the working list")
+	}
+	if claimedItem.Action == nil || claimedItem.Action.Verb != workcontext.AttentionVerbClaim {
+		t.Fatalf("the claimed row must carry its state, got %+v", claimedItem.Action)
+	}
+	// The dismissal is reported rather than dropped, with the reason that makes it undoable.
+	if len(view.Deferred) != 1 {
+		t.Fatalf("the dismissed row must be reported as deferred, got %d", len(view.Deferred))
+	}
+	if view.Deferred[0].Item.ContextID != dismissed.ID || view.Deferred[0].Action.Reason != "已手工处理" {
+		t.Fatalf("deferred row lost its identity or reason: %+v", view.Deferred[0])
+	}
+}
+
+// TestAttentionActionCountsAsADecisionNotAsUnread is the end-to-end version of the
+// probe that ruled out event-derivation: ruling on a row must not raise that
+// stream's unread count, and it must show up as a human decision in the ledger.
+func TestAttentionActionCountsAsADecisionNotAsUnread(t *testing.T) {
+	base := time.Date(2026, 10, 31, 12, 0, 0, 0, time.Local)
+	service, _, scope := newAttentionService(t, base)
+	store, err := service.WorkContexts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := mustStream(t, service, scope, "不计未读")
+	mustOverdueTodo(t, service, scope, stream.ID, "过期项", base)
+	if _, err := store.MarkSeen(context.Background(), scope, stream.ID); err != nil {
+		t.Fatalf("MarkSeen: %v", err)
+	}
+	before, err := service.AttentionInbox(context.Background(), scope)
+	if err != nil {
+		t.Fatalf("AttentionInbox: %v", err)
+	}
+
+	key := workcontext.AttentionItemKey(AttentionKindTodoOverdue, stream.ID)
+	if _, err := service.RecordAttentionAction(context.Background(), scope, stream.ID, workcontext.AttentionActionInput{
+		ItemKey: key, Verb: workcontext.AttentionVerbDismiss, Reason: "已处理",
+	}); err != nil {
+		t.Fatalf("dismiss: %v", err)
+	}
+
+	after, err := service.AttentionInbox(context.Background(), scope)
+	if err != nil {
+		t.Fatalf("AttentionInbox after: %v", err)
+	}
+	// Ruling on a row is not a change to the stream, so the badge must not move.
+	if after.Unread[stream.ID] != before.Unread[stream.ID] {
+		t.Fatalf("acting on a row must not raise unread: before=%d after=%d",
+			before.Unread[stream.ID], after.Unread[stream.ID])
+	}
+	if after.Unread[stream.ID] != 0 {
+		t.Fatalf("a just-seen stream should stay at zero unread, got %d", after.Unread[stream.ID])
+	}
+	// ...but it IS a human decision, which is what the yield ratio divides by.
+	if after.Metrics.ActionsToday != before.Metrics.ActionsToday+1 {
+		t.Fatalf("the verb must count as one decision: before=%d after=%d",
+			before.Metrics.ActionsToday, after.Metrics.ActionsToday)
+	}
+}
+
 // TestAttentionInboxAgesStaleUnread covers aging: an unread badge that nobody has
 // cleared for days stops being a call to action, so the inbox demotes it to a muted
 // summary. It is NOT hidden — the count stays real and the events stay readable;

@@ -476,6 +476,12 @@ export type AttentionPriority = "high" | "normal" | "low";
 export interface AttentionItem {
   kind: string;
   priority: AttentionPriority;
+  /** Group-scoped identity a verb is stored against, so the UI acts on exactly the
+   *  row it renders. */
+  item_key: string;
+  /** The owner's recorded verb on this row, when there is one. A claim keeps the
+   *  row actionable, so it stays listed carrying its state. */
+  action?: AttentionAction;
   context_id: string;
   context_title: string;
   title: string;
@@ -499,6 +505,34 @@ export interface AttentionMetrics {
   per_stream_cap: number;
   unread_total: number;
   aged_streams: number;
+  /** Decisions the human made today (each verb counts once). The denominator of
+   *  the attention-yield ratio. */
+  actions_today: number;
+}
+
+// Attention verbs the owner can apply to an inbox row. A row holds at most ONE of
+// these at a time (the server replaces rather than stacks them).
+export type AttentionVerb = "claim" | "snooze" | "dismiss";
+
+export interface AttentionAction {
+  /** Group-scoped identity of the row this verdict belongs to ("{kind}:{context_id}"). */
+  item_key: string;
+  context_id: string;
+  kind: string;
+  verb: AttentionVerb;
+  /** When a snooze stops applying; empty for verbs that do not expire. */
+  until_at?: string;
+  /** Required for dismiss: a reason is what makes hiding a group undoable. */
+  reason?: string;
+  actor_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A row the owner already ruled on, reported so deferral stays visible and undoable. */
+export interface DeferredAttention {
+  item: AttentionItem;
+  action: AttentionAction;
 }
 
 // WorkAttention is the inbox plus per-stream unread counts, so the desktop wall
@@ -509,9 +543,40 @@ export interface WorkAttention {
   /** Streams whose unread changes have gone stale: their count is still reported,
    *  but the UI demotes it from an alert to a muted summary. */
   aged: Record<string, boolean>;
+  /** Rows the owner already ruled on (snoozed or dismissed), kept so deferral is
+   *  visible rather than looking like the item vanished. */
+  deferred: DeferredAttention[];
   counts: Record<string, number>;
   metrics: AttentionMetrics;
   generated_at: string;
+}
+
+/**
+ * Apply one verb to one inbox row.
+ *
+ * This is a write, but NOT an edit of the work: it never bumps the stream version
+ * and never advances the seen watermark, so a row can be ruled on without
+ * pretending the stream was read.
+ */
+export function recordWorkAttentionAction(
+  token: string | null,
+  contextId: string,
+  input: { item_key: string; verb: AttentionVerb; until_at?: string; reason?: string; actor_id?: string },
+) {
+  return request<AttentionAction>(
+    `/v1/work-contexts/${encodeURIComponent(contextId)}/attention-actions`,
+    { method: "POST", body: JSON.stringify(input) },
+    token,
+  );
+}
+
+/** Undo a verb, restoring the row. Idempotent: undoing what is not recorded is fine. */
+export function undoWorkAttentionAction(token: string | null, contextId: string, itemKey: string) {
+  return request<{ ok: boolean }>(
+    `/v1/work-contexts/${encodeURIComponent(contextId)}/attention-actions/${encodeURIComponent(itemKey)}`,
+    { method: "DELETE" },
+    token,
+  );
 }
 
 // getWorkAttention returns what needs the user across every stream. Read-only, so

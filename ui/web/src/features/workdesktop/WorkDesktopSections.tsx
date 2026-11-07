@@ -60,7 +60,8 @@ export function WorkDesktopSectionBoard(props: { section: string; data: WorkDesk
   const {
     tr, trLabel, selected, readOnly, contextId, contexts,
     facts, relations, sessions, delegations, events, todos, focusChanges, lastSeenAt,
-    scopedAttention, attentionQuery, attentionMetrics, contextResources, recallResult,
+    scopedAttention, attentionQuery, attentionMetrics, scopedDeferred,
+    attentionActionMutation, attentionUndoMutation, contextResources, recallResult,
   } = data;
   const openEditor = useWorkDesktopStore((state) => state.openEditor);
   const setSection = useWorkDesktopStore((state) => state.setSection);
@@ -226,6 +227,9 @@ export function WorkDesktopSectionBoard(props: { section: string; data: WorkDesk
           onOpen={(id, target) => { setContextId(id); setSection(sectionForTarget(target)); }}
           scope={attentionScope}
           onScopeChange={setAttentionScope}
+          deferred={scopedDeferred}
+          onAction={(contextId, itemKey, verb, reason) => attentionActionMutation.mutate({ contextId, itemKey, verb, reason })}
+          onUndo={(contextId, itemKey) => attentionUndoMutation.mutate({ contextId, itemKey })}
         />
         {/* The ledger sits UNDER the list and starts folded: it answers "is my
             attention being spent well?", which is worth asking occasionally and not

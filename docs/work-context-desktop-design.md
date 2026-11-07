@@ -575,6 +575,24 @@ WD3.8 之后，收件箱只覆盖三类信号（待验收委派、过期/即将�
 - 前端：`pnpm typecheck` 通过；`vitest run` 49 文件 / 503 通过；i18n 中英对齐通过；`playwright work-desktop` **三端 31 passed / 44 skipped / 0 failed**。
 - 揭示标记断言**反向验证过非空洞**（改回 `reveal={false}` 后真失败）。
 
+### WD3.18 收件箱动词：claim / snooze / dismiss（AE2，2026-11-07）
+
+按 [work-context-attention-economics.md](./work-context-attention-economics.md) §6.4 实施（选型依据见该文§7：采用**新表**，而非事件派生）。细节与验证见 §6.4。
+
+- **为什么不是事件派生（已实测）**：`UnreadCounts` 与 `Focus.changes` 都是 kind-agnostic（只按 seen 水位过滤，见 `unread_kinds_test.go`）。把动作写进 `wc_events` 会让用户自己的 dismiss 变成一条「未读变动」被报回给自己。
+- **存储**：migration 4 新表 `wc_attention_actions`，主键 `(tenant, context, item_key)`。与 `wc_seen` 同构：记录「所有者与行的关系」，不碰流版本（处置不是编辑）。
+- **身份**：组级 `item_key = {kind}:{context_id}`，在收件箱投影的**归一化那一步**统一打标（不在七个构造点各打），保证 UI 处置的就是它渲染的那一行。代价是 dismiss 忽略整组，所以 **dismiss 强制带理由且可撤销**。
+- **到期读时判断**：`AttentionActionActive(action, now)` 在读投影时判，未到点则不投影——不需要后台唤醒任务，也就没有「任务没跑所以提醒丢了」这类失败模式。
+- **sweep 尊重动词且在写事件之前**：`pushNudge` 新增 `itemKind` 并先查动词 → 纪律检查 → 最后才写事件。顺序是关键：先写事件会让被 snooze 的提醒占住 dedup key、**永久吞掉**（有专门回归测试钉住）。
+- **不计未读，但计「决策」**：处置不是阅读，所以徽标不动；但它是人的决策，所以度量卡新增「今日决策」（AE5 收益率的分母）。
+- **推迟区默认折叠**：被判定的行不消失，而是收进可见、可撤销的「已推迟 / 已忽略」（显示到期时间或理由）。
+
+验证（2026-11-07）：
+
+- 后端新增 11 测试（存储层 7 + 服务层 4），含 owner 隔离、幂等、到期语义、**snooze 在写事件之前生效**；`go build`/`vet` 干净；core/workcontext 与 httpapi 全量通过。
+- 前端：`pnpm typecheck` 通过；`vitest` 49 文件 / 503 通过；i18n 中英对齐通过；`playwright work-desktop` **三端 34 passed / 50 skipped / 0 failed**（新增 3 条动作用例）。
+- **测试先于实现发现真缺陷**：store 原本读真实墙钟 `time.Now()`，与收件箱的 `s.now` 两套时钟会分叉；修为 `now` 作参数传入 + `Service.RecordAttentionAction` 注入 `s.now()`。
+
 ### 11.5 后续实现门禁
 
 - 后端：SQLite migrations/reopen/version CAS、同事务事件、租户与来源鉴权、依赖环、幂等补偿、来源删除、事实时间范围；使用实际 modernc SQLite，不只 mock。

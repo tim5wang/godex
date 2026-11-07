@@ -1,6 +1,6 @@
 # 工作桌面的注意力经济学（Attention Economics）：现状核查与增强方案
 
-> 状态：Partial（§3 为代码实证基线；**AE1、AE3、AE4、AE5 已实施**，见 §6.1–§6.3；**AE2 已完成前置调研并给出带取舍的选型建议，见 §7，尚未实施**）
+> 状态：Partial（§3 为代码实证基线；**AE1、AE3、AE4、AE5 已实施**，见 §6.1–§6.3；**AE2 已实施**，见 §6.4；§7 保留实施前的调研与选型记录）
 > 日期：2026-11-07
 > 关联：[work-context-desktop-design.md](./work-context-desktop-design.md)（工作桌面主设计）、[taskboard-plugin-design.md](./taskboard-plugin-design.md)（委派执行器）、[memory-design-principles.md](./memory-design-principles.md)（记忆治理）、[agent-role-and-bundle-design.md](./agent-role-and-bundle-design.md)（Agent 模板/多入口）
 > 定位：解释「工作桌面」这一层在注意力经济中的位置，指出现有实现的杠杆缺口，并给出可分期落地的增强方案。本文不引入第二套 Agent Runtime，不改变既有权限与执行边界。
@@ -161,7 +161,7 @@ Agent     = 条目的生产者（delegate / executor / flow_inspect / 记忆候�
 | 期 | 内容 | 依赖 | 门禁 |
 |---|---|---|---|
 | AE1 | L1 完整化 + 合批 + 杠杆排序 | 无新采集 | ✅ 已实施（2026-11-07），见 §6.1 |
-| AE2 | L1 动词（claim/snooze/dismiss/委托） | 需新增少量接口（动作本身要落审计） | 动作幂等 + owner 隔离 + 不推进 seen 水位 |
+| AE2 | L1 动词（claim/snooze/dismiss/委托） | 需新增少量接口（动作本身要落审计） | ✅ 已实施（2026-11-07，claim/snooze/dismiss；「委托」未做），见 §6.4 |
 | AE3 | L2 验收包 + 证据徽章 | 复用卡 Execution/Checklist | ✅ 已实施（2026-11-07），见 §6.2 |
 | AE4 | L3 digest + 配额 + 老化降级 | 依赖 AE1 排序 | ✅ 已实施（2026-11-07，仅老化降级 + 按主线配额；每日 digest 未做），见 §6.3 |
 | AE5 | L4 度量 | 依赖 AE2 动作记录 | ✅ 已实施（2026-11-07，部分：预算/未读/老化三项，依赖 AE2 的「注意力收益率」未做），见 §6.3 |
@@ -234,7 +234,52 @@ Agent     = 条目的生产者（delegate / executor / flow_inspect / 记忆候�
 - **反向验证过非空洞**：临时把 `reveal={pendingReveal}` 改成 `reveal={false}` 后，`data-flash` 断言**真失败**，恢复后通过——即该断言真的在守护这个 bug。
 - **flake 判定用 A/B 对照而非名字**：全量中 `TestScreenUserInputHookFireAndForgetShadow` 失败并不等于本轮引入。我的改动 `-count=5` 失败 2 次，stash 后基线 `-count=5` 也失败 1 次 → 既有 flake（根因：shadow screener 的后台分类 goroutine 在测试结束后才写盘，与 `t.TempDir` 清理竞态，见 `security_screener_test.go:73`）。只看名字会「猜对而推理错」。
 
+### 6.4 AE2 实施记录：收件箱动词（2026-11-07）
+
+按 §7 的选型结论实施（选项 B：**新表**，而非事件派生）。实施了 claim / snooze / dismiss；「委托给 Agent」未做（它需要真的能启一个 Agent，与 P4 默认动作一并考虑）。
+
+**一、存储：migration 4 新表 `wc_attention_actions`。**
+
+不在 `wc_events` 里存（§7 已实测：未读与变更流都是 kind-agnostic，动作入事件会把自己的忽略变成一条未读变动）。表形类似 `wc_seen`：记录的是**所有者与行的关系**，不是流内容，所以**不动流版本**，浏览/处置都不算编辑。主键 `(tenant, context, item_key)` 保证**一行一个判定**（snooze 后 dismiss 是一个事实而非两条），重复动词幂等。
+
+**二、身份：组级 item_key `{kind}:{context_id}`。**
+
+在收件箱投影里**只在一处**打这个标记（`groupAttention` 之后），不在七个构造点各打一次——因为 key 按定义就是组级的，在归一化的那一步派生才能真正保证「UI 对的就是它渲染的那一行」。与折叠成一行的设计一致；代价是 dismiss 会忽略整组，所以 **dismiss 强制带理由且可撤销**。
+
+**三、读时判断 snooze 到期（无后台任务）。**
+
+`AttentionActionActive(action, now)` 在**读投影时**判断；未到点则不投影。因此**不需要调度任务**，也就不存在「任务没跑所以提醒丢了」这种失败模式。
+
+**四、sweep 尊重动词，且在写事件之前。**
+
+`pushNudge` 新增 `itemKind` 参数并先查动词，再走纪律检查（静默时段/配额），**最后**才写事件。顺序是关键：先写事件会让被 snooze 的提醒占住 dedup key、**永久吞掉**——正是 `pushNudge` 注释点名最不能出的结果。有专门回归测试钉住它。
+
+**五、动词不计未读，但计「决策」。**
+
+处置一条不是阅读主线，所以未读徽标不动；但它是人做出的决策，所以进度量卡新增的**「今日决策」**（AE5 收益率的分母）。度量卡默认仍折叠，不增加默认负担。
+
+**六、推迟区（默认折叠）：判定可见、可撤销。**
+
+被 snooze/dismiss 的行不是消失，而是收进「已推迟 / 已忽略」折叠区，并显示**到期时间**或**理由**，且可撤销（撤销=删该行状态）。让一条建议静默消失与 bug 无法区分。
+
+**七、一个被测试暴露的真问题：两套时钟会分叉。**
+
+首次写测试就失败：`UpsertAttentionAction` 原本在 store 里读**真实墙钟** `time.Now()`，而收件箱其余部分读**可注入的** `s.now`——「wake 在未来」的校验与「snooze 还有效吗」的读取因此可以不一致。修法是把 `now` 作为参数传入（与 `AttentionActionActive` 同一模式），并新增 `Service.RecordAttentionAction` 包一层注入 `s.now()`。**这是测试先于实现发现的设计缺陷，不是测试写错。**
+
+验证（2026-11-07）：
+
+- 后端存储层新增 7 测试：幂等与替换、校验（未知动词/无理由的 dismiss/过去的 wake/空 key/默认 wake 时间）、**owner 隔离**（Bob 看不到也写不了 Alice 的判定）、撤销幂等、到期语义（含**无法解析的 wake 时间不能永久藏行**、未知动词不得藏行）、item key 往返、按日计数边界。
+- 后端服务层新增 4 测试：**snooze 在写事件之前生效**（并断言**未写 nudge 事件**，钉死「记录先于检查会永久吞掉提醒」这一结论）、**读时到期无需 sweep**、claim 保留行而 dismiss 隐藏、**动词不计未读但计决策**。
+- `go build`/`go vet` 干净；core/workcontext 与 httpapi 全量通过；backend 全量仅剩既有 TempDir 清理 flake（见下方 flake 说明）。
+- 前端：`pnpm typecheck` 通过；`vitest` 49 文件 / 503 通过；i18n 中英对齐通过。
+- `playwright work-desktop` **三端 34 passed / 50 skipped / 0 failed**；新增 3 条：snooze 行离开列表、进入折叠推迟区（显示到期时间）、撤销后回来；claim 行仍在列且标「已接手」+ 今日决策计数；dismiss 必须填理由才能确认（确认按钮先 disabled）。
+- 无新增前端依赖；样式 `wd-attention-verbs` / `wd-attention-deferred-*` 追加入 `workDesktop.css`。
+
+**未做 / 待定**：委托给 Agent（P4 前置）；snooze 时长目前固定 3 天（`DefaultSnoozeDuration`，客户端可传 `until_at` 覆盖，但 UI 未给选项）。
+
 ## 7. AE2 前置调研：动词状态放哪（2026-11-07；选项 A 的副作用已实测，其余为静态核查）
+
+> 本节是实施**前**的调研记录，保留供追溯：实施结果见 §6.4（选型与本节结论一致，选项 B）。
 
 **问题**。AE2 要给收件箱加动词（claim / snooze / dismiss）。真正决定成本的不是接口数量，而是**状态放哪**：snooze 是「持续到某时刻」的状态，与既有「读时投影」的 read model 不同类。
 
@@ -291,7 +336,7 @@ Agent     = 条目的生产者（delegate / executor / flow_inspect / 记忆候�
 - **风险 R3（默认动作误伤）**：P4 给 Agent 默认动作会引入不可逆错误的风险。缓解：**默认动作只允许可逆动作**；不可逆动作（发布、删除、外部副作用）永不设默认值，必须人来。
 - **风险 R4（配额引发漏报）**：配额过严会漏掉真紧急项。缓解：决策类恒为 high 且不受 cap 限制（既有设计），配额只约束非决策类。
 
-## 8. 待确认问题
+## 9. 待确认问题
 
 1. L1 的「动词」是否需要落审计（谁在什么时候 claim/snooze），还是纯前端会话态即可？
 2. 杠杆排序里的「阻塞下游数」以 `wc_relations`（主线依赖）还是 taskboard 卡依赖为准？两者今天不是同一套模型。
@@ -299,6 +344,6 @@ Agent     = 条目的生产者（delegate / executor / flow_inspect / 记忆候�
 4. 「注意力配额」的默认值按什么定：主线数量自适应，还是固定每主线 2 条？
 5. 是否把「久未触碰的主线」本身作为一种注意力信号（沉寂主线提醒），还是保持「不主动催」？
 
-## 9. 一句话结论
+## 10. 一句话结论
 
 工作桌面已经解决了**注意力税**（进入成本 A），尚未解决**注意力经济**（B 与 C：配额、合批、杠杆、默认动作）。下一步最值得做的不是再加板块，而是**把收件箱从「只读清单」变成「带动词的队列」**，并**给每条待决策项一个「默认动作 + 超时」**——这两件事同时降低 B 与 C 两类消耗，杠杆最高。

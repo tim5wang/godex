@@ -778,9 +778,25 @@ type Decision struct {
   如实说明「没指定过目标」，而不是报个空串假装选过）② 节点自身的 egress 拒绝
   （`forward target not allowed` 以 `tcp_close` 返回，中心把它记为该目标的拒绝，
   reason 保留节点原话）。
+- **两条转发路径都覆盖**：CLI 隧道走 `ForwardHandler`；**管理隧道**（`POST /control/forwards`）
+  是进程内拨号（`ForwardServer.dialStream`），**不经过** `ForwardHandler`，故它自带
+  `SetAuditRecorder`。管理隧道**只记拨号失败**，两个排除都是有意的：
+  ① 不逐连接记（监听器会一直接受连接，逐连接行会随流量而非随决策增长）；
+  ② 不记隧道创建（`Add()` 也是启动加载路径，每次重启会对每个已配置隧道重新发一行，
+  把信号淹在启动噪音里）。剩下正是原本真不可见的那个：目标不可达或被节点 egress 拒绝。
+  它**不记租户**——管理隧道是操作员的、其本地连接是匿名 socket，指名租户就是猜测，
+  因此只出现在超管的跨租户视图里。
+- **`AuditRecorder` / `SetAuditRecorder` 为 nil 时行为完全不变**（有测试钉住）：
+  没配审计的实例不能因此开始报错，也不能因为一次拨号失败而停掉监听器。
+
+回归：`relay/forward_audit_test.go`（节点级拒绝 / 目标级拒绝 / 放行 / 无 recorder 兼容）、
+`relay/forward_server_audit_test.go`（管理隧道：egress 拒绝留痕 / 不记租户 / 无 recorder 兼容且监听器仍 running）、
+`metering` 审计表作用域与窗口边界、`httpapi/routes_metering_test.go` 两路由的租户作用域与
+跨租户 `denied`。
 - **归属取自 decision 而非请求头**：与 §7.1 同一条规则，且这里更要紧——
   调用方不能让**自己**的越权尝试记到别人头上。
 - **`denied` 计数显式返回**：让客户端自己过滤出拒绝行，就是埋没这条信号的常见方式。
+- **仅覆盖经中心的转发**：节点本地直连（不经中心）不在内；这正是 ②-2 要面对的强制点分叉。
 - **`AuditRecorder` 为 nil 时行为完全不变**（有测试钉住）：没配审计的实例不能因此开始报错。
 
 回归：`relay/forward_audit_test.go`（节点级拒绝 / 目标级拒绝 / 放行 / 无 recorder 兼容）、

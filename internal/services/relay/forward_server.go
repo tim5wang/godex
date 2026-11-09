@@ -91,11 +91,57 @@ type ForwardServer struct {
 	// node is not connected to the local hub (it joined the center instead), the
 	// tunnel dials it through the center's forward endpoint (CLI-equivalent
 	// path). Empty centerURL keeps the server local-only.
-	centerURL  string
+	centerURL   string
 	centerToken string
+
+	// auditRecorder, when set, receives the managed tunnels' FAILED dials. See
+	// recordAudit for why that is the row worth keeping.
+	auditRecorder func(ForwardAudit)
 
 	mu      sync.Mutex
 	entries map[string]*forwardEntry // by spec.ID
+}
+
+// SetAuditRecorder wires the managed tunnels' audit sink. nil (the default)
+// leaves every existing path unchanged.
+func (s *ForwardServer) SetAuditRecorder(recorder func(ForwardAudit)) {
+	if s == nil {
+		return
+	}
+	s.auditRecorder = recorder
+}
+
+// recordAudit reports one managed-tunnel dial failure.
+//
+// What is recorded is narrow on purpose, and both exclusions are deliberate:
+//
+//   - Not every accepted connection: a tunnel listener accepts connections for as
+//     long as it runs, so a per-connection row would grow with traffic rather
+//     than with decisions.
+//   - Not tunnel creation: Add() is also the config-load path, so every restart
+//     would re-emit one row per configured tunnel, drowning the signal in
+//     startup noise. Creation is already visible in the tunnel list and in the
+//     CRUD audit.
+//
+// What is left is the case that was genuinely invisible: bridge() returned early
+// and the local connection was closed, so a target that was unreachable or
+// REFUSED BY THE NODE'S EGRESS ALLOWLIST left no trace anywhere.
+//
+// No tenant is attributed. A managed tunnel is created by the operator (its CRUD
+// face is already NodeAccess-gated per node), and the connections it accepts are
+// anonymous local sockets, so naming a tenant here would be a guess. The record
+// therefore shows up on the operator's cross-tenant view and not in any tenant's.
+func (s *ForwardServer) recordAudit(nodeID, target string, allowed bool, reason string) {
+	if s == nil || s.auditRecorder == nil {
+		return
+	}
+	s.auditRecorder(ForwardAudit{
+		NodeID:  nodeID,
+		Target:  target,
+		Allowed: allowed,
+		Reason:  reason,
+		At:      time.Now(),
+	})
 }
 
 // NewForwardServer creates an empty forward server bound to the relay hub.
@@ -394,8 +440,11 @@ func (e *forwardEntry) bridge(local net.Conn) {
 	defer cancel()
 	stream, err := e.server.dialStream(ctx, e.spec.NodeID, e.spec.Target)
 	if err != nil {
-		// Node offline or target unreachable: surface once per connection by
-		// closing the local side immediately.
+		// Node offline, or the node refused the target (its egress allowlist
+		// answered tcp_close). Surface once per connection by closing the local
+		// side immediately — and record it, because this used to be silent:
+		// a failing tunnel produced no row and no log naming the target.
+		e.server.recordAudit(e.spec.NodeID, e.spec.Target, false, err.Error())
 		return
 	}
 	defer stream.Close()

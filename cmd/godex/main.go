@@ -435,6 +435,13 @@ func main() {
 			// relay channel to its target (ssh -L style), so an LLM gateway on
 			// an internal node can be reached from the center as localhost.
 			forwardServer := relay.NewForwardServer(relayHub)
+			// Managed-tunnel dial failures are audited too. These tunnels dial
+			// in-process (they never pass through ForwardHandler), so without this
+			// their failures were silent: bridge() closed the local connection and
+			// recorded nothing, which meant a target refused by a node's egress
+			// allowlist left no trace on the managed path while it did on the CLI
+			// path. Extracted for the same complexity-budget reason as the others.
+			wireForwardServerAudit(forwardServer, meteringService)
 			if bridge != nil {
 				// Center-bridge fallback: tunnels targeting nodes that joined the
 				// center but are not connected to the local hub are dialed
@@ -598,6 +605,36 @@ func openAccountsStore(cfg *config.Config) (*accounts.Service, func()) {
 		return nil, func() {}
 	}
 	return service, func() { _ = service.Close() }
+}
+
+// wireForwardServerAudit routes managed-tunnel dial failures into the metering
+// store's audit table.
+//
+// Managed tunnels dial in-process (ForwardServer.dialStream), so they never pass
+// through ForwardHandler and would otherwise be audited by nothing — a target
+// refused by a node's egress allowlist left no trace on this path while the CLI
+// path recorded one. Same composition-point shape as wireForwardAudit: package
+// relay keeps no storage dependency.
+//
+// The record carries no tenant. These tunnels are the operator's (their CRUD face
+// is NodeAccess-gated per node) and their connections are anonymous local
+// sockets, so attributing one to a tenant would be a guess; it lands on the
+// operator's cross-tenant view instead.
+func wireForwardServerAudit(forwardServer *relay.ForwardServer, meteringService *metering.Service) {
+	if forwardServer == nil || meteringService == nil {
+		return
+	}
+	forwardServer.SetAuditRecorder(func(attempt relay.ForwardAudit) {
+		meteringService.RecordForwardAuditQuiet(metering.ForwardAuditRecord{
+			TenantID: attempt.TenantID,
+			UserID:   attempt.UserID,
+			NodeID:   attempt.NodeID,
+			Target:   attempt.Target,
+			Allowed:  attempt.Allowed,
+			Reason:   attempt.Reason,
+			At:       attempt.At.UTC().Format(time.RFC3339Nano),
+		})
+	})
 }
 
 // wireForwardAudit routes center-side forwarding attempts into the metering

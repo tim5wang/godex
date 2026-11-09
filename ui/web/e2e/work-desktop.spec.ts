@@ -42,6 +42,11 @@ type Store = {
   delegations: StoredDelegation[]; cards: Record<string, Card>; events: Record<string, Event[]>;
   todos: Todo[]; seen: Record<string, string>;
   queuedTurns: Queued[];
+  // The conversation's own message list. Store-driven (rather than the shared constant) so a
+  // test can hand the feed an exact sequence — the turn-collapse bug only shows up in a
+  // specific shape (report → ledger calls → wrap-up line), which cannot be expressed by
+  // tweaking the generic 40-message fixture.
+  chatMessages: Array<{ id: string; role: string; content: unknown[]; created_at: string }>;
   // Models a freshly restarted server: a persisted session is NOT resident, so session
   // reads answer 404 until something opens it (POST /sessions hydrates it). Defaults to
   // false so only the restart-scenario test is affected.
@@ -95,7 +100,7 @@ function baseContext(overrides: Partial<Ctx> & { id: string; title: string }): C
 }
 
 function newStore(seed: Partial<Store> = {}): Store {
-  return { contexts: [], resources: [], relations: [], facts: [], sessions: {}, delegations: [], cards: {}, events: {}, todos: [], seen: {}, queuedTurns: [], coldStart: false, resident: [], aged: [], nudgesToday: 0, attentionActions: {}, checkpointHistory: {}, writes: [], failNextPatch: false, ...seed };
+  return { contexts: [], resources: [], relations: [], facts: [], sessions: {}, delegations: [], cards: {}, events: {}, todos: [], seen: {}, queuedTurns: [], chatMessages: CHAT_MESSAGES, coldStart: false, resident: [], aged: [], nudgesToday: 0, attentionActions: {}, checkpointHistory: {}, writes: [], failNextPatch: false, ...seed };
 }
 
 function checkpoint(body: Record<string, unknown>, revision: number) {
@@ -194,7 +199,7 @@ function handleWorkContext(store: Store) {
       // queued_turns is served from the store (the server owns the queue), so the
       // dock's queue strip is exercised through the real snapshot field rather than
       // a stubbed-away list.
-      return json({ session_id: id, locator: { channel: "web", key: id }, messages: CHAT_MESSAGES, display_messages: CHAT_MESSAGES, running: false, queued_turns: store.queuedTurns, updated_at: NOW });
+      return json({ session_id: id, locator: { channel: "web", key: id }, messages: store.chatMessages, display_messages: store.chatMessages, running: false, queued_turns: store.queuedTurns, updated_at: NOW });
     }
     // "Edit" (cancel + return the text) and "steer" on a queued turn.
     const queuedAction = path.match(/^\/sessions\/([^/]+)\/queued\/([^/]+)\/(cancel|steer)$/);
@@ -1662,4 +1667,46 @@ test("the Changed files card is collapsed until asked, and keeps its summary vis
   await card.locator(".changes-card-header").click();
   await expect(card).toHaveAttribute("data-expanded", "false");
   await expect(card.locator(".changes-card-list")).toHaveCount(0);
+});
+
+// Reported symptom: "在对话完成时，turn 了结果之后，又出现两个 work_context 的工具调用，
+// 然后输出新的 turn，我本轮对话预期的 turn 就被折叠了". Two causes, both asserted here:
+// the ledger calls rendered as extra tool rows after the answer, and the short wrap-up line
+// after them took the answer slot — which folded the actual report into the collapsed
+// process summary, so the turn the user was reading looked like it had collapsed.
+// Uses an exact message sequence because the bug only appears in this shape.
+test("a finished turn keeps its report visible when ledger calls follow it", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  const store = await install(page, seededStore());
+  const REPORT = "REPORTBODY".repeat(40); // long and unique: must stay visible
+  const WRAP_UP = "WRAPUPLINE-无新请求";
+  store.chatMessages = [
+    { id: "m-1", role: "user", content: [{ type: "text", text: "do it" }], created_at: NOW },
+    { id: "m-2", role: "assistant", content: [
+      { type: "text", text: "preamble before the work" },
+      { type: "tool_use", id: "tu-bash", name: "bash", input: { command: "ls" } },
+    ], created_at: NOW },
+    { id: "m-3", role: "user", content: [{ type: "tool_result", tool_use_id: "tu-bash", content: "ok" }], created_at: NOW },
+    { id: "m-4", role: "assistant", content: [
+      { type: "text", text: REPORT },
+      { type: "tool_use", id: "tu-cp", name: "work_context", input: { action: "checkpoint" } },
+    ], created_at: NOW },
+    { id: "m-5", role: "user", content: [{ type: "tool_result", tool_use_id: "tu-cp", content: "ok" }], created_at: NOW },
+    { id: "m-6", role: "assistant", content: [
+      { type: "tool_use", id: "tu-ack", name: "work_context", input: { action: "ack" } },
+    ], created_at: NOW },
+    { id: "m-7", role: "user", content: [{ type: "tool_result", tool_use_id: "tu-ack", content: "ok" }], created_at: NOW },
+    { id: "m-8", role: "assistant", content: [{ type: "text", text: WRAP_UP }], created_at: NOW },
+  ];
+  await openDesktopRail(page, "/chat/web/wc-topic-1");
+
+  const turn = page.locator(".chat-feed-v2-turn").first();
+  await expect(turn).toBeVisible();
+  // The report is VISIBLE. The process body is not rendered while collapsed, so a report
+  // folded into it would simply not be visible — which is the reported symptom.
+  await expect(page.getByText(REPORT, { exact: false })).toBeVisible();
+  // The wrap-up line stays visible too: it is a real message, so it must not be hidden.
+  await expect(page.getByText(WRAP_UP, { exact: false })).toBeVisible();
+  // And the ledger bookkeeping calls are not rendered as tool rows.
+  await expect(turn).not.toContainText("work_context");
 });

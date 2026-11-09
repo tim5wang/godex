@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FeedItem, FeedSegment } from "../src/lib/types";
-import { groupFeedItemsIntoTurns } from "../src/store/chat";
+import { groupFeedItemsIntoTurns, splitTurnSegments } from "../src/store/chat";
 import { shouldShowTurnDivider } from "../src/components/MessageFeedV2";
 
 function makeItem(partial: Partial<FeedItem> & Pick<FeedItem, "id" | "kind">): FeedItem {
@@ -165,5 +165,84 @@ describe("groupFeedItemsIntoTurns with thinking segments", () => {
     expect(grouped).toHaveLength(1);
     expect(grouped[0].finalBody).toBe("Answer first");
     expect(grouped[0].segments?.[1].thinking).toBe(true);
+  });
+});
+
+/**
+ * The reported bug: a turn ended "…report → work_context checkpoint → work_context ack →
+ * one-line wrap-up", and the visible turn the user was reading appeared to COLLAPSE. Two
+ * causes, both pinned here:
+ *   1. the wrap-up line took the answer slot, folding the actual report into the collapsed
+ *      process summary;
+ *   2. the ledger bookkeeping calls rendered as two extra tool rows after the answer.
+ * Real sequence (2026-11-09): the 720-char report became process, the 35-char "no new
+ * request" line became the answer.
+ */
+describe("ledger bookkeeping calls at the end of a turn", () => {
+  const ledgerCall = (id: string, action: string): FeedItem =>
+    makeItem({ id, kind: "tool", title: "work_context", input: { action }, status: "finished" });
+
+  it("keeps the report as the answer and the trailing wrap-up visible below it", () => {
+    const report = "R".repeat(720);
+    const wrapUp = "无新请求（仅日期上下文）。上一轮已交付。";
+    const items: FeedItem[] = [
+      makeItem({ id: "assistant:t1", kind: "assistant", turnId: "t1", body: report, timestamp: "2026-11-09T15:42:00Z" }),
+      ledgerCall("tool:cp", "checkpoint"),
+      ledgerCall("tool:ack", "ack"),
+      makeItem({ id: "assistant:t1#2", kind: "assistant", turnId: "t1", body: wrapUp, timestamp: "2026-11-09T15:43:00Z" }),
+    ];
+    const grouped = groupFeedItemsIntoTurns(items);
+    expect(grouped).toHaveLength(1);
+    const turn = grouped[0];
+
+    const { process, answer } = splitTurnSegments(turn.segments ?? []);
+    // The report is the visible answer…
+    expect(answer.map((s) => s.text).join("")).toContain(report);
+    expect(answer.map((s) => s.text).join("")).toContain(wrapUp);
+    // …and it is NOT buried in the collapsed process summary.
+    expect(process.some((s) => s.text === report)).toBe(false);
+
+    // copy / save-to-note / TTS read finalBody, so it must carry the report too.
+    expect(turn.finalBody).toContain(report);
+    expect(turn.summary?.startsWith("RRR")).toBe(true);
+  });
+
+  it("does not render ledger bookkeeping calls as tool rows", () => {
+    const items: FeedItem[] = [
+      makeItem({ id: "assistant:t1", kind: "assistant", turnId: "t1", body: "done", timestamp: "2026-11-09T15:42:00Z" }),
+      ledgerCall("tool:cp", "checkpoint"),
+      ledgerCall("tool:ack", "ack"),
+    ];
+    const grouped = groupFeedItemsIntoTurns(items);
+    const { process, answer } = splitTurnSegments(grouped[0].segments ?? []);
+    const tools = [...process, ...answer].filter((s) => s.type === "tool");
+    expect(tools).toHaveLength(0);
+  });
+
+  it("keeps read actions visible, since they are real work", () => {
+    const items: FeedItem[] = [
+      makeItem({ id: "assistant:t1", kind: "assistant", turnId: "t1", body: "checking", timestamp: "2026-11-09T15:42:00Z" }),
+      ledgerCall("tool:get", "get"),
+      ledgerCall("tool:focus", "focus"),
+      makeItem({ id: "assistant:t1#2", kind: "assistant", turnId: "t1", body: "here is what changed", timestamp: "2026-11-09T15:43:00Z" }),
+    ];
+    const grouped = groupFeedItemsIntoTurns(items);
+    const { process, answer } = splitTurnSegments(grouped[0].segments ?? []);
+    const tools = [...process, ...answer].filter((s) => s.type === "tool");
+    expect(tools.map((s) => s.item?.input?.action)).toEqual(["get", "focus"]);
+    // A read action is not bookkeeping, so the text after it is the answer as usual.
+    expect(answer.some((s) => s.text === "here is what changed")).toBe(true);
+  });
+
+  it("still lets a short answer stand alone when no bookkeeping call precedes it", () => {
+    // The length/lookahead guard must not misfire on an ordinary short reply.
+    const items: FeedItem[] = [
+      makeItem({ id: "assistant:t1", kind: "assistant", turnId: "t1", body: "Long preamble explaining what I am about to do.", timestamp: "2026-11-09T15:42:00Z" }),
+      makeItem({ id: "tool:bash", kind: "tool", turnId: "t1", title: "bash", status: "finished", timestamp: "2026-11-09T15:42:30Z" }),
+      makeItem({ id: "assistant:t1#2", kind: "assistant", turnId: "t1", body: "done.", timestamp: "2026-11-09T15:43:00Z" }),
+    ];
+    const grouped = groupFeedItemsIntoTurns(items);
+    const { answer } = splitTurnSegments(grouped[0].segments ?? []);
+    expect(answer.some((s) => s.text === "done.")).toBe(true);
   });
 });

@@ -1,4 +1,4 @@
-import type { AttachmentRef, FeedItem, TodoFeedItem, TodoFeedStats } from "../lib/types";
+import type { AttachmentRef, FeedItem, FeedSegment, TodoFeedItem, TodoFeedStats } from "../lib/types";
 
 /**
  * Group a flat chronological feed into per-turn items for the Chat V2 layout.
@@ -11,8 +11,9 @@ import type { AttachmentRef, FeedItem, TodoFeedItem, TodoFeedStats } from "../li
  *   assistant messages in history snapshots (thinking / tool-result / answer).
  * - user, subagent, command, warning and error items always stay standalone
  *   and close any open turn.
- * - the group's `finalBody` holds the LAST assistant text (the result); copy
- *   and save-to-note act only on it, not on the process.
+ * - the group's `finalBody` holds the turn's VISIBLE ANSWER (see splitTurnSegments); copy,
+ *   save-to-note and TTS act only on it, not on the process and not on a trailing wrap-up
+ *   line.
  *
  * Pure: does not mutate its input items.
  */
@@ -26,6 +27,22 @@ export function groupFeedItemsIntoTurns(items: FeedItem[]): FeedItem[] {
 
   const closeGroup = () => {
     if (openGroup) {
+      // finalBody is what copy / save-to-note / TTS return, so it must be the VISIBLE answer —
+      // not the last text, which a trailing wrap-up line would win after a ledger
+      // bookkeeping call. Same rule as the feed's answer slot, applied to one source of
+      // truth: the split is computed here instead of assuming the last body won.
+      const segments = openGroup.segments ?? [];
+      if (segments.length > 0) {
+        const answerText = splitTurnSegments(segments)
+          .answer.filter((segment) => segment.type === "text" && !segment.thinking)
+          .map((segment) => segment.text ?? "")
+          .join("\n\n")
+          .trim();
+        if (answerText) {
+          openGroup.finalBody = answerText;
+          openGroup.summary = firstSummaryLine(answerText);
+        }
+      }
       if (openGroupMaxIndex >= 0) {
         openGroup.forkMessageIndex = openGroupMaxIndex + 1;
       }
@@ -80,6 +97,8 @@ export function groupFeedItemsIntoTurns(items: FeedItem[]): FeedItem[] {
         // Track the final result text (used for copy / save-to-note). Reasoning
         // bubbles ("Thinking…") are process, not the answer, so they must not
         // become the turn's finalBody.
+        // Provisional: the answer region is recomputed in closeGroup once the whole turn is
+        // known (a trailing wrap-up line must not win this slot).
         if (!thinking) {
           group.finalBody = item.body;
           group.summary = firstSummaryLine(item.body);
@@ -107,6 +126,127 @@ export function shortID(id: string) {
 
 export function firstSummaryLine(text: string) {
   return text.trim().split("\n").find(Boolean) ?? "";
+}
+
+/**
+ * Ledger actions that RECORD rather than advance the work.
+ *
+ * work_context is a "report, then record" tool: ack is defined as "mark the stream seen
+ * AFTER reporting the focus", so a normal turn ends with a checkpoint/ack pair. Those calls
+ * are bookkeeping, not part of the answer, and they must not be mistaken for the turn's
+ * content. (todo_write is already dropped entirely at the same layer.)
+ */
+const LEDGER_BOOKKEEPING_ACTIONS: ReadonlySet<string> = new Set(["checkpoint", "ack", "propose_fact", "todo_patch"]);
+
+/** True when a tool call only records work already reported (see above). */
+export function isLedgerBookkeepingTool(name: string | undefined, input: Record<string, unknown> | undefined): boolean {
+  if (name !== "work_context") {
+    return false;
+  }
+  const action = typeof input?.action === "string" ? input.action : "";
+  return LEDGER_BOOKKEEPING_ACTIONS.has(action);
+}
+
+/**
+ * True when the text at `index` is a trailing WRAP-UP NOTE rather than the answer.
+ *
+ * The ledger tools are "report, then record" tools: ack is defined as "mark the stream
+ * seen AFTER reporting the focus", so a normal turn ends with
+ *
+ *   …report → work_context checkpoint → work_context ack → one-line wrap-up
+ *
+ * Two signals together, because either one alone is wrong:
+ *  - STRUCTURAL: the text directly follows a ledger bookkeeping call. This is what
+ *    separates a wrap-up from a legitimately short final answer ("done.") that simply
+ *    follows the work.
+ *  - LENGTH GUARD: an earlier non-thinking text is much longer. Without it, an "answer →
+ *    ack → short but real closing question" would lose the answer slot.
+ */
+export function isTrailingWrapUpNote(segments: FeedSegment[], index: number): boolean {
+  const segment = segments[index];
+  if (!segment || segment.type !== "text" || segment.thinking || !segment.text?.trim()) {
+    return false;
+  }
+  const hasTextAfter = segments
+    .slice(index + 1)
+    .some((later) => later.type === "text" && !later.thinking && Boolean(later.text?.trim()));
+  if (hasTextAfter) {
+    return false;
+  }
+  const previous = segments[index - 1];
+  if (!previous || previous.type !== "tool" || !isLedgerBookkeepingTool(previous.item?.title, previous.item?.input)) {
+    return false;
+  }
+  const own = segment.text.trim().length;
+  return segments.slice(0, index).some((earlier) => {
+    if (earlier.type !== "text" || earlier.thinking || !earlier.text?.trim()) {
+      return false;
+    }
+    const other = earlier.text.trim().length;
+    return other >= own * 2 && other - own >= 80;
+  });
+}
+
+/**
+ * Split a grouped turn into the collapsible PROCESS and the visible ANSWER.
+ *
+ * Two departures from "the last text is the answer", both driven by the observed shape
+ * "…report (720 chars) → work_context checkpoint → work_context ack → wrap-up (35 chars)",
+ * where the wrap-up took the answer slot and folded the actual report into the collapsed
+ * process summary — the turn the user was reading appeared to collapse:
+ *
+ *  1. Ledger bookkeeping calls (checkpoint / ack / propose_fact / todo_patch) are records
+ *     of work already reported, so they are removed from both sides: rendering them made a
+ *     finished turn look like it continued into two extra tool calls. Read actions
+ *     (get / focus / recall / plan) are real work and stay visible.
+ *  2. A trailing wrap-up note does not win the answer slot (see isTrailingWrapUpNote). It is
+ *     NOT hidden — it stays visible under the report, inside the answer region.
+ *
+ * Falls back to the last text so a turn can never lose its visible body.
+ */
+export function splitTurnSegments(segments: FeedSegment[]): { process: FeedSegment[]; answer: FeedSegment[] } {
+  // The boundary is found on the RAW sequence, before filtering: the "directly follows a
+  // ledger bookkeeping call" signal that identifies a wrap-up line only exists until those
+  // calls are removed. Filtering first made the wrap-up look like it directly followed the
+  // report, and it took the answer slot again.
+  const rawLastText = (): number => {
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const segment = segments[i]!;
+      if (segment.type === "text" && !segment.thinking && segment.text?.trim()) {
+        return i;
+      }
+    }
+    return -1;
+  };
+  let boundary = rawLastText();
+  if (boundary >= 0 && isTrailingWrapUpNote(segments, boundary)) {
+    for (let j = boundary - 1; j >= 0; j--) {
+      const earlier = segments[j]!;
+      if (earlier.type === "text" && !earlier.thinking && earlier.text?.trim()) {
+        boundary = j;
+        break;
+      }
+    }
+  }
+  // Then drop ledger bookkeeping calls for DISPLAY: they record work already reported, so
+  // rendering them made a finished turn look like it continued into two extra tool calls.
+  const forDisplay = (list: FeedSegment[]) =>
+    list.filter((segment) => {
+      if (segment.type === "text") {
+        return Boolean(segment.text?.trim());
+      }
+      if (segment.type === "tool") {
+        return !isLedgerBookkeepingTool(segment.item?.title, segment.item?.input);
+      }
+      return true;
+    });
+  if (boundary < 0) {
+    return { process: forDisplay(segments), answer: [] };
+  }
+  return {
+    process: forDisplay(segments.slice(0, boundary)),
+    answer: forDisplay(segments.slice(boundary)),
+  };
 }
 
 export function summarizeTool(input: Record<string, unknown> | undefined, output: string, error: string, running: boolean) {

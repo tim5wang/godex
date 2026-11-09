@@ -27,6 +27,7 @@ import { UiCardView, type UiCardData } from "./UiCardView";
 import { useI18n } from "../i18n";
 import { writeClipboardText } from "../lib/clipboard";
 import { formatDurationMs, shortTurnId } from "../lib/timelineUtils";
+import { splitTurnSegments } from "../store/chatFeedUtils";
 import type { FeedItem, FeedSegment } from "../lib/types";
 
 interface MessageFeedV2Props {
@@ -204,23 +205,15 @@ const FeedItemBody = memo(function FeedItemBody({
   // thinking segment can additionally be collapsed to a single line. The final
   // answer text always stays visible.
   if (item.segments?.length) {
-    const visible = item.segments.filter((segment) => segment.type !== "text" || Boolean(segment.text?.trim()));
-    // The final answer is the last non-thinking text segment; everything before
-    // it is process (thinking bubbles + tool rows + todos).
-    let answerStart = -1;
-    for (let i = visible.length - 1; i >= 0; i--) {
-      const segment = visible[i];
-      if (segment.type === "text" && !segment.thinking && segment.text?.trim()) {
-        answerStart = i;
-        break;
-      }
-    }
-    const processSegments = answerStart >= 0 ? visible.slice(0, answerStart) : visible;
-    const answerSegments = answerStart >= 0 ? visible.slice(answerStart) : [];
+    // Trailing wrap-up lines (the "…记完台账，无新请求。" kind that follows a
+    // work_context checkpoint/ack) must not take the answer slot; see splitTurnSegments.
+    const { process: processSegments, answer: answerSegments } = splitTurnSegments(item.segments);
     const hasProcess = processSegments.some((segment) => segment.type !== "text" || segment.thinking);
-    // Plain text-only turn (no thinking/tools): render with the original
-    // divider-based layout so nothing is dropped.
+    // Plain text-only turn (no thinking/tools): nothing to fold, so render every remaining
+    // segment with the original divider-based layout. Concatenating the split's two halves
+    // equals the filtered segment list, which keeps the bookkeeping calls out here too.
     if (!hasProcess) {
+      const visible = [...processSegments, ...answerSegments];
       return (
         <div className="chat-feed-v2-turn">
           {visible.map((segment, index) => (

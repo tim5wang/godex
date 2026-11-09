@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { AttachmentRef, FeedItem, ProtocolBlock, ProtocolMessage, RuntimeEvent, TodoFeedItem, TodoFeedStats } from "../lib/types";
 import { attachmentSummary, firstSummaryLine, isRecord, normalizeTodoItems, normalizeTodoStats, parseJSON, primaryToolInput, renderTodoList, shortID, summarizeTool, summarizeToolOutput, stringValue, truncateSummary, truncateToolTitle } from "./chatFeedUtils";
-export { groupFeedItemsIntoTurns } from "./chatFeedUtils";
+export { groupFeedItemsIntoTurns, splitTurnSegments } from "./chatFeedUtils";
 
 // Monotonic counter for live assistant text segments (store instance scope).
 // Streaming text gets a fresh segment id whenever the model emits text after

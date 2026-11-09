@@ -18,7 +18,7 @@ import (
 )
 
 // schemaVersion is the current ordered migration version.
-const schemaVersion = 4
+const schemaVersion = 5
 
 // statusArkid is the terminal read-only status.
 const statusArchived = "archived"
@@ -476,6 +476,24 @@ var migrations = map[int][]string{
 			PRIMARY KEY (tenant_id, context_id, item_key)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_wc_attention_actions_owner ON wc_attention_actions(tenant_id, owner_id, updated_at DESC)`,
+	},
+	5: {
+		// completed_at: when a plan item actually BECAME done.
+		//
+		// The attention-yield numerator ("work finished today") cannot use updated_at: any
+		// later edit of an already-done item bumps it, so a finished item would be re-counted
+		// as finished again — inflating the user's own yield, which is the one direction a
+		// self-reported metric must not lie in. This column is stamped exactly once per
+		// done-transition (and cleared when an item leaves done), so the daily count is exact.
+		//
+		// Added with ALTER rather than by editing migration 1: existing databases get the column
+		// here, and a fresh database runs 1..5 in order (CREATE without the column, then ALTER),
+		// so both paths converge. Editing migration 1 instead would make the ALTER fail on
+		// fresh databases with "duplicate column name".
+		`ALTER TABLE wc_todos ADD COLUMN completed_at TEXT NOT NULL DEFAULT ''`,
+		// The inbox is polled, and this count scans the owner's whole plan-item history (not
+		// just today's), so it is the one attention query whose cost grows with the account.
+		`CREATE INDEX IF NOT EXISTS idx_wc_todos_owner_completed ON wc_todos(tenant_id, owner_id, status, completed_at)`,
 	},
 }
 

@@ -526,6 +526,8 @@ export interface AttentionMetrics {
   /** Decisions the human made today (each verb counts once). The denominator of
    *  the attention-yield ratio. */
   actions_today: number;
+  /** Plan items the owner finished today. The numerator of the yield ratio. */
+  completed_today: number;
 }
 
 // Attention verbs the owner can apply to an inbox row. A row holds at most ONE of

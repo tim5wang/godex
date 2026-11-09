@@ -181,9 +181,15 @@ type AttentionMetrics struct {
 	AgedStreams int `json:"aged_streams"`
 	// ActionsToday is the DENOMINATOR of the attention-yield ratio: how many
 	// decisions the human actually made today (each claim/snooze/dismiss counts
-	// once, since a row holds one verb). The numerator (finished work) is not
-	// available cheaply on this path, so it is deliberately not faked here.
+	// once, since a row holds one verb).
 	ActionsToday int `json:"actions_today"`
+	// CompletedToday is the NUMERATOR: plan items the owner finished today, counted from
+	// the exact completion stamp (see Todo.CompletedAt) rather than from updated_at.
+	//
+	// Both sides of the attention-yield ratio are exposed as raw counts and the ratio is
+	// derived from them where it is displayed, so there is exactly one formula and the
+	// ratio can never disagree with the numbers printed next to it.
+	CompletedToday int `json:"completed_today"`
 }
 
 // DeferredAttention is a row the owner has already ruled on (snoozed until later,
@@ -365,6 +371,12 @@ func (s *Service) attentionMetrics(ctx context.Context, store *workcontext.Store
 	// ratio. Counted from recorded verbs, so only the owner's own actions count.
 	if made, err := store.CountAttentionActionsSince(ctx, scope, midnight); err == nil {
 		metrics.ActionsToday = made
+	}
+	// Work the owner finished today — the numerator. Same swallow-to-zero treatment as
+	// the counts above: a missing numerator must not take the inbox down, and a zero
+	// numerator with a non-zero denominator is a real (and informative) state.
+	if done, err := store.CountTodosCompletedSince(ctx, scope, midnight); err == nil {
+		metrics.CompletedToday = done
 	}
 	return metrics, nil
 }

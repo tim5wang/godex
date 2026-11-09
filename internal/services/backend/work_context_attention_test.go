@@ -903,3 +903,45 @@ func TestAttentionInboxNeverCrossesOwnersOnNewSignals(t *testing.T) {
 		}
 	}
 }
+
+// TestAttentionMetricsCarryTheYieldNumerator pins the last piece of the ratio: the ledger
+// must report finished work, not just decisions. The denominator alone is half a ratio, and
+// "5 decisions" reads very differently depending on whether 5 items also got finished.
+func TestAttentionMetricsCarryTheYieldNumerator(t *testing.T) {
+	base := time.Date(2026, 10, 31, 12, 0, 0, 0, time.Local)
+	service, _, scope := newAttentionService(t, base)
+	store, _ := service.WorkContexts()
+	stream := mustStream(t, service, scope, "收益率")
+
+	item, err := store.CreateTodo(context.Background(), scope, stream.ID, workcontext.TodoInput{Text: "完成它"})
+	if err != nil {
+		t.Fatalf("CreateTodo: %v", err)
+	}
+	before, err := service.AttentionInbox(context.Background(), scope)
+	if err != nil {
+		t.Fatalf("AttentionInbox: %v", err)
+	}
+	if before.Metrics.CompletedToday != 0 {
+		t.Fatalf("an open plan item must not count as finished, got %d", before.Metrics.CompletedToday)
+	}
+
+	done := "done"
+	if _, err := store.PatchTodo(context.Background(), scope, stream.ID, item.ID, workcontext.TodoPatch{Status: &done}); err != nil {
+		t.Fatalf("PatchTodo: %v", err)
+	}
+	after, err := service.AttentionInbox(context.Background(), scope)
+	if err != nil {
+		t.Fatalf("AttentionInbox: %v", err)
+	}
+	if after.Metrics.CompletedToday != 1 {
+		t.Fatalf("the ledger should report one finished item, got %d", after.Metrics.CompletedToday)
+	}
+
+	// Finishing work is NOT a decision, so the denominator must not move. This is what
+	// keeps the ratio honest: the numerator is work done BY the agent, the denominator is
+	// attention spent BY the human, and collapsing the two would make the ratio always 1.
+	if after.Metrics.ActionsToday != before.Metrics.ActionsToday {
+		t.Fatalf("finishing work is not a decision; actions changed %d -> %d",
+			before.Metrics.ActionsToday, after.Metrics.ActionsToday)
+	}
+}

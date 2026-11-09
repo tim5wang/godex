@@ -352,6 +352,9 @@ function handleWorkContext(store: Store) {
         unread_total: unreadTotal,
         aged_streams: Object.keys(aged).length,
         actions_today: Object.keys(store.attentionActions).length,
+        // Today's finished plan items — the yield numerator. Derived from the store's
+        // done items so a test can move it by finishing something, exactly like the server.
+        completed_today: store.todos.filter((todo) => todo.status === "done").length,
       };
       // Apply the owner's recorded verbs. The clock comparison uses this mock's own NOW
       // (not the real date), so a snooze created here stays inside its window.
@@ -1253,6 +1256,38 @@ test("keeps the attention ledger folded until asked, and reports spend against i
   await expect(ledger.getByText("5 / 12", { exact: true })).toBeVisible();
   await expect(ledger.getByText("每条主线上限 4 条", { exact: true })).toBeVisible();
   await expect(ledger.getByText("未读变动", { exact: true })).toBeVisible();
+});
+
+// The attention-yield ratio: finished work per decision. Two things matter and both are
+// asserted here: the ratio is derived from the two counts printed beside it (so it can
+// never disagree with them), and it is NOT rendered while the denominator is zero.
+test("the attention ledger shows attention yield, and says so instead of 0.0x with no decisions", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  const store = await install(page, seededStore());
+  await openSection(page, "待处理");
+  await boards(page).locator(".wd-metrics").locator(".wd-fold-toggle").click();
+  const ledger = boards(page).locator(".wd-metrics");
+
+  // No decisions yet today: the ratio is meaningless, and 0.0x would read as "my
+  // attention produced nothing" when the truth is "nothing has been decided yet".
+  await expect(ledger.getByText("注意力收益率", { exact: true })).toBeVisible();
+  await expect(ledger.getByText("待有决策", { exact: true })).toBeVisible();
+  await expect(ledger.getByText("0.0×", { exact: true })).toHaveCount(0);
+
+  // One finished plan item and one recorded decision ⇒ 1.0x.
+  store.todos.push({
+    id: "todo-yield", context_id: "ctx-1", text: "已完成的一项", status: "done", owner: "",
+    due_at: "", source: "human", position: 0, version: 1, created_at: NOW, updated_at: NOW,
+  });
+  store.attentionActions["todo_overdue:ctx-1"] = {
+    context_id: "ctx-1", kind: "todo_overdue", verb: "claim", until_at: "", reason: "",
+    actor_id: "local-operator", created_at: NOW, updated_at: NOW,
+  };
+  await page.reload();
+  await page.waitForSelector(".godex-sider", { timeout: 10000 });
+  await openSection(page, "待处理");
+  await boards(page).locator(".wd-metrics").locator(".wd-fold-toggle").click();
+  await expect(boards(page).locator(".wd-metrics").getByText("1.0×", { exact: true })).toBeVisible();
 });
 
 test("snoozing a row takes it off the list without losing it, and it comes back on its own", async ({ page }) => {

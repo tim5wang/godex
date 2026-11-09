@@ -40,7 +40,7 @@ func (s *Store) ListTodos(ctx context.Context, scope Scope, contextID string) ([
 
 func (s *Store) listTodos(ctx context.Context, tenantID, contextID string) ([]Todo, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, context_id, text, status, assignee, due_at, source, position, version, created_at, updated_at
+		SELECT id, context_id, text, status, assignee, due_at, source, position, version, created_at, updated_at, completed_at
 		FROM wc_todos WHERE tenant_id=? AND context_id=?
 		ORDER BY position, created_at, id`, tenantID, contextID)
 	if err != nil {
@@ -92,11 +92,15 @@ func (s *Store) CreateTodo(ctx context.Context, scope Scope, contextID string, i
 		Source: strings.TrimSpace(input.Source), Position: position, Version: 1,
 		CreatedAt: now, UpdatedAt: now,
 	}
+	// An item created directly as done still has a completion time.
+	if status == "done" {
+		item.CompletedAt = now
+	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO wc_todos(tenant_id, id, context_id, owner_id, text, status, assignee, due_at, source, position, version, created_at, updated_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO wc_todos(tenant_id, id, context_id, owner_id, text, status, assignee, due_at, source, position, version, created_at, updated_at, completed_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		tenantID, item.ID, contextID, ownerID, item.Text, item.Status, item.Owner, item.DueAt,
-		item.Source, item.Position, item.Version, item.CreatedAt, item.UpdatedAt); err != nil {
+		item.Source, item.Position, item.Version, item.CreatedAt, item.UpdatedAt, item.CompletedAt); err != nil {
 		return Todo{}, err
 	}
 	if err := recordEventTx(ctx, tx, tenantID, contextID, "todo_created", "新增计划："+item.Text, "desktop", "todo:"+item.ID+":v1", now); err != nil {
@@ -168,10 +172,19 @@ func (s *Store) PatchTodo(ctx context.Context, scope Scope, contextID, todoID st
 	now := nowRFC3339()
 	next.Version = current.Version + 1
 	next.UpdatedAt = now
+	// Stamp the completion time exactly once, on the transition INTO done, and clear it when
+	// the item leaves done. Leaving it alone on a re-patch of an already-done item is what
+	// keeps "finished today" exact (see Todo.CompletedAt).
+	switch {
+	case next.Status == "done" && current.Status != "done":
+		next.CompletedAt = now
+	case next.Status != "done":
+		next.CompletedAt = ""
+	}
 	res, err := tx.ExecContext(ctx, `
-		UPDATE wc_todos SET text=?, status=?, assignee=?, due_at=?, position=?, version=?, updated_at=?
+		UPDATE wc_todos SET text=?, status=?, assignee=?, due_at=?, position=?, version=?, updated_at=?, completed_at=?
 		WHERE tenant_id=? AND context_id=? AND id=? AND version=?`,
-		next.Text, next.Status, next.Owner, next.DueAt, next.Position, next.Version, now,
+		next.Text, next.Status, next.Owner, next.DueAt, next.Position, next.Version, now, next.CompletedAt,
 		tenantID, contextID, todoID, current.Version)
 	if err != nil {
 		return Todo{}, err
@@ -234,7 +247,7 @@ func (s *Store) DeleteTodo(ctx context.Context, scope Scope, contextID, todoID s
 // getTodoTx loads one plan item scoped by tenant and context.
 func getTodoTx(ctx context.Context, tx *sql.Tx, tenantID, contextID, todoID string) (Todo, error) {
 	row := tx.QueryRowContext(ctx, `
-		SELECT id, context_id, text, status, assignee, due_at, source, position, version, created_at, updated_at
+		SELECT id, context_id, text, status, assignee, due_at, source, position, version, created_at, updated_at, completed_at
 		FROM wc_todos WHERE tenant_id=? AND context_id=? AND id=?`, tenantID, contextID, todoID)
 	item, err := scanTodoRow(row)
 	if err != nil {
@@ -246,10 +259,29 @@ func getTodoTx(ctx context.Context, tx *sql.Tx, tenantID, contextID, todoID stri
 func scanTodoRow(scanner interface{ Scan(...any) error }) (Todo, error) {
 	var item Todo
 	if err := scanner.Scan(&item.ID, &item.ContextID, &item.Text, &item.Status, &item.Owner, &item.DueAt,
-		&item.Source, &item.Position, &item.Version, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		&item.Source, &item.Position, &item.Version, &item.CreatedAt, &item.UpdatedAt, &item.CompletedAt); err != nil {
 		return Todo{}, err
 	}
 	return item, nil
+}
+
+// CountTodosCompletedSince counts the owner's plan items that became done since a
+// timestamp. It is the NUMERATOR of the attention-yield ratio ("finished work" per unit
+// of attention).
+//
+// Scoped by owner_id on wc_todos directly, not by joining contexts: a plan item carries
+// its own owner, so the count needs no per-stream lookup and cannot leak across owners.
+// (The attention-yield numerator deliberately does NOT use taskboard card completions: a
+// card has no owner field — only the acting name in created_by — so counting those would
+// mix every tenant's work into one user's yield.)
+func (s *Store) CountTodosCompletedSince(ctx context.Context, scope Scope, since time.Time) (int, error) {
+	tenantID, ownerID := scopeArgs(scope)
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM wc_todos
+		WHERE tenant_id=? AND owner_id=? AND status='done' AND completed_at >= ?`,
+		tenantID, ownerID, since.UTC().Format(time.RFC3339Nano)).Scan(&count)
+	return count, err
 }
 
 // normalizeTodoStatus defaults an empty status to todo and rejects unknown values.

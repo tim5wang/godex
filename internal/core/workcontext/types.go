@@ -102,6 +102,10 @@ type Todo struct {
 	Version   int    `json:"version"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
+	// CompletedAt is when the item BECAME done (empty while it is not done). Kept
+	// apart from UpdatedAt so "finished today" stays exact: an edit to an already-done
+	// item bumps UpdatedAt but must not count as a second completion.
+	CompletedAt string `json:"completed_at"`
 }
 type TodoInput struct {
 	Text   string `json:"text"`

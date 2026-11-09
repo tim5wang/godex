@@ -55,6 +55,18 @@ export function AttentionLedger(props: {
           <div className="wd-muted">{tr("metricsDecisions")}</div>
           <strong>{metrics.actions_today}</strong>
         </div>
+        {/* The yield itself: finished work per decision, derived from the two counts
+            above so it can never disagree with them. Rendered as "—" while the
+            denominator is zero: 0.0× would read as "my attention produced nothing"
+            when the truth is "nothing has been decided yet today". */}
+        <div className="wd-metrics-cell">
+          <div className="wd-muted">{tr("metricsYield")}</div>
+          <strong>
+            {metrics.actions_today > 0
+              ? tr("metricsYieldValue", { value: (metrics.completed_today / metrics.actions_today).toFixed(1) })
+              : tr("metricsYieldPending")}
+          </strong>
+        </div>
       </div>
     </FoldCard>
   );

@@ -75,6 +75,37 @@
 | 观测投影默认不含会话标题（标题属用户内容） | `TestEventStoreStripsSessionTitlesByDefault`、`TestEventStoreStrippedTitleNeverReachesEventLog`、`TestEventStoreIncludeTitlesOptIn`（`relay/eventstore_test.go`）；配置默认值见 `core/config/relay_config_test.go` |
 | 租户节点数上限强制（超限拒绝入网，超管 claim 不受限） | `TestJoinRouteRefusesEnrolmentPastTenantLimit`、`TestJoinRouteUnlimitedByDefault`、`TestAdminClaimIgnoresTheAllowance`（`httpapi/join_node_limit_test.go`） |
 
+### 5.1 中心本地面（非节点面）：flow 及其同类
+
+上面 §2–§5 都在回答「某个**到节点**的面能否隔离」。还有一类面根本不到节点：数据存在**本实例**上。
+「多节点平台多租户」形态下它们**不属于任何租户**——中心的 flow 店、notes 店、taskboard 台账、
+本机模型配置，都是**平台操作员自己这台机器的状态**（设计 §6：中心不留租户内容）。
+所以这类面的正确边界不是「按租户作用域」，而是「**租户根本到不了**」。
+
+闸门：`requireCenterLocalData`（`httpapi/center_local_gate.go`）——平台管理员通过、节点行动者通过
+（远程节点 Settings/Flows 页要能用自己的身份打到自己的数据，与 `requirePlatformAdminOrNodeActor`、
+`authorizeConfigWrite` 同一条豁免）、其余主体 403、无 Principal 则 401（失败关闭）。
+
+| 面 | 入口 | 闸门 | 回归测试 |
+|---|---|---|---|
+| Flow 定义面（list / generate / create / get / validate / publish / delete version / delete） | `GET\|POST\|DELETE /v1/flows...` | `requireCenterLocalData(protected)` | `TestTenantUserIsRefusedTheCenterLocalFlowSurface`、`TestOperatorStillReachesTheCenterLocalFlowSurface`、`TestNodeActorStillReachesTheCenterLocalFlowSurface`、`TestUnauthenticatedCallerIsRefusedTheCenterLocalFlowSurface`（`httpapi/center_local_gate_test.go`） |
+| Flow 会话/运行面（读 + cancel / diagnose / step / human reply / inspection / human-tasks / events|signals）：读面走本闸门，**执行**面另叠 `requireCenterExecution` | `/v1/flows/{id}/sessions*`、`/v1/flow-runs/*`、`/v1/flow-inspection`、`/v1/human-tasks` | 同上（层叠） | 同上表（`centerLocalFlowCalls` 是表驱动的，新增一条路由只加一行） |
+| FlowSession 事件流（WebSocket，可走 `?token=`） | `GET /v1/flows/{id}/sessions/{sessionID}/ws` | `voiceQueryTokenAuth(requireCenterLocalData(protected))`——**闸门必须在 query-token 解析之内**，否则合法 iframe/WS 会拿到 401（它本来没有 header 可带） | 同上 |
+
+**与「加一列 tenant_id」的区别**（这是本节的要点，容易被后来者改回去）：
+
+1. **正确性**：flow 店现在是全局单目录，加列就得连同**每一处读写**都带谓词。
+   这次漏掉整个 flow 面，正是这种「靠记忆」的代价；面还有很多（notes/memory/taskboard/skills/…）。
+2. **必要性**：租户自己的 flow 与 run 跑在**租户自己的节点**上，中心一个字节都没有（§6）；
+   给中心这张表加 tenant_id 是在为一个不存在的东西建隔离，还会掩盖真正的修法。
+3. **切换前提**：若将来确实要做「注册即用 SaaS」，正确形态是 **instance-per-tenant**
+   （每租户一进程/容器，隔离从「代码正确性」变成「部署边界」），而不是在单进程里续堆 tenant_id。
+
+**尚未收口的同类面**（同形：数据在本实例、路由仅 `protected`）：notes、memory、taskboard、
+skills/agent-templates/node-library、automation（cron/heartbeat，连 `CreatedBy` 都硬编码 `"web"`）、
+config/providers 等。纳入时应**逐个确认是否真是中心本地面**（例如 memory 的 scope 已是 session/personal/org，
+属于另一套隔离语义），不要成批包一层了事。
+
 ## 6. 已知缺口（本文不含「已解决」的部分）
 
 | 缺口 | 现状 |
@@ -84,9 +115,20 @@
 
 ## 7. 维护约定
 
-新增任何「按 id 访问某节点」的入口时：
+### 7.1 新增「按 id 访问某节点」的入口时
 
 1. 走现有 seam（HTTP 走 `authorizeNodeAccess` / `ProxyHandler.AuthorizeNode`；进程内其它面走
    `newNodeAccessAuthorizer`），**不要**自己写一遍策略——面 6 就是这么漏的。
 2. 在本文件 §2 增加一行，并在§2 的测试列给出**跨租户 403** 的用例（只有「正常路径能跑通」不算）。
 3. 若该面有副作用（建监听、开连接、写文件），断言**副作用未发生**，而不只是响应码。
+
+### 7.2 新增「中心本地面」路由时（§5.1）
+
+1. 先问一句：**这块数据在哪个实例上？** 在本实例上且不带租户维度 ⇒ 用
+   `requireCenterLocalData`，不要用裸 `protected`（“任意登录用户”不是“操作员”）。
+2. 只有动作是**启动/唤醒一次执行**时才额外叠 `requireCenterExecution`；`requireCenterLocalData`
+   不能替代它（两者管不同的事：谁能看这块数据 vs 谁能在中心跑 agent）。
+3. WebSocket / iframe 入口要留意闸门与 query-token 解析的**嵌套顺序**（见 §5.1 表第三行）。
+4. 把新路由加进 `centerLocalFlowCalls` 那样的**表驱动**用例，并至少断言：租户 403、操作员非 403、
+   节点行动者非 403、未认证 401。
+5. **不要**因为它“不隔离”就顺手给它加 tenant_id 列——先回看 §5.1 的三条区别。

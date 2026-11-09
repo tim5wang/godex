@@ -705,6 +705,60 @@ type Decision struct {
 `requireCenterExecution` 下（它用于中心驱动远程执行），要实时取标题需另开一条只读代理面，
 超出本轮范围。
 
+### 6.1 中心本地面：靠闸门而非 tenant_id ✅ 已落地（2026-11-09 / 11-10）
+
+上表回答的是「中心**存不存**租户内容」。还有一类更基础的问题：「**谁能碰**中心自己的东西」。
+中心的 flow 店、notes、durable memory、采集日志、cron 任务、本机模型配置、**自己的工作区**
+（文件/git/shell/终端）都属于**平台操作员这台机器**，不带租户维度，也不应该有。
+在「多节点平台多租户」形态下（决策⑨：中心只做身份/转发/计量/平台管理，租户算力在租户自己的节点），
+它们的正确边界不是「按租户作用域」，而是「**租户根本到不了**」。
+
+闸门：`requireCenterLocalData`（`internal/runtime/httpapi/center_local_gate.go`）——
+平台管理员通过、**节点行动者通过**（远程节点被中心驱动时以 relay-trust 到达，它自己的数据就是它自己的；
+与 `requirePlatformAdminOrNodeActor`、`authorizeConfigWrite` 同一条豁免）、其余主体 403、无 Principal 则 401。
+
+**接线方式**：闸门加在 `httpapi.go` 的**接线处、按面传递**（`centerLocal := requireCenterLocalData(protected)`，
+再交给整个 registrar），而不是在每个 registrar 里逐条路由包——一条线覆盖一个面，后来新增的路由无法被忘记。
+逐路由那种写法就是 flow 面一次漏掉 19 条路由的原因。
+
+| 已收口的面 | 入口（代表） |
+|---|---|
+| Flow 定义/会话/运行/巡检/人工任务（含 FlowSession WS） | `/v1/flows*`、`/v1/flow-runs/*`、`/v1/flow-inspection`、`/v1/human-tasks` |
+| 知识面 | `/notes*`、`/memory*` |
+| 采集日志（本实例全量请求/响应正文） | `/llm-capture/*` |
+| 本实例的定时作业 | `/automation/cron/*`、`/automation/heartbeat*` |
+| 机器配置与能力清单 | `/agent-templates*`、`/acp/agents/*`、`/skills/catalog`、`/v1/node-library*`、`/v1/mcp/*`、`/providers*` |
+| 包/模型目录与仓库面 | `/models`、`/security/*`、`/packages*`、`/prompts`、`/commands` |
+| **中心自己的工作区** | `/files/*`、`/git/diff*`、`/v1/terminal/*`、`/control/sandbox/*`、`/v1/voice*`、`/v1/tts*`、`/browser/frames`、`/desktop/events` |
+
+⚠️ **一条被写错的前提（2026-11-10 修正，值得记住）**：初版把最后一行那些面列为「**不需要**闸门」，
+理由写的是「是节点本地数据，经 `/control/nodes/{id}/proxy` 到达，由 NodeAccess 把关」。
+该理由对**代理路径**成立，但那些路由**同时也注册在中心自己的 mux 上**，而 `protected` 接受登录会话。
+实测（修正前，租户成员会话）：`POST /control/sandbox/exec` → **200 且命令真的执行了**；
+`/files/list`、`/git/diff`、`/v1/voice/status`、`/desktop/events` → 200；`/v1/terminal/{id}` → 404（handler 跑到了）。
+即**任意租户的任意登录用户可读操作员的工作区并在其中执行命令**。
+
+教训的形状：**「这块数据在别处有闸门」是关于一条路径的断言**；
+同一路由挂在两条路径上，就必须在**两条**上都检查。
+（更早的 flow 面漏是「忘了」，这次是「以为别处管了」——同类后果，不同成因。）
+
+**`/preview` 是唯一仍不包此闸门的面**，且是刻意的：它自带只认 web token（不认登录会话）的鉴权，
+租户在那里本来就拿 **401**（比 403 更严）；且它依赖的 `?token=` 路径是在该检查**之后**才装上 Principal，
+外面再包一层会把合法 iframe 打成 401。
+
+**仍待拍板的残留缺口**：`GET /config` 只对密钥掩码（`resolve.go:808/817-822`），
+所以任意登录用户仍可读到机器配置（路径/workspace/model）——已实测租户 200；
+写面非受限项（`model`、`workspace_dir`）同样可改。
+当初反对路由级闸门的理由（会 403 掉远程节点自己的设置编辑）**已被节点行动者豁免解决**，
+故方案 A（把 `GET/PUT /config` 收紧为平台管理员或节点行动者）现已可行，但会改动 §3.3 的已文档化语义，
+**未擅改**。详见 `multi-tenant-authorization-matrix.md` §5.1–§5.2。
+
+**为什么不加一列 `tenant_id`**：这些店都是全局单目录，加列就得连同**每一处读写**都带谓词，
+而本次一次漏掉 flow 整个面（19 条路由）+ 一整组同类面，正是「靠记忆」的代价；
+且租户自己的 flow/notes/记忆跑在**租户自己的节点**上，中心一个字节都没有（§6 上表），
+给中心这些店加列是在为一个不存在的东西建隔离。若将来确实要做「注册即用 SaaS」，
+正确形态是 **instance-per-tenant**（隔离从「代码正确性」变成「部署边界」），而不是在单进程里续堆 tenant_id。
+
 ---
 
 ## 7. 订阅与 entitlement（P3）

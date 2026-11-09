@@ -246,9 +246,19 @@ func accountUserID(principal identity.Principal) string {
 // /admin/tenants/{id}/*. The difference is only which actor is passed down, so the
 // ownership rules (no owner removal, no owner grant) live in one place and cannot
 // drift between the two surfaces.
+//
+// Split across three registrars rather than kept as one: holding every route in a
+// single function tripped the cyclomatic budget (score 45, limit 40 — caught by
+// internal/architecture's complexity gate). The three parts are surfaces with
+// different gates, so the split follows the design instead of quieting the gate.
 func registerMemberRoutes(mux *http.ServeMux, accountsService *accounts.Service, protected func(http.Handler) http.Handler) {
-	tenantAdmin := requirePlatformAdmin(protected)
+	registerTenantMemberRoutes(mux, accountsService, protected)
+	registerAdminMemberRoutes(mux, accountsService, requirePlatformAdmin(protected))
+	registerAcceptInviteRoute(mux, accountsService)
+}
 
+// registerTenantMemberRoutes wires the caller's OWN tenant (gate: a tenant role).
+func registerTenantMemberRoutes(mux *http.ServeMux, accountsService *accounts.Service, protected func(http.Handler) http.Handler) {
 	// ---- tenant side: the caller's own tenant ----
 	mux.Handle("GET /tenant/members", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !authServiceAvailable(w, accountsService) {
@@ -387,8 +397,11 @@ func registerMemberRoutes(mux *http.ServeMux, accountsService *accounts.Service,
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"removed": true})
 	})))
+}
 
-	// ---- admin side: any tenant, by id ----
+// registerAdminMemberRoutes wires the same operations for ANY tenant, by id, with the
+// platform superadmin as the actor (gate: requirePlatformAdmin).
+func registerAdminMemberRoutes(mux *http.ServeMux, accountsService *accounts.Service, tenantAdmin func(http.Handler) http.Handler) {
 	// The same operations, with the platform admin as the actor. Kept separate
 	// routes rather than one polymorphic handler so the two authorization stories
 	// stay legible: here the gate is requirePlatformAdmin, above it is a tenant role.
@@ -493,11 +506,15 @@ func registerMemberRoutes(mux *http.ServeMux, accountsService *accounts.Service,
 		writeJSON(w, http.StatusOK, map[string]any{"member": memberResponse{
 			UserID: member.UserID, Role: member.Role, JoinedAt: member.JoinedAt}})
 	})))
+}
 
-	// Accepting an invite creates the caller's session, so it is NOT behind
-	// `protected`: the one-time code IS the credential. Requiring a login as well
-	// would deadlock the invite for a person who has no account yet — exactly the
-	// case it exists for.
+// registerAcceptInviteRoute wires the one-time-code acceptance.
+//
+// Accepting an invite creates the caller's session, so it is NOT behind
+// `protected`: the one-time code IS the credential. Requiring a login as well
+// would deadlock the invite for a person who has no account yet — exactly the
+// case it exists for.
+func registerAcceptInviteRoute(mux *http.ServeMux, accountsService *accounts.Service) {
 	mux.Handle("POST /auth/accept-invite", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !authServiceAvailable(w, accountsService) {
 			return

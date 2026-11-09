@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -266,5 +268,164 @@ func TestRevealSecretIsRefusedToTenantUser(t *testing.T) {
 	resp, _ = doJSON(t, http.MethodPost, server.URL+"/config/reveal", "", map[string]any{"path": "web.token"})
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated reveal: status = %d, want 401", resp.StatusCode)
+	}
+}
+
+// nodeLocalCalls are the center's own WORKSPACE surfaces: files, git, the shell,
+// terminals, media and the desktop event bridge.
+//
+// These were left ungated on a reasoning error worth recording. I had written that
+// node-local data "is reached through /control/nodes/{id}/proxy and gated by
+// NodeAccess" — true of the PROXY path, but these routes are ALSO registered on the
+// center's own mux, where `protected` accepts a login session. Measured
+// 2026-11-10 with a tenant member's session, before the fix:
+//
+//	POST /control/sandbox/exec  -> 200 and it RAN the command
+//	GET  /files/list            -> 200
+//	GET  /git/diff              -> 200
+//	GET  /v1/voice/status       -> 200
+//	GET  /desktop/events        -> 200
+//	DELETE /v1/terminal/{id}    -> 404 (reachable; the 404 was the id, not the gate)
+//
+// So any signed-in user of any tenant could read the operator's workspace and
+// execute commands in it. The lesson is in the shape of the mistake: "this data is
+// gated elsewhere" is a claim about ONE path, and a route registered on two paths
+// needs the check on both.
+func nodeLocalCalls() []struct {
+	name   string
+	method string
+	path   string
+	body   any
+} {
+	return []struct {
+		name   string
+		method string
+		path   string
+		body   any
+	}{
+		{"list files", http.MethodGet, "/files/list", nil},
+		{"git diff", http.MethodGet, "/git/diff", nil},
+		{"git diff stats", http.MethodGet, "/git/diff-stats", nil},
+		// The 404 is the missing terminal id, so the gate is what decides this:
+		// a 403 here is the gate answering, a 404 would mean the handler ran.
+		{"delete a terminal", http.MethodDelete, "/v1/terminal/zz_gate_probe", nil},
+		{"sandbox readdir", http.MethodPost, "/control/sandbox/fs", map[string]any{"op": "readdir", "path": "."}},
+		// An echo command: harmless, and it proves the difference between "refused"
+		// and "executed" without needing a side effect to observe.
+		{"sandbox exec", http.MethodPost, "/control/sandbox/exec", map[string]any{"command": "echo gate-probe"}},
+		{"voice status", http.MethodGet, "/v1/voice/status", nil},
+	}
+}
+
+// TestTenantUserIsRefusedTheNodeLocalSurfaces is the regression for the hole above:
+// the center's own workspace is the operator's, so no tenant principal may read or
+// execute in it.
+func TestTenantUserIsRefusedTheNodeLocalSurfaces(t *testing.T) {
+	server := newCenterLocalTestServer(t, "web-secret")
+	tenantToken, _, _ := registerTenantOwner(t, server, "tenant@example.com")
+
+	for _, tc := range nodeLocalCalls() {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, body := doJSON(t, tc.method, server.URL+tc.path, tenantToken, tc.body)
+			if resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("%s as tenant: status = %d, want 403: %v", tc.name, resp.StatusCode, body)
+			}
+		})
+	}
+}
+
+// TestOperatorStillReachesTheNodeLocalSurfaces: the operator owns this workspace,
+// so the gate must not refuse them.
+//
+// Asserts "not 403" rather than a specific code, because 404/409 here would be
+// handler-level lifecycle semantics (a probe id that does not exist, a voice engine
+// that is not running) rather than anything about the gate.
+func TestOperatorStillReachesTheNodeLocalSurfaces(t *testing.T) {
+	server := newCenterLocalTestServer(t, "web-secret")
+
+	for _, tc := range nodeLocalCalls() {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, body := doJSON(t, tc.method, server.URL+tc.path, "web-secret", tc.body)
+			if resp.StatusCode == http.StatusForbidden {
+				t.Fatalf("operator refused on %s: %v", tc.name, body)
+			}
+		})
+	}
+}
+
+// TestNodeActorStillReachesTheNodeLocalSurfaces pins the exemption that keeps
+// remote operation working — the reason this gate is requireCenterLocalData and not
+// requirePlatformAdmin.
+//
+// When the operator drives a remote node, the request is proxied to that node and
+// arrives wearing the relay-trust identity. A node's own files, git and shell are
+// node-local to IT, so refusing node actors here would break driving a remote node
+// from the center — a documented capability (same trap as /channels/* and
+// restricted config settings).
+func TestNodeActorStillReachesTheNodeLocalSurfaces(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.WebToken = "web-secret"
+	manager := newTestManager(t, cfg)
+	if _, err := manager.Update(context.Background(), config.UpdateRequest{Values: map[string]any{
+		"control.credential": "ck_node_secret",
+		"control.node_id":    "my-laptop",
+	}}); err != nil {
+		t.Fatalf("seed control config: %v", err)
+	}
+	caller := &stubCaller{responses: []protocol.Response{
+		{Content: []protocol.Block{protocol.TextBlock("done")}},
+	}}
+	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
+	t.Cleanup(server.Close)
+	trust := relay.SignRelayTrust("my-laptop", "ck_node_secret")
+
+	for _, tc := range nodeLocalCalls() {
+		t.Run(tc.name, func(t *testing.T) {
+			var payload []byte
+			if tc.body != nil {
+				data, err := json.Marshal(tc.body)
+				if err != nil {
+					t.Fatalf("marshal: %v", err)
+				}
+				payload = data
+			}
+			req, err := http.NewRequest(tc.method, server.URL+tc.path, bytes.NewReader(payload))
+			if err != nil {
+				t.Fatalf("new request: %v", err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set(relay.RelayTrustHeader, trust)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("%s: %v", tc.name, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusForbidden {
+				t.Fatalf("node actor refused on %s (status %d): remote operation would break", tc.name, resp.StatusCode)
+			}
+		})
+	}
+}
+
+// TestTenantUserIsRefusedPreviewWithoutItsOwnCredential documents why /preview is
+// NOT wrapped in the center-local gate.
+//
+// It carries dedicated auth that accepts only the web token (never a login
+// session), so a tenant already gets 401 there — a stricter answer than the 403 the
+// gate would give. Wrapping it would be wrong rather than merely redundant: the
+// ?token= path that iframes depend on installs the principal AFTER that check, so an
+// outer gate would 401 a legitimate iframe.
+func TestTenantUserIsRefusedPreviewWithoutItsOwnCredential(t *testing.T) {
+	server := newCenterLocalTestServer(t, "web-secret")
+	tenantToken, _, _ := registerTenantOwner(t, server, "tenant@example.com")
+
+	resp, body := doJSON(t, http.MethodGet, server.URL+"/preview/static", tenantToken, nil)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("tenant preview: status = %d, want 401 from its own web-token-only auth: %v", resp.StatusCode, body)
+	}
+	// The security property is the same either way: it must not serve content.
+	if resp.StatusCode < 400 {
+		t.Fatalf("preview served a tenant: %d", resp.StatusCode)
 	}
 }

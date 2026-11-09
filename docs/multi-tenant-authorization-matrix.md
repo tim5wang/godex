@@ -99,6 +99,7 @@
 | 本实例的定时作业 | `/automation/cron/*`、`/automation/heartbeat*` | 同上 |
 | 机器配置与能力清单 | `/agent-templates*`、`/acp/agents/*`、`/skills/catalog`、`/v1/node-library*`、`/v1/mcp/*`、`/providers*` | 同上 |
 | 包/模型目录与仓库面 | `/models`、`/security/*`、`/packages*`、`/prompts`、`/commands` | 同上 |
+| **中心自己的工作区**（文件 / git / 终端 / shell / 媒体 / 桌面事件） | `/files/*`、`/git/diff*`、`/v1/terminal/*`、`/control/sandbox/*`、`/v1/voice*`、`/v1/tts*`、`/browser/frames`、`/desktop/events` | `TestTenantUserIsRefusedTheNodeLocalSurfaces`、`TestOperatorStillReachesTheNodeLocalSurfaces`、`TestNodeActorStillReachesTheNodeLocalSurfaces` |
 
 回归测试（`httpapi/center_local_gate_test.go`）：`TestTenantUserIsRefusedTheCenterLocalSurface`（表驱动，
 租户全部 403）、`TestOperatorStillReachesTheCenterLocalSurface`（操作员非 403）、
@@ -106,13 +107,43 @@
 `TestUnauthenticatedCallerIsRefusedTheCenterLocalSurface`（未认证 401）。表名 `centerLocalCalls()`——
 新增一条路由只加一行；表中**有意排除**的项都写了理由（如本夹具无 MCP manager 故 `/v1/mcp/*` 未注册）。
 
+#### ⚠️ 2026-11-10 修正：一条被写错的前提，漏了整个「中心自己的工作区」
+
+本节初版把 `/files`、`/git`、`/terminal`、`/control/sandbox`、`/desktop`、`/voice`、`/browser`
+列在「**有意不加此闸门**」里，理由写的是「是**节点本地**数据，经 `/control/nodes/{id}/proxy` 到达，
+由 **NodeAccess** 把关」。该理由对**代理路径**成立，但这些路由**同时也注册在中心自己的 mux 上**
+（`registerFileRoutes(mux, protected, manager)` 等），而 `protected` 是接受登录会话的。
+
+用**租户成员**的会话实测（修正前）：
+
+| 请求 | 实际结果 |
+|---|---|
+| `POST /control/sandbox/exec {"command":"echo probe"}` | **200，且命令真的执行了** |
+| `GET /files/list` | 200 |
+| `GET /git/diff` | 200 |
+| `GET /v1/voice/status` | 200 |
+| `GET /desktop/events` | 200（SSE 被接受） |
+| `DELETE /v1/terminal/{id}` | 404（404 是那个不存在的 id，说明 handler 跑到了） |
+
+即：**任意租户的任意登录用户可读操作员的工作区，并在其中执行命令。**
+
+教训的形状值得记住：**「这块数据在别处有闸门」是关于一条路径的断言**；一个同时挂在两条路径上的路由，
+需要在**两条**上都检查。比这更早的同类错误是 flow 面（§5.1）——那次是「忘了」，这次是「以为别处管了」。
+
+修正后（实测）：上述全部 **403**；闸门用 `requireCenterLocalData`（**不是** `requirePlatformAdmin`），
+因为节点行动者必须继续放行，否则中心驱动远程节点的文件/shell 会断。
+
+**`/preview` 是唯一仍不包此闸门的面**，且是刻意的：它自带只认 web token（**不认登录会话**）的鉴权，
+租户在那里本来就拿 **401**（比 403 更严）；而它依赖的 `?token=` 路径是在该检查**之后**才装上 Principal 的，
+外面再包一层闸门会把合法 iframe 打成 401。见 `TestTenantUserIsRefusedPreviewWithoutItsOwnCredential`。
+
 **有意不加此闸门的面**（写在这里，免得后来者“顺手统一”反而打断能力）：
 
 | 面 | 为何不用本闸门 |
 |---|---|
-| `/files`、`/git`、`/terminal`、`/control/sandbox`、`/desktop`、`/voice`、`/browser`、`/preview` | 是**节点本地**数据，经 `/control/nodes/{id}/proxy` 到达，由 **NodeAccess**（§2–§5）把关——那才是它们正确的多租户缝口。加本闸门会打断「中心驱动远程节点」这条文档化能力 |
+| `/preview/static*`、`/preview/proxy/*` | 自带只认 web token 的鉴权（租户 401）；`?token=` 路径在检查后才装 Principal，外包闸门会打断合法 iframe |
 | `/usage`（node 模型流量）与 `/usage/relay`（转发计量） | 一个属节点、一个是**已按租户作用域**的中心数据（§5 已覆盖）；一刀切会把租户自己的用量报表封死 |
-| `/config` | 按**配置项**闸（`authorizeConfigWrite`，§3.3）：`/config` 在 UI 里是节点作用域的，路由级闸门会 403 掉远程节点自己的设置编辑 |
+| `/config` | 按**配置项**闸（`authorizeConfigWrite`，§3.3）：`/config` 在 UI 里是节点作用域的，路由级闸门会 403 掉远程节点自己的设置编辑。**但读面仍是缺口**：`GET /config` 只掩码密钥（`resolve.go:808/817-822`）就能被任意登录用户读到机器配置（路径、workspace、model），写面非受限项（`model`、`workspace_dir`）也可被改——已实测 `GET /config` 对租户 200。待拍板收口方案（A：路由收紧为操作员/节点行动者；B：只给已知跨用户影响的项补 `PlatformAdmin` 标记） |
 
 ### 5.2 由本次收口核出的独立漏洞：`/config/reveal` 明文密钥
 

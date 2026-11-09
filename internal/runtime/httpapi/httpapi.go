@@ -277,14 +277,35 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	registerFlowSessionStreamRoute(mux, service, centerLocal, func() string { return manager.Current().WebToken })
 	registerNodeLibraryRoutes(mux, service, centerLocal)
 	registerMCPRoutes(mux, centerLocal, service.MCPManager())
-	registerFileRoutes(mux, protected, manager)
-	registerSandboxRoutes(mux, manager, protected)
-	registerTerminalRoutes(mux, protected)
-	registerVoiceRoutes(mux, service, manager, protected, func() string { return manager.Current().WebToken })
-	registerBrowserFrameRoutes(mux, service, protected, func() string { return manager.Current().WebToken })
-	registerDesktopRoutes(mux, service, protected)
+	// Node-local surfaces. The premise that these are "reached through
+	// /control/nodes/{id}/proxy and gated by NodeAccess" describes the PROXY path
+	// only — and these routes are ALSO registered right here on the center's own
+	// mux, where `protected` accepts a login session. Measured 2026-11-10 with a
+	// tenant member's session: /control/sandbox/exec returned 200 and actually ran
+	// the command, /files/list and /git/diff returned 200, /v1/terminal/* answered
+	// 404 (reachable). So the center's own workspace was readable and its shell was
+	// executable by any signed-in user of any tenant.
+	//
+	// The gate is the right shape for all of them because the intent is already
+	// written on those routes ("the node's own web token OR the relay trust
+	// header"): requireCenterLocalData admits exactly the platform operator and a
+	// node acting for it, and refuses a login session. A node must stay admitted —
+	// that relay-trust path is how the center drives a remote node's files/sandbox —
+	// so plain requirePlatformAdmin would break remote operation.
+	//
+	// /preview is the one exception, and deliberately so: it carries its own auth
+	// that accepts ONLY the web token (never a login session), so a tenant already
+	// gets 401 there. It is left alone rather than wrapped, because the query-token
+	// path iframes depend on installs the principal after that check and an outer
+	// gate would 401 a legitimate iframe.
+	registerFileRoutes(mux, centerLocal, manager)
+	registerSandboxRoutes(mux, manager, centerLocal)
+	registerTerminalRoutes(mux, centerLocal)
+	registerVoiceRoutes(mux, service, manager, centerLocal, func() string { return manager.Current().WebToken })
+	registerBrowserFrameRoutes(mux, service, centerLocal, func() string { return manager.Current().WebToken })
+	registerDesktopRoutes(mux, service, centerLocal)
 	registerPreviewRoutes(mux, manager)
-	registerGitRoutes(mux, protected, manager)
+	registerGitRoutes(mux, centerLocal, manager)
 	// Watch surface (wrist remote control). The device registry is created on
 	// demand so pairing works out of the box; a failure to open it must not take
 	// the whole API surface down, so it degrades to "pairing disabled".

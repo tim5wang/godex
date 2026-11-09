@@ -976,7 +976,10 @@ func (s *Service) sweepScope(ctx context.Context, store *workcontext.Store, scop
 		}
 	}
 
-	// Overdue and soon-due plan items.
+	// Overdue and soon-due plan items. Collected first, then routed: the same candidates
+	// either collapse into ONE morning page (see deliverPlanNudges) or go out one push each.
+	// Collecting is what makes the choice possible — and the choice must be made before any
+	// push, since a delivered reminder is deduplicated forever and could not be re-batched.
 	todos, err := store.ListOpenPlanTodos(ctx, scope, 200)
 	if err != nil {
 		if ctx.Err() == nil {
@@ -984,6 +987,7 @@ func (s *Service) sweepScope(ctx context.Context, store *workcontext.Store, scop
 		}
 		return
 	}
+	candidates := make([]planNudge, 0, len(todos))
 	for _, todo := range todos {
 		state := workcontext.DueStateOf(todo.DueAt, now, dueSoonWindow)
 		if state == workcontext.DueNone {
@@ -995,9 +999,21 @@ func (s *Service) sweepScope(ctx context.Context, store *workcontext.Store, scop
 			body = "计划项已过期"
 			itemKind = AttentionKindTodoOverdue
 		}
-		s.pushNudge(ctx, store, scope, now, nudgeEventKind, todo.ContextID,
-			fmt.Sprintf("nudge:todo:%s:%s:%s", todo.ID, todo.DueAt, state),
-			itemKind, todo.ID, body+": "+todo.Text, todo.ContextTitle, actions)
+		candidates = append(candidates, planNudge{
+			contextID: todo.ContextID,
+			dedup:     fmt.Sprintf("nudge:todo:%s:%s:%s", todo.ID, todo.DueAt, state),
+			itemKind:  itemKind,
+			entityID:  todo.ID,
+			title:     body + ": " + todo.Text,
+			body:      todo.ContextTitle,
+		})
+	}
+	if s.deliverPlanNudges(ctx, store, scope, now, actions, candidates) {
+		return
+	}
+	for _, candidate := range candidates {
+		s.pushNudge(ctx, store, scope, now, nudgeEventKind, candidate.contextID,
+			candidate.dedup, candidate.itemKind, candidate.entityID, candidate.title, candidate.body, actions)
 	}
 }
 

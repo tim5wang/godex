@@ -18,7 +18,7 @@ import (
 )
 
 // schemaVersion is the current ordered migration version.
-const schemaVersion = 5
+const schemaVersion = 6
 
 // statusArkid is the terminal read-only status.
 const statusArchived = "archived"
@@ -494,6 +494,27 @@ var migrations = map[int][]string{
 		// The inbox is polled, and this count scans the owner's whole plan-item history (not
 		// just today's), so it is the one attention query whose cost grows with the account.
 		`CREATE INDEX IF NOT EXISTS idx_wc_todos_owner_completed ON wc_todos(tenant_id, owner_id, status, completed_at)`,
+	},
+	6: {
+		// Daily-digest delivery ledger: at most ONE digest page per owner per local day.
+		//
+		// A separate table rather than a per-stream event because UnreadCounts is
+		// kind-agnostic (see unread_kinds_test.go): recording "I sent you a digest" as an
+		// event would raise the stream's unread badge and list it under "what changed",
+		// i.e. the notification about noise would itself become noise. Like wc_seen and
+		// wc_attention_actions, this is a record of how the OWNER relates to the system,
+		// not of what the stream contains — it never bumps a context version.
+		//
+		// The primary key is (tenant, owner, day) so the claim is atomic: a second sweep
+		// on the same day inserts nothing and therefore stays silent.
+		`CREATE TABLE IF NOT EXISTS wc_digest_deliveries (
+			tenant_id TEXT NOT NULL,
+			owner_id TEXT NOT NULL,
+			day TEXT NOT NULL,
+			item_count INTEGER NOT NULL DEFAULT 0,
+			delivered_at TEXT NOT NULL,
+			PRIMARY KEY (tenant_id, owner_id, day)
+		)`,
 	},
 }
 

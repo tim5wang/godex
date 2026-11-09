@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // LightpandaBinary manages the lightpanda CLI binary: path resolution, version cache, and command execution.
@@ -233,6 +234,17 @@ func (b *LightpandaBinary) FetchDump(ctx context.Context, targetURL, format stri
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	// CommandContext kills only the process it started. Here that is the mock/real
+	// lightpanda binary, and any child IT spawned (a wrapper script's `sleep`, a
+	// browser helper) keeps the stdout/stderr pipes open — so Run() would block on
+	// the pipe copy well past the deadline and the caller's timeout would never
+	// take effect. WaitDelay forces the pipes closed when the deadline passes.
+	//
+	// Found 2026-11-10 via TestFetchDump_Timeout: the test's mock binary is
+	// `#!/bin/sh; sleep 3600`, and with a 100ms context the call hung until the
+	// package test timeout (90s+), leaking a `sleep 3600` process each run. The same
+	// reasoning is already documented in internal/runtime/heartbeat/watchdog.go.
+	cmd.WaitDelay = time.Second
 
 	if err := cmd.Run(); err != nil {
 		stderrStr := strings.TrimSpace(stderr.String())

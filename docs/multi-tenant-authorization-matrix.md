@@ -157,7 +157,20 @@
 |---|---|
 | `/preview/static*`、`/preview/proxy/*` | 自带只认 web token 的鉴权（租户 401）；`?token=` 路径在检查后才装 Principal，外包闸门会打断合法 iframe |
 | `/usage`（node 模型流量）与 `/usage/relay`（转发计量） | 一个属节点、一个是**已按租户作用域**的中心数据（§5 已覆盖）；一刀切会把租户自己的用量报表封死 |
-| `/config` | 按**配置项**闸（`authorizeConfigWrite`，§3.3）：`/config` 在 UI 里是节点作用域的，路由级闸门会 403 掉远程节点自己的设置编辑。**但读面仍是缺口**：`GET /config` 只掩码密钥（`resolve.go:808/817-822`）就能被任意登录用户读到机器配置（路径、workspace、model），写面非受限项（`model`、`workspace_dir`）也可被改——已实测 `GET /config` 对租户 200。待拍板收口方案（A：路由收紧为操作员/节点行动者；B：只给已知跨用户影响的项补 `PlatformAdmin` 标记） |
+| `/config` | **已收口**（2026-11-10）：见下。原先“按配置项闸”的说法只保护了受限**写**，读面与非受限写（`model`/`workspace_dir`）对任意登录用户开着 |
+| `POST /control/self/proxy-credential` | 节点用自己已持有的 `ck_` 换发（§9 R2），**不能**要求 web token，否则把平台主密钥塞回每台机器 |
+| `POST /control/join` | 租户一次性 join token 入网（§3.5），token 就是凭据 |
+
+**`/config` 的收口，以及它之前为何被挡（2026-11-10）**：设计 §3.3 当初反对路由级闸门，
+理由是「`/config` 在 UI 里是节点作用域，路由闸门会 403 掉远程节点自己的设置编辑」。
+该前提仍成立，但**结论不再成立**：`requireCenterLocalData` **放行节点行动者**，
+代理到远程节点的请求以 relay-trust 身份到达，改的是**它自己的**配置——正是远程 Settings 今天在做的事。
+实测（修正前，租户成员）：`GET /config`、`/config/meta`、`/config/schema`、`/config/doctor` 均 200
+（视图内密钥**已掩码**，故泄露的是机器布局：路径/workspace/model）；而 `PUT /config` 的
+**非受限项**（`model`、`workspace_dir`）被接受——逐项规则只拒 schema 标了 `PlatformAdmin` 的那些。
+现全部走 `requireCenterLocalData`，`authorizeConfigWrite` 作为第二层保留（它的标记也是 UI 禁用控件的依据）。
+回归：`TestTenantUserIsRefusedTheConfigSurface`、`TestOperatorStillReachesTheConfigSurface`、
+`TestNodeActorStillReachesTheConfigSurface`（表名 `configLocalCalls()`）。
 
 ### 5.2 由本次收口核出的独立漏洞：`/config/reveal` 明文密钥
 

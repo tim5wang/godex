@@ -64,12 +64,19 @@ func newCenterLocalTestServer(t *testing.T, webToken string) *httptest.Server {
 //   - `/v1/mcp/*`: this test server has no MCP manager, so registerMCPRoutes returns
 //     early and registers nothing (asserting on an unregistered path would pass or
 //     fail for the wrong reason). Its gate is the same wiring line in httpapi.go.
-//   - node-local surfaces (/files, /git, /terminal, /control/sandbox, /desktop,
-//     /voice, /browser, /preview): reached through /control/nodes/{id}/proxy and
-//     gated by NodeAccess, which is the correct multi-tenant seam and is covered by
-//     the §2-node-face tests in this package.
-//   - `/usage` (node model traffic + tenant-scoped relay metering) and `/config`
-//     (gated per ITEM — see config_admin_gate_test.go).
+//
+// Two families that USED to be excused here are now covered by their own tables,
+// because the excuses turned out to be wrong (both were found by probing rather
+// than by reading):
+//   - the center's own workspace (/files, /git, /terminal, /control/sandbox,
+//     /desktop, /voice, /browser) → nodeLocalCalls(); the excuse was "reached
+//     through /control/nodes/{id}/proxy and gated by NodeAccess", which described
+//     the PROXY path while these routes also sit on the center's own mux.
+//   - `/config` → configLocalCalls(); the excuse was "gated per ITEM", which left
+//     the reads open and the non-restricted writes open.
+//
+// `/usage` is split rather than excused: the meta-gateway administration is gated
+// (see center_local_gate_usage_test.go) while /usage/relay stays tenant-scoped.
 func centerLocalCalls() []struct {
 	name   string
 	method string
@@ -427,5 +434,127 @@ func TestTenantUserIsRefusedPreviewWithoutItsOwnCredential(t *testing.T) {
 	// The security property is the same either way: it must not serve content.
 	if resp.StatusCode < 400 {
 		t.Fatalf("preview served a tenant: %d", resp.StatusCode)
+	}
+}
+
+// configLocalCalls are this instance's own configuration surface.
+//
+// The excuse for leaving these open was "gated per ITEM" (authorizeConfigWrite).
+// Measured 2026-11-10 with a TENANT MEMBER's session: GET /config, /config/meta,
+// /config/schema and /config/doctor all returned 200 (secrets inside the view are
+// masked, so this was disclosure of the machine's layout — workspace and project
+// paths, model, env file locations — rather than of credentials), and PUT /config
+// accepted writes to the NON-restricted items, because the item-level rule only
+// refuses the schema-marked ones.
+func configLocalCalls() []struct {
+	name   string
+	method string
+	path   string
+	body   any
+} {
+	return []struct {
+		name   string
+		method string
+		path   string
+		body   any
+	}{
+		{"config view", http.MethodGet, "/config", nil},
+		{"config meta", http.MethodGet, "/config/meta", nil},
+		{"config schema", http.MethodGet, "/config/schema", nil},
+		{"config doctor", http.MethodGet, "/config/doctor", nil},
+		// A non-restricted item: before the gate this was accepted from a tenant
+		// session, which is what "gated per item" left open.
+		{"config write (non-restricted item)", http.MethodPut, "/config", map[string]any{
+			"values": map[string]any{"model": "tenant-chosen-model"},
+		}},
+		{"config write (restricted item)", http.MethodPut, "/config", map[string]any{
+			"values": map[string]any{"web.token": "stolen"},
+		}},
+	}
+}
+
+// TestTenantUserIsRefusedTheConfigSurface covers the config surface, including the
+// non-restricted WRITE that the item-level rule never refused.
+func TestTenantUserIsRefusedTheConfigSurface(t *testing.T) {
+	server := newCenterLocalTestServer(t, "web-secret")
+	tenantToken, _, _ := registerTenantOwner(t, server, "tenant@example.com")
+
+	for _, tc := range configLocalCalls() {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, body := doJSON(t, tc.method, server.URL+tc.path, tenantToken, tc.body)
+			if resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("%s as tenant: status = %d, want 403: %v", tc.name, resp.StatusCode, body)
+			}
+		})
+	}
+}
+
+// TestOperatorStillReachesTheConfigSurface: the operator owns this instance's
+// configuration.
+func TestOperatorStillReachesTheConfigSurface(t *testing.T) {
+	server := newCenterLocalTestServer(t, "web-secret")
+
+	for _, tc := range configLocalCalls() {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, body := doJSON(t, tc.method, server.URL+tc.path, "web-secret", tc.body)
+			if resp.StatusCode == http.StatusForbidden {
+				t.Fatalf("operator refused on %s: %v", tc.name, body)
+			}
+		})
+	}
+}
+
+// TestNodeActorStillReachesTheConfigSurface is the reason the route-level gate is
+// now safe, and it must not be "simplified" away.
+//
+// The design (§3.3) argued against a route gate precisely because /config is
+// node-scoped in the Web UI: with a remote node selected the request is proxied
+// there and arrives as the relay-trust node identity, so a platform-admin-only gate
+// would 403 every remote Settings edit. The premise held; the conclusion does not,
+// because requireCenterLocalData admits node actors — and this test is what keeps
+// that true.
+func TestNodeActorStillReachesTheConfigSurface(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.WebToken = "web-secret"
+	manager := newTestManager(t, cfg)
+	if _, err := manager.Update(context.Background(), config.UpdateRequest{Values: map[string]any{
+		"control.credential": "ck_node_secret",
+		"control.node_id":    "my-laptop",
+	}}); err != nil {
+		t.Fatalf("seed control config: %v", err)
+	}
+	caller := &stubCaller{responses: []protocol.Response{
+		{Content: []protocol.Block{protocol.TextBlock("done")}},
+	}}
+	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
+	t.Cleanup(server.Close)
+	trust := relay.SignRelayTrust("my-laptop", "ck_node_secret")
+
+	for _, tc := range configLocalCalls() {
+		t.Run(tc.name, func(t *testing.T) {
+			var payload []byte
+			if tc.body != nil {
+				data, err := json.Marshal(tc.body)
+				if err != nil {
+					t.Fatalf("marshal: %v", err)
+				}
+				payload = data
+			}
+			req, err := http.NewRequest(tc.method, server.URL+tc.path, bytes.NewReader(payload))
+			if err != nil {
+				t.Fatalf("new request: %v", err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set(relay.RelayTrustHeader, trust)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("%s: %v", tc.name, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusForbidden {
+				t.Fatalf("node actor refused on %s: remote Settings editing would break", tc.name)
+			}
+		})
 	}
 }

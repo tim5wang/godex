@@ -732,6 +732,7 @@ type Decision struct {
 | **中心自己的工作区** | `/files/*`、`/git/diff*`、`/v1/terminal/*`、`/control/sandbox/*`、`/v1/voice*`、`/v1/tts*`、`/browser/frames`、`/desktop/events` |
 | 元 LLM 网关的用量与管理 | `/usage/*`（除 `/usage/relay`）、`/v1/biz/keys*` |
 | 实例自属面 | `/runtime/service*`、`/channels` |
+| **本实例自己的配置** | `/config`、`/config/meta`、`/config/schema`、`/config/doctor`、`/config/reload`、`/config/reveal`、`PUT /config` |
 | **节点注册表的「写」面** | `POST /control/nodes/register`、`.../{id}/heartbeat`、`.../{id}/credential`、`DELETE /control/nodes/{id}`、`POST /control/node-proxy-token`、`POST /control/self/join` |
 
 **刻意保持分裂/开放的三处**（别“顺手统一”，会打断能力）：注册表的**读**面（`GET /control/nodes`、
@@ -761,12 +762,15 @@ type Decision struct {
 租户在那里本来就拿 **401**（比 403 更严）；且它依赖的 `?token=` 路径是在该检查**之后**才装上 Principal，
 外面再包一层会把合法 iframe 打成 401。
 
-**仍待拍板的残留缺口**：`GET /config` 只对密钥掩码（`resolve.go:808/817-822`），
-所以任意登录用户仍可读到机器配置（路径/workspace/model）——已实测租户 200；
-写面非受限项（`model`、`workspace_dir`）同样可改。
-当初反对路由级闸门的理由（会 403 掉远程节点自己的设置编辑）**已被节点行动者豁免解决**，
-故方案 A（把 `GET/PUT /config` 收紧为平台管理员或节点行动者）现已可行，但会改动 §3.3 的已文档化语义，
-**未擅改**。详见 `multi-tenant-authorization-matrix.md` §5.1–§5.2。
+**`/config` 已收口（2026-11-10）**，理由值得记：原先只做逐项闸门（`authorizeConfigWrite`），
+于是受限**写**被拦，而**读**面（`GET /config`、`/config/meta`、`/config/schema`、`/config/doctor`）
+与**非受限写**（`model`、`workspace_dir`）对任意登录用户开着——实测租户成员均 200/被接受。
+视图内密钥**已掩码**（`resolve.go:808/817-822`），所以泄露的是机器布局而非凭据。
+当初反对路由级闸门的前提（`/config` 在 UI 里是节点作用域，路由闸门会 403 掉远程编辑）**仍成立**，
+但结论不成立：`requireCenterLocalData` **放行节点行动者**，远程请求以 relay-trust 身份改**自己的**配置。
+现全部走该闸门，`authorizeConfigWrite` 保留为第二层（其 schema 标记也是 UI 的依据）。
+`POST /control/self/proxy-credential` 与 `POST /control/join` 仍**有意不接**该闸门（前者节点用自持 `ck_` 换发，
+后者 join token 即凭据）。详见 `multi-tenant-authorization-matrix.md` §5.1–§5.2。
 
 **为什么不加一列 `tenant_id`**：这些店都是全局单目录，加列就得连同**每一处读写**都带谓词，
 而本次一次漏掉 flow 整个面（19 条路由）+ 一整组同类面，正是「靠记忆」的代价；

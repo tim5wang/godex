@@ -53,6 +53,29 @@ func registerRuntimeServiceRoutes(mux *http.ServeMux, serviceRuntime serviceRunt
 }
 
 func registerControlNodeRoutes(mux *http.ServeMux, controlRegistry controlNodeRegistry, overviewProvider nodeOverviewProvider, protected func(http.Handler) http.Handler, nodeProxyRead func(http.Handler) http.Handler, policy identity.Policy, accountsService *accounts.Service) {
+	// The registry's WRITE surface is platform administration, not a per-user
+	// setting: it registers machines, mints their credentials and removes nodes.
+	//
+	// Measured 2026-11-10 with a TENANT MEMBER's session and a wired registry,
+	// before this gate:
+	//
+	//	POST   /control/nodes/register          -> 200 (registered a node)
+	//	POST   /control/nodes/{id}/credential    -> 200, returned a fresh ck_ credential
+	//	DELETE /control/nodes/{id}               -> 200, removed the operator's node
+	//	POST   /control/nodes/{id}/heartbeat     -> 200
+	//
+	// So any signed-in user of any tenant could enrol machines into the platform's
+	// registry, mint credentials for someone else's node, and destroy nodes.
+	//
+	// The READ routes above deliberately KEEP accepting a login session (the Web UI's
+	// node pages use one, and tenancy is enforced by masking inside the handler) —
+	// that split is asserted by TestNodeProxyReadAcceptsSessionWithoutEscalation, so
+	// "the node surface takes a session" is true of reads and false of writes.
+	//
+	// Node actors stay admitted: a node's own registry page is reached by proxying to
+	// it, where it serves as the relay-trust identity. Tenant node ENROLMENT is the
+	// join-token route (/control/join, §3.5) and is untouched by this.
+	nodeAdmin := requireCenterLocalData(protected)
 	mux.Handle("GET /control/nodes", nodeProxyRead(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if controlRegistry == nil {
 			writeJSON(w, http.StatusOK, []noderegistry.NodeView{})
@@ -90,7 +113,7 @@ func registerControlNodeRoutes(mux *http.ServeMux, controlRegistry controlNodeRe
 		}
 		writeJSON(w, http.StatusOK, node)
 	})))
-	mux.Handle("DELETE /control/nodes/{id}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("DELETE /control/nodes/{id}", nodeAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if controlRegistry == nil {
 			writeError(w, http.StatusNotFound, fmt.Errorf("control node registry is unavailable"))
 			return
@@ -109,7 +132,7 @@ func registerControlNodeRoutes(mux *http.ServeMux, controlRegistry controlNodeRe
 		}
 		writeJSON(w, http.StatusOK, node)
 	})))
-	mux.Handle("POST /control/nodes/register", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /control/nodes/register", nodeAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if controlRegistry == nil {
 			writeError(w, http.StatusNotFound, fmt.Errorf("control node registry is unavailable"))
 			return
@@ -126,7 +149,7 @@ func registerControlNodeRoutes(mux *http.ServeMux, controlRegistry controlNodeRe
 		}
 		writeJSON(w, http.StatusOK, node)
 	})))
-	mux.Handle("POST /control/nodes/{id}/heartbeat", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /control/nodes/{id}/heartbeat", nodeAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if controlRegistry == nil {
 			writeError(w, http.StatusNotFound, fmt.Errorf("control node registry is unavailable"))
 			return
@@ -143,7 +166,10 @@ func registerControlNodeRoutes(mux *http.ServeMux, controlRegistry controlNodeRe
 		}
 		writeJSON(w, http.StatusOK, node)
 	})))
-	mux.Handle("POST /control/nodes/{id}/credential", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /control/nodes/{id}/credential", nodeAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Mints a NEW ck_ credential for the named node, which is what the node
+		// then authenticates its relay channel with — i.e. whoever may call this
+		// may hand themselves a machine's identity.
 		if controlRegistry == nil {
 			writeError(w, http.StatusNotFound, fmt.Errorf("control node registry is unavailable"))
 			return

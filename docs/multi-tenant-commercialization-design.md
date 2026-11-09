@@ -730,6 +730,21 @@ type Decision struct {
 | 机器配置与能力清单 | `/agent-templates*`、`/acp/agents/*`、`/skills/catalog`、`/v1/node-library*`、`/v1/mcp/*`、`/providers*` |
 | 包/模型目录与仓库面 | `/models`、`/security/*`、`/packages*`、`/prompts`、`/commands` |
 | **中心自己的工作区** | `/files/*`、`/git/diff*`、`/v1/terminal/*`、`/control/sandbox/*`、`/v1/voice*`、`/v1/tts*`、`/browser/frames`、`/desktop/events` |
+| 元 LLM 网关的用量与管理 | `/usage/*`（除 `/usage/relay`）、`/v1/biz/keys*` |
+| 实例自属面 | `/runtime/service*`、`/channels` |
+| **节点注册表的「写」面** | `POST /control/nodes/register`、`.../{id}/heartbeat`、`.../{id}/credential`、`DELETE /control/nodes/{id}`、`POST /control/node-proxy-token`、`POST /control/self/join` |
+
+**刻意保持分裂/开放的三处**（别“顺手统一”，会打断能力）：注册表的**读**面（`GET /control/nodes`、
+`/{id}`、`/{id}/overview`）**继续接受登录会话**——Web UI 节点页用它，租户靠 handler 内遮蔽；
+`POST /control/self/proxy-credential` **不能**接本闸门（节点用自己已持有的 `ck_` 换发凭据，
+要求 web token 等于把平台主密钥塞回每台机器）；`POST /control/join` 是租户一次性 join token 入网（§3.5）。
+`godex node join`（CLI）直接打中心、不走本机路由，故不受影响。
+
+**三轮扫描的共同教训**：后两轮首扫时“看不见”，是因为**夹具没接依赖**（无 usage 库 / 无 registry）⇒
+路由未注册 ⇒ 404，而我把 404 读成了“没问题”。**未注册路由的 404 不是关于闸门的证据**。
+另有一例同样的形状：schema 已把 `control.node_proxy_token` 标为 `PlatformAdmin`
+（理由正是「谁能写它就能给自己挑一个节点凭据」），而**签发**该凭据的路由却只挂 `protected` ——
+逐项闸门保护了存储值，却把**铸造口**敞着。审计时应把「写值」与「签发/导出该值」成对看。
 
 ⚠️ **一条被写错的前提（2026-11-10 修正，值得记住）**：初版把最后一行那些面列为「**不需要**闸门」，
 理由写的是「是节点本地数据，经 `/control/nodes/{id}/proxy` 到达，由 NodeAccess 把关」。

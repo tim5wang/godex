@@ -11,6 +11,17 @@ import (
 	"testing"
 )
 
+// withOperatorPrincipal stands in for the production `protected` chain in fixture
+// tests that register a route directly on a bare mux: the real chain ALWAYS
+// installs a Principal (web token ⇒ operator, relay trust ⇒ node actor, login
+// session ⇒ tenant user), so a pass-through middleware here would test a wiring
+// state that cannot occur and would make any identity gate look broken.
+func withOperatorPrincipal(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), operatorPrincipal())))
+	})
+}
+
 // TestSelfJoinRegistersWithCenterAndPersistsConfig exercises the node-side
 // auto-join endpoint end to end against a fake center: it registers the node,
 // issues a credential, and persists the control config (which the live-apply
@@ -43,7 +54,7 @@ func TestSelfJoinRegistersWithCenterAndPersistsConfig(t *testing.T) {
 	t.Cleanup(center.Close)
 
 	mux := http.NewServeMux()
-	registerSelfJoinRoute(mux, manager, func(h http.Handler) http.Handler { return h })
+	registerSelfJoinRoute(mux, manager, withOperatorPrincipal)
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
@@ -116,7 +127,7 @@ func TestSelfJoinRequestsItsOwnProxyCredential(t *testing.T) {
 	t.Cleanup(center.Close)
 
 	mux := http.NewServeMux()
-	registerSelfJoinRoute(mux, manager, func(h http.Handler) http.Handler { return h })
+	registerSelfJoinRoute(mux, manager, withOperatorPrincipal)
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
@@ -148,7 +159,7 @@ func TestSelfJoinValidatesRequiredFields(t *testing.T) {
 	cfg := newTestConfig(t)
 	manager := newTestManager(t, cfg)
 	mux := http.NewServeMux()
-	registerSelfJoinRoute(mux, manager, func(h http.Handler) http.Handler { return h })
+	registerSelfJoinRoute(mux, manager, withOperatorPrincipal)
 	server := httptest.NewServer(mux)
 	defer server.Close()
 

@@ -38,7 +38,23 @@ type selfJoinRequest struct {
 // config goes through config.Manager.Update, which triggers the live-apply
 // callback (relay agent / heartbeat / bridge hot reload) — no restart needed.
 func registerSelfJoinRoute(mux *http.ServeMux, manager *config.Manager, protected func(http.Handler) http.Handler) {
-	mux.Handle("POST /control/self/join", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Making THIS instance join a center rewrites its own identity: the credential it
+	// authenticates its relay channel with (control.credential), the center token it
+	// stores (control.center_token), which center it points at (control.center_url),
+	// its node id/trust level, and node.json. That is platform administration about
+	// the instance itself, not a per-user setting.
+	//
+	// Measured 2026-11-10 with a TENANT MEMBER's session: the request got 502 — a
+	// gateway error from the outbound hop it attempted, which means the handler had
+	// already RUN. The gate answers before any config write or network call.
+	//
+	// Node actors stay admitted (a node proxied to itself must be able to join), and
+	// so does the operator's web token, which is how the Web UI's JoinCenterCard
+	// drives this. `godex node join` does not use this route at all: it performs its
+	// own HTTP calls against the CENTER, so gating the local surface cannot break the
+	// CLI. Tenant ENROLMENT is /control/join with a join token (§3.5), untouched.
+	operatorOnly := requireCenterLocalData(protected)
+	mux.Handle("POST /control/self/join", operatorOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req selfJoinRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -285,8 +301,21 @@ func registerWithCenter(ctx context.Context, req *selfJoinRequest) error {
 // one — an older node, or a caller that does not know its id — the center-wide
 // value is returned so the deployment keeps working; that dual behaviour is what
 // makes the migration interrupt-free.
+//
+// Gated to the platform operator (or a node acting for it), measured 2026-11-10:
+// a TENANT MEMBER's session previously got 200 plus a freshly issued nk_ token.
+// The schema already states why that is wrong — control.node_proxy_token is marked
+// PlatformAdmin with the reasoning "it unlocks the node proxy surface, so whoever
+// may write it can choose a node credential of their own" — yet the route that
+// HANDS OUT that credential accepted any login session, so the item-level guard on
+// the config key protected the value while the mint was open.
+//
+// The legitimate caller presents the center's full web token (the operator's
+// principal) or arrives as a node actor; a node rotating its own credential uses
+// /control/self/proxy-credential instead, which authenticates with the ck_ it
+// already holds and is deliberately NOT behind this gate.
 func registerNodeProxyTokenRoute(mux *http.ServeMux, manager *config.Manager, protected func(http.Handler) http.Handler, registry controlNodeRegistry) {
-	mux.Handle("POST /control/node-proxy-token", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /control/node-proxy-token", requireCenterLocalData(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			NodeID string `json:"node_id"`
 		}

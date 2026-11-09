@@ -100,6 +100,20 @@
 | 机器配置与能力清单 | `/agent-templates*`、`/acp/agents/*`、`/skills/catalog`、`/v1/node-library*`、`/v1/mcp/*`、`/providers*` | 同上 |
 | 包/模型目录与仓库面 | `/models`、`/security/*`、`/packages*`、`/prompts`、`/commands` | 同上 |
 | **中心自己的工作区**（文件 / git / 终端 / shell / 媒体 / 桌面事件） | `/files/*`、`/git/diff*`、`/v1/terminal/*`、`/control/sandbox/*`、`/v1/voice*`、`/v1/tts*`、`/browser/frames`、`/desktop/events` | `TestTenantUserIsRefusedTheNodeLocalSurfaces`、`TestOperatorStillReachesTheNodeLocalSurfaces`、`TestNodeActorStillReachesTheNodeLocalSurfaces` |
+| **元 LLM 网关的用量与管理**（key/model/调用/会话/缓存） | `/usage/*`（**除** `/usage/relay`）、`/v1/biz/keys*` | `TestTenantUserIsRefusedTheUsageAndBizKeySurfaces`、`TestTenantCannotDestroyTheOperatorsBizKey`、`TestOperatorStillReachesTheUsageAndBizKeySurfaces`（`center_local_gate_usage_test.go`） |
+| **实例自属面**（它自己的服务运行时 / 绑定了哪些渠道 bot） | `/runtime/service*`、`/channels` | `TestTenantUserIsRefusedTheInstanceWideSurfaces`、`TestOperatorStillReachesTheInstanceWideSurfaces`、`TestNodeActorStillReachesTheInstanceWideSurfaces`（同上文件） |
+| **节点注册表「写」面**（入网机器 / 签发凭据 / 删节点 / 让本机加入某中心） | `POST /control/nodes/register`、`.../{id}/heartbeat`、`.../{id}/credential`、`DELETE /control/nodes/{id}`、`POST /control/node-proxy-token`、`POST /control/self/join` | `TestTenantUserIsRefusedTheNodeAdminWriteSurfaces`、`TestTenantCannotDestroyTheOperatorsNode`、`TestOperatorStillReachesTheNodeAdminWriteSurfaces`、`TestUnauthenticatedCallerIsRefusedTheNodeAdminWriteSurfaces`（`center_local_gate_node_admin_test.go`，表名 `nodeAdminWriteCalls()`） |
+
+**三轮扫描的共同教训（值得单独记住）**：后两轮之所以首扫时“看不见”，是因为**夹具没接那个依赖**
+（无 usage 库 / 无 registry）⇒ 路由**根本没注册** ⇒ 返回 404，而我把 404 读成了「没问题」。
+**未注册路由的 404 不是关于闸门的证据**；要判闸门，必须先把依赖接上再测。
+
+**节点面的读写分裂是刻意的**（别“顺手统一”）：注册表的**读**面（`GET /control/nodes`、`/{id}`、`/{id}/overview`）
+**继续接受登录会话**（Web UI 的节点页用会话，租户靠 handler 内遮蔽），并由
+`TestNodeProxyReadAcceptsSessionWithoutEscalation` 钉住；**写**面才需要操作员。
+另外三处同样刻意不接：`POST /control/self/proxy-credential`（节点用自己的 `ck_` 换发，**不能**要求 web token，
+否则把平台主密钥塞回每台机器）、`POST /control/join`（租户一次性 join token 入网，§3.5）、
+以及 `godex node join`（CLI 直接打中心，不走本机路由，故闸门不影响它）。
 
 回归测试（`httpapi/center_local_gate_test.go`）：`TestTenantUserIsRefusedTheCenterLocalSurface`（表驱动，
 租户全部 403）、`TestOperatorStillReachesTheCenterLocalSurface`（操作员非 403）、

@@ -55,13 +55,8 @@ func registerFlowRoutes(mux *http.ServeMux, service *backend.Service, protected 
 }
 
 func registerFlowDefinitionRoutes(mux *http.ServeMux, service *backend.Service, protected func(http.Handler) http.Handler) {
-	// The flow store is center-local data (design §6: the center holds no tenant
-	// content). Definition management therefore belongs to the operator, not to
-	// any signed-in user — see center_local_gate.go for why this is a gate rather
-	// than a tenant_id column.
-	local := requireCenterLocalData(protected)
 	// GET /v1/flows — list flows with status lanes.
-	mux.Handle("GET /v1/flows", local(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /v1/flows", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		items, err := service.ListFlows()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
@@ -75,7 +70,7 @@ func registerFlowDefinitionRoutes(mux *http.ServeMux, service *backend.Service, 
 	// version through POST /v1/flows. When `definition` is supplied, the
 	// request is an incremental MODIFICATION of that definition (multi-turn
 	// editing, P3 余项): the LLM returns the full amended definition.
-	mux.Handle("POST /v1/flows/generate", local(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/flows/generate", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Description string           `json:"description"`
 			Definition  *flow.Definition `json:"definition,omitempty"`
@@ -114,7 +109,7 @@ func registerFlowDefinitionRoutes(mux *http.ServeMux, service *backend.Service, 
 		writeJSON(w, http.StatusOK, def)
 	})))
 	// POST /v1/flows — create/update a draft version.
-	mux.Handle("POST /v1/flows", local(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/flows", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req agent.FlowCreateArgs
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -128,7 +123,7 @@ func registerFlowDefinitionRoutes(mux *http.ServeMux, service *backend.Service, 
 		writeJSON(w, http.StatusCreated, view)
 	})))
 	// GET /v1/flows/{id} — flow summary + all versions.
-	mux.Handle("GET /v1/flows/{id}", local(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /v1/flows/{id}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		flowID := r.PathValue("id")
 		versions, err := service.ListFlowVersions(flowID)
 		if err != nil {
@@ -139,7 +134,7 @@ func registerFlowDefinitionRoutes(mux *http.ServeMux, service *backend.Service, 
 	})))
 	// DELETE /v1/flows/{id}/versions/{ver} — remove one version (protected
 	// while it has active runs).
-	mux.Handle("DELETE /v1/flows/{id}/versions/{ver}", local(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("DELETE /v1/flows/{id}/versions/{ver}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := service.DeleteFlowVersion(r.PathValue("id"), r.PathValue("ver")); err != nil {
 			writeError(w, http.StatusConflict, err)
 			return
@@ -148,7 +143,7 @@ func registerFlowDefinitionRoutes(mux *http.ServeMux, service *backend.Service, 
 	})))
 	// DELETE /v1/flows/{id} — remove the whole flow (protected while it has
 	// active runs).
-	mux.Handle("DELETE /v1/flows/{id}", local(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("DELETE /v1/flows/{id}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		flowID := r.PathValue("id")
 		if err := service.DeleteFlow(flowID); err != nil {
 			writeError(w, http.StatusConflict, err)
@@ -158,7 +153,7 @@ func registerFlowDefinitionRoutes(mux *http.ServeMux, service *backend.Service, 
 	})))
 	// POST /v1/flows/{id}/versions/{ver}/validate — compile + validate a
 	// supplied definition (body) without saving.
-	mux.Handle("POST /v1/flows/{id}/versions/{ver}/validate", local(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/flows/{id}/versions/{ver}/validate", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var def flow.Definition
 		if err := decodeJSON(r, &def); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -172,7 +167,7 @@ func registerFlowDefinitionRoutes(mux *http.ServeMux, service *backend.Service, 
 		writeJSON(w, http.StatusOK, map[string]string{"digest": digest})
 	})))
 	// POST /v1/flows/{id}/versions/{ver}/publish — promote draft/gray.
-	mux.Handle("POST /v1/flows/{id}/versions/{ver}/publish", local(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/flows/{id}/versions/{ver}/publish", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		view, err := service.PublishFlow(r.PathValue("id"), r.PathValue("ver"))
 		if err != nil {
 			writeError(w, http.StatusUnprocessableEntity, err)
@@ -183,10 +178,6 @@ func registerFlowDefinitionRoutes(mux *http.ServeMux, service *backend.Service, 
 }
 
 func registerFlowSessionRoutes(mux *http.ServeMux, service *backend.Service, protected func(http.Handler) http.Handler) {
-	// Reading or mutating a live FlowSession touches this instance's own flow
-	// state, so it is operator-only; the write routes below additionally require
-	// center execution (they can wake a scheduler).
-	local := requireCenterLocalData(protected)
 	// Session-mode flows have a durable FlowSession lifecycle independent of
 	// the finite-DAG FlowRun API.
 	mux.Handle("POST /v1/flows/{id}/sessions", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -205,7 +196,7 @@ func registerFlowSessionRoutes(mux *http.ServeMux, service *backend.Service, pro
 		}
 		writeJSON(w, http.StatusCreated, session)
 	})))
-	mux.Handle("GET /v1/flows/{id}/sessions", local(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /v1/flows/{id}/sessions", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sessions, err := service.ListFlowSessions(r.PathValue("id"))
 		if err != nil {
 			writeFlowSessionError(w, err)
@@ -213,7 +204,7 @@ func registerFlowSessionRoutes(mux *http.ServeMux, service *backend.Service, pro
 		}
 		writeJSON(w, http.StatusOK, sessions)
 	})))
-	mux.Handle("GET /v1/flows/{id}/sessions/{sessionID}", local(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /v1/flows/{id}/sessions/{sessionID}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		session, err := service.GetFlowSession(r.PathValue("id"), r.PathValue("sessionID"))
 		if err != nil {
 			writeFlowSessionError(w, err)
@@ -221,7 +212,7 @@ func registerFlowSessionRoutes(mux *http.ServeMux, service *backend.Service, pro
 		}
 		writeJSON(w, http.StatusOK, session)
 	})))
-	mux.Handle("POST /v1/flows/{id}/sessions/{sessionID}/pause", local(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/flows/{id}/sessions/{sessionID}/pause", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		session, err := service.PauseFlowSession(r.PathValue("id"), r.PathValue("sessionID"))
 		if err != nil {
 			writeFlowSessionError(w, err)
@@ -237,7 +228,7 @@ func registerFlowSessionRoutes(mux *http.ServeMux, service *backend.Service, pro
 		}
 		writeJSON(w, http.StatusOK, session)
 	})))
-	mux.Handle("POST /v1/flows/{id}/sessions/{sessionID}/end", local(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/flows/{id}/sessions/{sessionID}/end", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Status string `json:"status,omitempty"`
 		}
@@ -301,7 +292,7 @@ func registerFlowSessionRoutes(mux *http.ServeMux, service *backend.Service, pro
 		}
 		writeJSON(w, http.StatusAccepted, receipt)
 	})))
-	mux.Handle("GET /v1/flows/{id}/sessions/{sessionID}/events", local(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /v1/flows/{id}/sessions/{sessionID}/events", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		after := uint64(0)
 		if value := r.URL.Query().Get("after_sequence"); value != "" {
 			parsed, err := strconv.ParseUint(value, 10, 64)
@@ -330,10 +321,6 @@ func registerFlowSessionRoutes(mux *http.ServeMux, service *backend.Service, pro
 }
 
 func registerFlowExecutionRoutes(mux *http.ServeMux, service *backend.Service, protected func(http.Handler) http.Handler) {
-	// Run inspection and cancellation read/mutate this instance's run records, so
-	// they are operator-only; creating and stepping a run additionally requires
-	// center execution.
-	local := requireCenterLocalData(protected)
 	// POST /v1/flows/{id}/runs — create + start a run.
 	mux.Handle("POST /v1/flows/{id}/runs", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -374,7 +361,7 @@ func registerFlowExecutionRoutes(mux *http.ServeMux, service *backend.Service, p
 		writeJSON(w, http.StatusAccepted, started)
 	})))
 	// GET /v1/flows/{id}/runs — list runs (newest first).
-	mux.Handle("GET /v1/flows/{id}/runs", local(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /v1/flows/{id}/runs", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		runs, err := service.ListFlowRuns(r.PathValue("id"))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
@@ -383,7 +370,7 @@ func registerFlowExecutionRoutes(mux *http.ServeMux, service *backend.Service, p
 		writeJSON(w, http.StatusOK, runs)
 	})))
 	// GET /v1/flow-runs/{runID} — one run (resolved via flow query param).
-	mux.Handle("GET /v1/flow-runs/{runID}", local(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /v1/flow-runs/{runID}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		flowID := r.URL.Query().Get("flow_id")
 		if flowID == "" {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("missing flow_id query param"))
@@ -397,7 +384,7 @@ func registerFlowExecutionRoutes(mux *http.ServeMux, service *backend.Service, p
 		writeJSON(w, http.StatusOK, run)
 	})))
 	// POST /v1/flow-runs/{runID}/cancel — cancel the run.
-	mux.Handle("POST /v1/flow-runs/{runID}/cancel", local(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/flow-runs/{runID}/cancel", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		flowID := r.URL.Query().Get("flow_id")
 		if flowID == "" {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("missing flow_id query param"))
@@ -414,7 +401,7 @@ func registerFlowExecutionRoutes(mux *http.ServeMux, service *backend.Service, p
 	// (P3 Agent 闭环 §22.2): event log + definition → root cause + suggestions
 	// + optional validated fixed definition (NOT saved; caller persists via
 	// createFlow).
-	mux.Handle("POST /v1/flow-runs/{runID}/diagnose", local(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/flow-runs/{runID}/diagnose", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		flowID := r.URL.Query().Get("flow_id")
 		if flowID == "" {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("missing flow_id query param"))
@@ -445,12 +432,9 @@ func registerFlowExecutionRoutes(mux *http.ServeMux, service *backend.Service, p
 }
 
 func registerFlowInspectionAndHumanTaskRoutes(mux *http.ServeMux, service *backend.Service, protected func(http.Handler) http.Handler) {
-	// Inspection reports and the human-task queue describe this instance's own
-	// flows; replying to a task additionally requires center execution below.
-	local := requireCenterLocalData(protected)
 	// GET /v1/flow-inspection?window_hours=24 — aggregate run health across
 	// published flows (P3 Agent 闭环 §22.2 定期巡检).
-	mux.Handle("GET /v1/flow-inspection", local(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /v1/flow-inspection", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		window := 24
 		if v := r.URL.Query().Get("window_hours"); v != "" {
 			if n, err := strconv.Atoi(v); err == nil {
@@ -483,7 +467,7 @@ func registerFlowInspectionAndHumanTaskRoutes(mux *http.ServeMux, service *backe
 		writeJSON(w, http.StatusOK, run)
 	})))
 	// GET /v1/human-tasks — human task queue (optional ?queue=&status=).
-	mux.Handle("GET /v1/human-tasks", local(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /v1/human-tasks", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		queue := r.URL.Query().Get("queue")
 		status := r.URL.Query().Get("status")
 		tasks, err := service.ListHumanTasks(queue, status)
@@ -496,14 +480,12 @@ func registerFlowInspectionAndHumanTaskRoutes(mux *http.ServeMux, service *backe
 }
 
 func registerFlowRunEventRoutes(mux *http.ServeMux, service *backend.Service, protected func(http.Handler) http.Handler) {
-	// A run's event log is this instance's own flow state.
-	local := requireCenterLocalData(protected)
 	// GET /v1/flow-runs/{runID}/events — SSE stream of the run's workflow
 	// events (created/start/handoff/...). Polls the append-only events log and
 	// pushes new events incrementally until the run reaches a terminal state
 	// or the client disconnects (P1.2). With ?poll=1 it returns a plain JSON
 	// snapshot of the whole log (used by the FlowGram canvas run-state view).
-	mux.Handle("GET /v1/flow-runs/{runID}/events", local(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /v1/flow-runs/{runID}/events", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		flowID := r.URL.Query().Get("flow_id")
 		runID := r.PathValue("runID")
 		if r.URL.Query().Get("poll") == "1" {

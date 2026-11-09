@@ -44,16 +44,7 @@ func registerFlowSessionStreamRoute(
 	if service == nil {
 		return
 	}
-	// The query-token path exists for WebSocket/iframe clients, which cannot send
-	// an Authorization header; voiceQueryTokenAuth installs the operator principal
-	// for a valid ?token= web-token match. The remaining path is a normal
-	// authenticated request, which must still be the operator: a FlowSession's
-	// event stream is this instance's own flow state (center_local_gate.go).
-	//
-	// Ordering matters: the gate goes INSIDE voiceQueryTokenAuth, which resolves
-	// the query token to a principal. Outside it, the gate would read no principal
-	// on the query-token path and answer 401 to a legitimate iframe/WebSocket.
-	auth := voiceQueryTokenAuth(requireCenterLocalData(protected), tokenProvider)
+	auth := voiceQueryTokenAuth(protected, tokenProvider)
 	mux.Handle("GET /v1/flows/{id}/sessions/{sessionID}/ws", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleFlowSessionStream(w, r, service)
 	})))

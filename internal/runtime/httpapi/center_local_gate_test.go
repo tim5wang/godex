@@ -15,9 +15,9 @@ import (
 	"github.com/tim5wang/godex/internal/services/relay"
 )
 
-// newCenterLocalTestServer serves the flow surface with multi-tenant sign-in
-// wired, which is what makes the tenant refusal below meaningful: without an
-// accounts service a login-session token would fall through to the operator
+// newCenterLocalTestServer serves the center-local surfaces with multi-tenant
+// sign-in wired, which is what makes the tenant refusal below meaningful: without
+// an accounts service a login-session token would fall through to the operator
 // principal and every caller would look like the superadmin.
 func newCenterLocalTestServer(t *testing.T, webToken string) *httptest.Server {
 	t.Helper()
@@ -42,15 +42,33 @@ func newCenterLocalTestServer(t *testing.T, webToken string) *httptest.Server {
 	return server
 }
 
-// centerLocalFlowCalls are the flow-surface requests a tenant user must be refused.
+// centerLocalCalls are the requests a tenant user must be refused.
 //
-// The list is deliberately the READ surface plus the definition writes: these were
-// the routes registered behind bare `protected`, so "any signed-in user" reached
-// them — the flow store is global, so a tenant could list every flow on the center,
-// read any version, and delete or publish anything. Kept as a table so a route
-// added to this surface is a one-line addition rather than a test that might not be
-// written (same convention as sessionSurfaceCalls).
-func centerLocalFlowCalls() []struct {
+// These are the surfaces whose DATA LIVES ON THIS INSTANCE (design §6): the flow
+// store, notes, durable memory, capture logs, cron/heartbeat jobs, agent templates,
+// node library, MCP / provider config, packages and the skill inventory. Every one
+// of them was registered behind bare `protected` — "any authenticated human" — so a
+// signed-in tenant user could list, read, and in several cases delete or publish the
+// operator's own machine state, while the session and execution surfaces already
+// answered 403.
+//
+// Kept as a table so a route added to one of these surfaces is a one-line addition
+// rather than a test that might not be written (same convention as
+// sessionSurfaceCalls). Each entry is a READ where a cheap one exists, because the
+// claim is about the gate, not the handler; the flows set includes writes because
+// that surface is where the leak was found.
+//
+// NOT covered here, deliberately:
+//   - `/v1/mcp/*`: this test server has no MCP manager, so registerMCPRoutes returns
+//     early and registers nothing (asserting on an unregistered path would pass or
+//     fail for the wrong reason). Its gate is the same wiring line in httpapi.go.
+//   - node-local surfaces (/files, /git, /terminal, /control/sandbox, /desktop,
+//     /voice, /browser, /preview): reached through /control/nodes/{id}/proxy and
+//     gated by NodeAccess, which is the correct multi-tenant seam and is covered by
+//     the §2-node-face tests in this package.
+//   - `/usage` (node model traffic + tenant-scoped relay metering) and `/config`
+//     (gated per ITEM — see config_admin_gate_test.go).
+func centerLocalCalls() []struct {
 	name   string
 	method string
 	path   string
@@ -62,12 +80,12 @@ func centerLocalFlowCalls() []struct {
 		path   string
 		body   any
 	}{
+		// Flows — where the leak was found (the whole surface answered "anyone").
 		{"list flows", http.MethodGet, "/v1/flows", nil},
 		{"read a flow", http.MethodGet, "/v1/flows/fl_gate_seed", nil},
 		{"create a flow", http.MethodPost, "/v1/flows", map[string]any{
-			"flow_id": "fl_gate_tenant", "version": "1", "definition": map[string]any{
-				"flow_id": "fl_gate_tenant", "version": "1",
-			},
+			"flow_id": "fl_gate_tenant", "version": "1",
+			"definition": map[string]any{"flow_id": "fl_gate_tenant", "version": "1"},
 		}},
 		{"validate a version", http.MethodPost, "/v1/flows/fl_gate_seed/versions/1/validate", map[string]any{
 			"flow_id": "fl_gate_seed", "version": "1",
@@ -83,20 +101,55 @@ func centerLocalFlowCalls() []struct {
 		{"read run events", http.MethodGet, "/v1/flow-runs/run_seed/events?flow_id=fl_gate_seed&poll=1", nil},
 		{"inspection report", http.MethodGet, "/v1/flow-inspection?window_hours=24", nil},
 		{"human task queue", http.MethodGet, "/v1/human-tasks", nil},
+		{"node library", http.MethodGet, "/v1/node-library", nil},
+
+		// Knowledge surfaces.
+		{"list notes", http.MethodGet, "/notes", nil},
+		{"read a note", http.MethodGet, "/notes/note_seed", nil},
+		{"save a note", http.MethodPost, "/notes", map[string]any{"title": "t", "content": "c"}},
+		{"search memory", http.MethodGet, "/memory?q=anything", nil},
+		{"memory candidates", http.MethodGet, "/memory/candidates", nil},
+		{"memory audit", http.MethodGet, "/memory/audit", nil},
+
+		// Capture logs (full request/response bodies of this instance's traffic).
+		{"capture status", http.MethodGet, "/llm-capture/status", nil},
+		{"capture records", http.MethodGet, "/llm-capture/records", nil},
+
+		// Scheduled jobs owned by this instance.
+		{"list cron jobs", http.MethodGet, "/automation/cron/jobs", nil},
+		{"read heartbeat", http.MethodGet, "/automation/heartbeat", nil},
+
+		// Machine configuration and capabilities.
+		{"list agent templates", http.MethodGet, "/agent-templates", nil},
+		{"template form options", http.MethodGet, "/agent-templates/options", nil},
+		{"list providers", http.MethodGet, "/providers", nil},
+		{"skill catalog", http.MethodGet, "/skills/catalog", nil},
+		{"acp agent models", http.MethodGet, "/acp/agents/acp_seed/models", nil},
+		{"acp agent config options", http.MethodGet, "/acp/agents/acp_seed/config-options", nil},
+
+		// Package / model catalog.
+		{"list models", http.MethodGet, "/models", nil},
+		{"security summary", http.MethodGet, "/security/summary", nil},
+		{"security audit", http.MethodGet, "/security/audit", nil},
+		{"list packages", http.MethodGet, "/packages", nil},
+		{"package quality", http.MethodGet, "/packages/quality", nil},
+		{"list prompts", http.MethodGet, "/prompts", nil},
+		{"list commands", http.MethodGet, "/commands", nil},
+		{"package roles", http.MethodGet, "/packages/roles", nil},
 	}
 }
 
-// TestTenantUserIsRefusedTheCenterLocalFlowSurface is the hole itself: the flow
-// store is center-local data (design §6), so no tenant principal may reach it.
+// TestTenantUserIsRefusedTheCenterLocalSurface is the hole itself: center-local data
+// belongs to the operator (design §6), so no tenant principal may reach it.
 //
 // Before the gate these routes were behind `protected` only, while the session and
 // execution surfaces already answered 403 — the same shape of gap that
-// routes_center_local_gate_test.go was written for, one surface over.
-func TestTenantUserIsRefusedTheCenterLocalFlowSurface(t *testing.T) {
+// routes_center_local_gate_test.go was written for, a whole family of surfaces over.
+func TestTenantUserIsRefusedTheCenterLocalSurface(t *testing.T) {
 	server := newCenterLocalTestServer(t, "web-secret")
 	tenantToken, _, _ := registerTenantOwner(t, server, "tenant@example.com")
 
-	for _, tc := range centerLocalFlowCalls() {
+	for _, tc := range centerLocalCalls() {
 		t.Run(tc.name, func(t *testing.T) {
 			resp, body := doJSON(t, tc.method, server.URL+tc.path, tenantToken, tc.body)
 			if resp.StatusCode != http.StatusForbidden {
@@ -106,17 +159,17 @@ func TestTenantUserIsRefusedTheCenterLocalFlowSurface(t *testing.T) {
 	}
 }
 
-// TestOperatorStillReachesTheCenterLocalFlowSurface is the other half: the gate
-// must not refuse the surface's intended user.
+// TestOperatorStillReachesTheCenterLocalSurface is the other half: the gate must not
+// refuse the surfaces' intended user.
 //
-// It asserts "not 403" rather than a specific success code on purpose: 400/404/409
-// here would be flow-store lifecycle semantics (the seeded flow does not exist, a
-// definition is intentionally minimal), which is unrelated to what this test
-// claims — that the GATE does not refuse the operator.
-func TestOperatorStillReachesTheCenterLocalFlowSurface(t *testing.T) {
+// It asserts "not 403" rather than a specific success code on purpose: 400/404/409/500
+// here would be lifecycle semantics (a seeded flow does not exist, cron is unavailable
+// in this fixture, a definition is intentionally minimal) and are unrelated to what
+// this test claims — that the GATE does not refuse the operator.
+func TestOperatorStillReachesTheCenterLocalSurface(t *testing.T) {
 	server := newCenterLocalTestServer(t, "web-secret")
 
-	for _, tc := range centerLocalFlowCalls() {
+	for _, tc := range centerLocalCalls() {
 		t.Run(tc.name, func(t *testing.T) {
 			resp, body := doJSON(t, tc.method, server.URL+tc.path, "web-secret", tc.body)
 			if resp.StatusCode == http.StatusForbidden {
@@ -129,10 +182,10 @@ func TestOperatorStillReachesTheCenterLocalFlowSurface(t *testing.T) {
 // TestNodeActorStillReachesTheCenterLocalFlowSurface pins the exemption that keeps
 // remote-node operation working.
 //
-// When a remote node is active, the web client proxies the Flows page to that node,
-// and the request arrives at the node wearing the relay-trust identity. Gating on
-// the platform role alone would answer 403 there — the exact trap documented for
-// /channels/* (requirePlatformAdminOrNodeActor) and restricted settings
+// When a remote node is active, the web client proxies the Flows/Settings/Memory pages
+// to that node, and the request arrives at the node wearing the relay-trust identity.
+// Gating on the platform role alone would answer 403 there — the exact trap documented
+// for /channels/* (requirePlatformAdminOrNodeActor) and restricted settings
 // (authorizeConfigWrite). A node's own flows are center-local to that node.
 func TestNodeActorStillReachesTheCenterLocalFlowSurface(t *testing.T) {
 	cfg := newTestConfig(t)
@@ -169,15 +222,49 @@ func TestNodeActorStillReachesTheCenterLocalFlowSurface(t *testing.T) {
 	}
 }
 
-// TestUnauthenticatedCallerIsRefusedTheCenterLocalFlowSurface pins that the gate
-// keeps the authentication requirement rather than replacing it, and that a missing
-// principal fails closed (401, not 403) — an unauthenticated caller must not be
-// reported as "forbidden", which would send the client retrying the wrong way.
-func TestUnauthenticatedCallerIsRefusedTheCenterLocalFlowSurface(t *testing.T) {
+// TestUnauthenticatedCallerIsRefusedTheCenterLocalSurface pins that the gate keeps the
+// authentication requirement rather than replacing it, and that a missing principal
+// fails closed (401, not 403) — an unauthenticated caller must not be reported as
+// "forbidden", which would send the client retrying the wrong way.
+func TestUnauthenticatedCallerIsRefusedTheCenterLocalSurface(t *testing.T) {
 	server := newCenterLocalTestServer(t, "web-secret")
 
 	resp, _ := doJSON(t, http.MethodGet, server.URL+"/v1/flows", "", nil)
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated list flows: status = %d, want 401", resp.StatusCode)
+	}
+}
+
+// TestRevealSecretIsRefusedToTenantUser covers the disclosure half.
+//
+// POST /config/reveal returns a credential in plaintext — web.token included — and was
+// behind `protected` alone, so a tenant user could read the operator's own secrets.
+// The fix reuses requirePlatformAdminOrNodeActor (per-item gating does not fit a
+// disclosure endpoint; the node exemption is what remote Settings editing needs).
+func TestRevealSecretIsRefusedToTenantUser(t *testing.T) {
+	server := newCenterLocalTestServer(t, "web-secret")
+	tenantToken, _, _ := registerTenantOwner(t, server, "tenant@example.com")
+
+	resp, body := doJSON(t, http.MethodPost, server.URL+"/config/reveal", tenantToken,
+		map[string]any{"path": "web.token"})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("tenant reveal: status = %d, want 403: %v", resp.StatusCode, body)
+	}
+	// The credential must not be in the body even as an error detail.
+	if value, ok := body["value"].(string); ok && value != "" {
+		t.Fatalf("reveal refusal leaked a value: %q", value)
+	}
+
+	// The operator must still be able to reveal (it is their own instance).
+	resp, body = doJSON(t, http.MethodPost, server.URL+"/config/reveal", "web-secret",
+		map[string]any{"path": "web.token"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("operator reveal: status = %d, want 200: %v", resp.StatusCode, body)
+	}
+
+	// And an unauthenticated caller must fail closed.
+	resp, _ = doJSON(t, http.MethodPost, server.URL+"/config/reveal", "", map[string]any{"path": "web.token"})
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated reveal: status = %d, want 401", resp.StatusCode)
 	}
 }

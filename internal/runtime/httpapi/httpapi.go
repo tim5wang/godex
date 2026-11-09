@@ -207,6 +207,24 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	nodeProxyRead := anonymousGuard(withPrincipalAuth(withBearerAuthProvider(func() string {
 		return manager.Current().WebToken
 	}, relayTrustChecker(manager), nodeProxyTokenChecker(manager, nkLookup), sessionTokenChecker(accountsService)), principalForRequest(manager, relayTrustChecker(manager), nkLookup, sessionPrincipal(accountsService))))
+	// centerLocal gates the surfaces whose DATA LIVES ON THIS INSTANCE (the flow
+	// store, notes, durable memory, capture logs, cron jobs, templates, MCP /
+	// provider config, packages) to the platform operator. Design §6 says the
+	// center holds no tenant content, so under the chosen shape (2026-11-09:
+	// multi-node platform multi-tenancy) these are the operator's own machine
+	// state, not tenant data — see center_local_gate.go.
+	//
+	// Applied HERE, at the wiring, rather than per route inside each registrar:
+	// passing it to a registrar gates that registrar's WHOLE surface in one line,
+	// so a route added later cannot be forgotten. The per-route spelling is what
+	// let the flow surface leak nineteen routes at once.
+	//
+	// Deliberately NOT applied to: /files, /git, /terminal, /control/sandbox,
+	// /desktop, /voice, /browser, /preview (node-local data, reached through
+	// /control/nodes/{id}/proxy and gated by NodeAccess — the correct multi-tenant
+	// seam), /usage (node model traffic plus tenant-scoped relay metering), and
+	// /config (gated per ITEM, see config_admin_gate.go).
+	centerLocal := requireCenterLocalData(protected)
 	registerAuthRoutes(mux, manager, accountsService, protected)
 	registerAdminRoutes(mux, accountsService, controlRegistry, protected)
 	// Relay metering (design §7 basic tier). Tenant-scoped and operator-wide views
@@ -231,34 +249,34 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	registerNodeProxyTokenRoute(mux, manager, protected, controlRegistry)
 	registerSelfProxyCredentialRoute(mux, manager, controlRegistry)
 	registerControlNodeRoutes(mux, controlRegistry, overviewProvider, protected, nodeProxyRead, nodeAccessPolicy, accountsService)
-	registerProviderRoutes(mux, manager, protected)
+	registerProviderRoutes(mux, manager, centerLocal)
 
 	registerChannelStatusRoute(mux, channels, protected)
 	registerGatewayRoutes(mux, manager, service, usageService, protected, nkLookup)
-	registerServiceCatalogRoutes(mux, service, protected)
-	registerPackageManagementRoutes(mux, service, protected)
-	registerPromptAndCommandRoutes(mux, service, protected)
-	registerPackageCatalogRoutes(mux, service, protected)
+	registerServiceCatalogRoutes(mux, service, centerLocal)
+	registerPackageManagementRoutes(mux, service, centerLocal)
+	registerPromptAndCommandRoutes(mux, service, centerLocal)
+	registerPackageCatalogRoutes(mux, service, centerLocal)
 	registerWeixinRoutes(mux, weixinAuth, protected)
-	registerAutomationRoutes(mux, cronRuntime, heartbeatRuntime, protected)
-	registerMemoryRoutes(mux, service, protected)
-	registerNoteRoutes(mux, service, protected)
+	registerAutomationRoutes(mux, cronRuntime, heartbeatRuntime, centerLocal)
+	registerMemoryRoutes(mux, service, centerLocal)
+	registerNoteRoutes(mux, service, centerLocal)
 	registerWorkContextRoutes(mux, service, protected)
 	registerSessionRoutes(mux, service, protected)
 	registerWorkflowRoutes(mux, service, protected)
-	registerAgentTemplateRoutes(mux, service, protected)
-	registerACPAgentRoutes(mux, service, protected)
-	registerSkillRoutes(mux, service, protected)
+	registerAgentTemplateRoutes(mux, service, centerLocal)
+	registerACPAgentRoutes(mux, service, centerLocal)
+	registerSkillRoutes(mux, service, centerLocal)
 	registerTurnRoutes(mux, manager, service, protected)
 	registerUsageRoutes(mux, protected, usageService, manager)
 	registerBizRoutes(mux, protected, usageService, service)
 	registerStepRoutes(mux, usageService, service)
 	registerStepTrackRoutes(mux, usageService, service)
 	registerFlowGatewayRoutes(mux, usageService, service)
-	registerFlowRoutes(mux, service, protected)
-	registerFlowSessionStreamRoute(mux, service, protected, func() string { return manager.Current().WebToken })
-	registerNodeLibraryRoutes(mux, service, protected)
-	registerMCPRoutes(mux, protected, service.MCPManager())
+	registerFlowRoutes(mux, service, centerLocal)
+	registerFlowSessionStreamRoute(mux, service, centerLocal, func() string { return manager.Current().WebToken })
+	registerNodeLibraryRoutes(mux, service, centerLocal)
+	registerMCPRoutes(mux, centerLocal, service.MCPManager())
 	registerFileRoutes(mux, protected, manager)
 	registerSandboxRoutes(mux, manager, protected)
 	registerTerminalRoutes(mux, protected)
@@ -299,7 +317,7 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	if capture == nil {
 		capture = llmcapture.New(llmcapture.Options{DumpDir: manager.Current().StateDir})
 	}
-	registerLlmCaptureRoutes(mux, capture, protected)
+	registerLlmCaptureRoutes(mux, capture, centerLocal)
 	return withGzip(mux)
 }
 

@@ -47,7 +47,17 @@ func registerConfigRoutes(mux *http.ServeMux, manager *config.Manager, protected
 		}
 		writeJSON(w, http.StatusOK, view)
 	})))
-	mux.Handle("POST /config/reveal", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// POST /config/reveal returns a credential in PLAINTEXT (web.token,
+	// channels.feishu.app_secret, the search-provider and media API keys). It was
+	// behind `protected` alone — "any authenticated human" — so a signed-in tenant
+	// user could read the instance's own secrets, web.token included, which is the
+	// credential that authorises the operator. This is disclosure, not settings
+	// editing, so the per-ITEM treatment PUT /config needs (design §3.3: /config is
+	// node-scoped in the UI, so a route gate would break remote editing) does not
+	// apply here; what does matter is the same node exemption, because with a
+	// remote node selected the UI proxies this call and that node must be able to
+	// reveal ITS OWN secret.
+	mux.Handle("POST /config/reveal", requirePlatformAdminOrNodeActor(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req revealSecretRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)

@@ -1,4 +1,5 @@
 import { Form, Input, Modal, Select, Space, Button, Typography, Card, Alert, Tag } from "antd";
+import { useEffect } from "react";
 import { useWorkDesktopStore, type EditorValues } from "./workDesktopStore";
 import type { WorkDesktopData } from "./useWorkDesktopData";
 import type { AgentTemplate } from "../../lib/apiAgent";
@@ -17,9 +18,20 @@ const resourceKinds = ["web", "directory", "repository", "note", "document", "da
 export function WorkDesktopEditorModal({ data }: { data: WorkDesktopData }) {
   const editor = useWorkDesktopStore((state) => state.editor);
   const reviewTargetId = useWorkDesktopStore((state) => state.reviewTargetId);
+  const delegateSeed = useWorkDesktopStore((state) => state.delegateSeed);
   const closeEditor = useWorkDesktopStore((state) => state.closeEditor);
   const [form] = Form.useForm<EditorValues>();
   const { tr, trLabel, contexts, contextId, selected, facts, projectsQuery, templatesQuery } = data;
+
+  // Pre-fill the goal when the delegate editor was opened FROM an inbox row. Only the goal:
+  // the acceptance criteria stay empty on purpose, because "what counts as done" is the
+  // human's input and the form already refuses to submit without it. setFieldsValue (not
+  // initialValue) because the seed arrives after the modal mounts.
+  useEffect(() => {
+    if (editor === "delegate" && delegateSeed) {
+      form.setFieldsValue({ title: delegateSeed.title });
+    }
+  }, [editor, delegateSeed, form]);
 
   // The reviewed fact is looked up by id so the store stays plain serialisable
   // state (a whole fact object in the store would go stale after any refetch).

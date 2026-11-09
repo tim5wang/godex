@@ -1290,6 +1290,48 @@ test("the attention ledger shows attention yield, and says so instead of 0.0x wi
   await expect(boards(page).locator(".wd-metrics").getByText("1.0×", { exact: true })).toBeVisible();
 });
 
+// Delegating straight from the inbox: the row is the starting point, and the human still
+// supplies the acceptance criteria. This is deliberately NOT a recorded verdict — the card
+// is created in the existing delegate flow (and does not start on its own), so the row must
+// stay on the list instead of being marked "handled" by a delegation that may never run.
+test("delegates an inbox row into the existing delegate flow without auto-running it", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  const store = await install(page, seededStore());
+  await openSection(page, "待处理");
+
+  const inbox = boards(page).locator(".wd-attention");
+  const row = inbox.locator(".wd-attention-item").filter({ hasText: "退化可能来自解码参数" });
+  await expect(row).toBeVisible();
+  await row.getByRole("button", { name: "委派给 Agent", exact: true }).click();
+
+  // The row supplies the goal; the acceptance criteria stay the human's job.
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByLabel("委派目标", { exact: true })).toHaveValue("退化可能来自解码参数");
+  await expect(dialog.getByLabel("验收条件 · 每行一项", { exact: true })).toHaveValue("");
+
+  // Submitting without acceptance criteria must be refused: a delegation with no definition
+  // of done cannot be accepted or rejected later, which is the whole point of the card.
+  await dialog.getByRole("button", { name: rx("委派工作") }).click();
+  expect(store.writes).not.toContain("POST /v1/work-contexts/ctx-1/delegations");
+
+  await dialog.getByLabel("验收条件 · 每行一项", { exact: true }).fill("同一评测集下对比两个解码参数");
+  await dialog.getByRole("button", { name: rx("委派工作") }).click();
+  await expect.poll(() => store.writes).toContain("POST /v1/work-contexts/ctx-1/delegations");
+  // Creating the delegation must not start an execution — the same guarantee the delegate
+  // board has, asserted on the inbox path because that is a second entry into it.
+  expect(store.writes.filter((w) => w.includes("/execute"))).toHaveLength(0);
+
+  // And the row is still there: delegating creates work, it does not settle the item.
+  // Matched on the row's own <strong> title, not on button text: another row's collapsed
+  // title list can contain the same words, so a role/text match resolves to two elements.
+  await openSection(page, "待处理");
+  await expect(
+    boards(page).locator(".wd-attention-main strong").filter({ hasText: "退化可能来自解码参数" }),
+  ).toHaveCount(1);
+  // No verdict was recorded on the row: a delegation is work created, not a decision taken.
+  expect(Object.keys(store.attentionActions)).toHaveLength(0);
+});
+
 test("snoozing a row takes it off the list without losing it, and it comes back on its own", async ({ page }) => {
   test.skip((page.viewportSize()?.width ?? 0) < 1024);
   const store = await install(page, seededStore());

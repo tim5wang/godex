@@ -30,6 +30,16 @@ export const WORK_DESKTOP_SECTIONS: ReadonlyArray<WorkDesktopSection> = [
  *  exactly one modal instance, rendered by the dock. */
 export type WorkDesktopEditor = "create" | "delegate" | "session" | "fact" | "resource" | "relation" | "review";
 
+/**
+ * The inbox row a "delegate" editor was opened FROM.
+ *
+ * Delegating an inbox item is a shortcut into the existing delegate flow, not a second way
+to create work: the row supplies the starting point (which stream, and what the item is
+called) and the human still supplies the acceptance criteria, because "what counts as done"
+is exactly the input the existing delegate form requires and refuses to guess.
+ */
+export type DelegateSeed = { contextId: string; title: string };
+
 /** Every field any of the editor forms can submit. Kept next to the editor type
  *  so the data hook and the modal share one shape without importing each other. */
 export type EditorValues = {
@@ -71,6 +81,8 @@ interface WorkDesktopState {
   editor?: WorkDesktopEditor;
   /** The fact a "review" editor is acting on. */
   reviewTargetId: string;
+  /** The inbox row a "delegate" editor was opened from, if any. */
+  delegateSeed?: DelegateSeed;
   briefOpen: boolean;
   recallQuery: string;
   recallScope: RecallScope;
@@ -92,6 +104,14 @@ interface WorkDesktopState {
   setContextId: (id: string) => void;
   setSection: (section: WorkDesktopSection) => void;
   openEditor: (editor: WorkDesktopEditor, reviewTargetId?: string) => void;
+  /**
+   * Open the delegate editor starting from an inbox row: selects that row's stream and
+   * pre-fills the goal with the row's title. Deliberately NOT a stored verb — delegating
+   * does not rule on a row, it creates work under IN THE EXISTING delegate flow (which
+   * creates a card and does not start it), so inventing an inbox state for it would leave a
+   * row permanently "delegated" even after the card is finished.
+   */
+  openDelegateEditor: (contextId: string, title: string) => void;
   closeEditor: () => void;
   setBriefOpen: (open: boolean) => void;
   setRecallQuery: (query: string) => void;
@@ -108,6 +128,7 @@ export const useWorkDesktopStore = create<WorkDesktopState>((set) => ({
   section: "overview",
   editor: undefined,
   reviewTargetId: "",
+  delegateSeed: undefined,
   briefOpen: false,
   recallQuery: "",
   recallScope: "current",
@@ -117,8 +138,9 @@ export const useWorkDesktopStore = create<WorkDesktopState>((set) => ({
   changesFocusAck: 0,
   setContextId: (id) => set({ contextId: id, briefOpen: false }),
   setSection: (section) => set({ section }),
-  openEditor: (editor, reviewTargetId = "") => set({ editor, reviewTargetId }),
-  closeEditor: () => set({ editor: undefined, reviewTargetId: "" }),
+  openEditor: (editor, reviewTargetId = "") => set({ editor, reviewTargetId, delegateSeed: undefined }),
+  openDelegateEditor: (contextId, title) => set({ contextId, briefOpen: false, editor: "delegate", reviewTargetId: "", delegateSeed: { contextId, title } }),
+  closeEditor: () => set({ editor: undefined, reviewTargetId: "", delegateSeed: undefined }),
   setBriefOpen: (briefOpen) => set({ briefOpen }),
   setRecallQuery: (recallQuery) => set({ recallQuery }),
   setRecallScope: (recallScope) => set({ recallScope }),

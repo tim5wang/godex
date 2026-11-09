@@ -27,8 +27,13 @@ export function AttentionInbox(props: {
   deferred?: DeferredAttention[];
   onAction?: (contextId: string, itemKey: string, verb: AttentionVerb, reason?: string) => void;
   onUndo?: (contextId: string, itemKey: string) => void;
+  /**
+   * Turn a row into delegated work. Not a recorded verb (see the store's openDelegateEditor):
+   * delegating creates work through the existing delegate flow, it does not rule on the row.
+   */
+  onDelegate?: (contextId: string, title: string) => void;
 }) {
-  const { items, loading, onOpen, scope, onScopeChange, deferred = [], onAction, onUndo } = props;
+  const { items, loading, onOpen, scope, onScopeChange, deferred = [], onAction, onUndo, onDelegate } = props;
   const { t } = useI18n();
   const tr = (key: string, vars?: Record<string, string | number>) => t(`workDesktop.${key}`, vars);
   // The dismiss reason lives here rather than in the server payload because it is
@@ -168,6 +173,20 @@ export function AttentionInbox(props: {
                   appear when a handler is wired, so the board degrades to the old
                   read-only list instead of offering buttons that do nothing. */}
               {onAction ? renderVerbs(item.context_id, item.item_key, item.action) : null}
+              {/* Delegating is NOT one of the recorded verbs: it does not rule on the row, it
+                  creates work in the existing delegate flow (which the human still has to
+                  give acceptance criteria for). Offered at ROW level only — the entry list is
+                  already opt-in and would become a wall of buttons with a fourth per entry. */}
+              {onDelegate ? (
+                <Button
+                  size="small"
+                  type="link"
+                  title={tr("attentionDelegateHint")}
+                  onClick={() => onDelegate(item.context_id, item.title)}
+                >
+                  {tr("attentionDelegate")}
+                </Button>
+              ) : null}
               {/* Per-entry verbs are opt-in: most rows are ruled on as a whole, so the
                   entry list starts collapsed rather than stacking three buttons per
                   entry into a triage list. */}

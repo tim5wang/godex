@@ -97,6 +97,26 @@ func (s *Service) init() error {
 		// Reconciliation reads by window and tenant; node is a secondary filter.
 		`CREATE INDEX IF NOT EXISTS idx_relay_usage_at ON relay_usage(at)`,
 		`CREATE INDEX IF NOT EXISTS idx_relay_usage_tenant_at ON relay_usage(tenant_id, at)`,
+		// One row per center-side forwarding ATTEMPT (allowed or refused).
+		//
+		// A separate table from relay_usage on purpose: relay_usage is a billing
+		// counter (requests/bytes, one row per forwarded request), while this is a
+		// security record of attempts, including the ones that were refused and
+		// therefore never produced any usage at all. Folding them together would
+		// make "how many bytes did tenant X move" depend on a table whose rows are
+		// not all transfers.
+		`CREATE TABLE IF NOT EXISTS forward_audit (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			at TEXT NOT NULL,
+			tenant_id TEXT NOT NULL DEFAULT '',
+			user_id TEXT NOT NULL DEFAULT '',
+			node_id TEXT NOT NULL DEFAULT '',
+			target TEXT NOT NULL DEFAULT '',
+			allowed INTEGER NOT NULL DEFAULT 0,
+			reason TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_forward_audit_at ON forward_audit(at)`,
+		`CREATE INDEX IF NOT EXISTS idx_forward_audit_tenant_at ON forward_audit(tenant_id, at)`,
 	}
 	for _, statement := range statements {
 		if _, err := s.db.Exec(statement); err != nil {
@@ -152,6 +172,93 @@ func (s *Service) RecordQuiet(record Record) {
 	if err := s.Record(record); err != nil {
 		logger.Warnf("metering: %v", err)
 	}
+}
+
+// ForwardAuditRecord is one center-side forwarding attempt. It is the stored
+// form of relay.ForwardAudit; declared here rather than imported so this package
+// keeps no dependency on the relay package (same shape as Record/ForwardUsage).
+type ForwardAuditRecord struct {
+	TenantID string `json:"tenant_id,omitempty"`
+	UserID   string `json:"user_id,omitempty"`
+	NodeID   string `json:"node_id"`
+	// Target is host:port, empty when nothing was named (node-level refusal).
+	Target  string `json:"target,omitempty"`
+	Allowed bool   `json:"allowed"`
+	Reason  string `json:"reason,omitempty"`
+	At      string `json:"at"`
+}
+
+// RecordForwardAudit stores one forwarding attempt.
+func (s *Service) RecordForwardAudit(record ForwardAuditRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	allowed := 0
+	if record.Allowed {
+		allowed = 1
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO forward_audit (at, tenant_id, user_id, node_id, target, allowed, reason)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		s.now().UTC().Format(time.RFC3339Nano),
+		strings.TrimSpace(record.TenantID), strings.TrimSpace(record.UserID), strings.TrimSpace(record.NodeID),
+		strings.TrimSpace(record.Target), allowed, strings.TrimSpace(record.Reason),
+	)
+	if err != nil {
+		return fmt.Errorf("record forward audit: %w", err)
+	}
+	return nil
+}
+
+// RecordForwardAuditQuiet is RecordForwardAudit for the request path: it reports
+// failures through the log instead of returning them, so a store problem cannot
+// turn into a failed user request (the same trade-off RecordQuiet documents).
+func (s *Service) RecordForwardAuditQuiet(record ForwardAuditRecord) {
+	if s == nil {
+		return
+	}
+	if err := s.RecordForwardAudit(record); err != nil {
+		logger.Warnf("metering: %v", err)
+	}
+}
+
+// ForwardAudits returns one tenant's attempts since the given time, newest
+// first. limit <= 0 applies a bounded default: this is a security review list,
+// and an unbounded read would grow with retention.
+func (s *Service) ForwardAudits(tenantID string, since time.Time, limit int) ([]ForwardAuditRecord, error) {
+	return s.forwardAudits(`WHERE tenant_id = ? AND at >= ?`, limit, strings.TrimSpace(tenantID), since.UTC().Format(time.RFC3339Nano))
+}
+
+// AllForwardAudits returns every tenant's attempts (the operator's
+// cross-tenant view), newest first.
+func (s *Service) AllForwardAudits(since time.Time, limit int) ([]ForwardAuditRecord, error) {
+	return s.forwardAudits(`WHERE at >= ?`, limit, since.UTC().Format(time.RFC3339Nano))
+}
+
+// forwardAudits runs the shared read for an optional predicate.
+func (s *Service) forwardAudits(whereClause string, limit int, args ...any) ([]ForwardAuditRecord, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	query := `SELECT at, tenant_id, user_id, node_id, target, allowed, reason FROM forward_audit ` +
+		whereClause + ` ORDER BY at DESC, id DESC LIMIT ?`
+	rows, err := s.db.Query(query, append(args, limit)...)
+	if err != nil {
+		return nil, fmt.Errorf("read forward audit: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := []ForwardAuditRecord{}
+	for rows.Next() {
+		var item ForwardAuditRecord
+		var allowed int
+		if err := rows.Scan(&item.At, &item.TenantID, &item.UserID, &item.NodeID, &item.Target, &allowed, &item.Reason); err != nil {
+			return nil, fmt.Errorf("scan forward audit: %w", err)
+		}
+		item.Allowed = allowed != 0
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 // Summary aggregates one tenant over [since, now].

@@ -752,6 +752,41 @@ type Decision struct {
 > 本项顺带修了一个真问题：`main` 因新增的 nil 检查被复杂度门禁拦下（score 41 / limit 40），
 > 已抽成 `wireMetering` 辅助函数。
 
+### 7.1.1 转发审计（拒绝可见）✅ 已落地（2026-11-10）
+
+上面 §7.1 计的是「**已转发**的请求」——被拒绝的转发一个字节都没动，因此**完全不在**
+`relay_usage` 里，而被拒的转发此前**哪里都不留痕**：节点侧静默 `tcp_close`（`relay/agent.go`），
+中心侧只有一条不带 target 的 WARN。于是「有没有人试图访问他不能碰的服务」这个问题**没有答案**——
+一个只记录成功的安全记录，答不了它存在的目的。
+
+落地：`relay.ForwardHandler.AuditRecorder`（`relay/forward.go`）+ `metering.forward_audit` 表
++ `wireForwardAudit`（`cmd/godex/main.go`，同 `wireMetering` 一样抽在装配点，让 relay 包不背存储依赖）。
+
+| 面 | 路径 | 读什么 |
+|---|---|---|
+| 租户自读 | `GET /usage/relay/audit` | **只能**读自己租户的转发尝试（租户取自 principal，`?tenant_id=` 被忽略） |
+| 超管审阅 | `GET /admin/usage/relay/audit` | 跨租户逐条 + `denied` 计数 |
+
+关键设计选择（都由测试钉住）：
+
+- **单独一张表，不归进 `relay_usage`**：后者是**计费计数**（每请求一行、只含被转发的），
+  前者是**尝试记录**（含被拒的，而那些从未产生任何用量）。合表会让
+  「租户 X 转发了多少字节」取决于一张并非全是传输的表。
+- **放行与拒绝都记**：只记拒绝会丢掉流量画像，只记成功就是原来的缺口。
+- **拒绝的**不**进计费**：被拒的尝试 `Summary.Requests` 仍为 0（有测试）。
+- **两个拒绝层级都覆盖**：① NodeAccess 拒整个节点（此时 `target` 为空——
+  如实说明「没指定过目标」，而不是报个空串假装选过）② 节点自身的 egress 拒绝
+  （`forward target not allowed` 以 `tcp_close` 返回，中心把它记为该目标的拒绝，
+  reason 保留节点原话）。
+- **归属取自 decision 而非请求头**：与 §7.1 同一条规则，且这里更要紧——
+  调用方不能让**自己**的越权尝试记到别人头上。
+- **`denied` 计数显式返回**：让客户端自己过滤出拒绝行，就是埋没这条信号的常见方式。
+- **`AuditRecorder` 为 nil 时行为完全不变**（有测试钉住）：没配审计的实例不能因此开始报错。
+
+回归：`relay/forward_audit_test.go`（节点级拒绝 / 目标级拒绝 / 放行 / 无 recorder 兼容）、
+`metering` 审计表作用域与窗口边界、`httpapi/routes_metering_test.go` 两路由的租户作用域与
+跨租户 `denied`。
+
 ### 7.2 节点数上限（配额强制）✅ 已落地
 
 节点配额是**租户策略**，不是租户身份，所以存在既有的 `tenant_policies` 表里，

@@ -513,6 +513,10 @@ func main() {
 			// network services, which is the §1.3 hole on a second surface.
 			forwardHandler := relay.NewForwardHandler(relayHub, nodeProxyAuthorize(manager, nodeProxyToken, accountsService))
 			forwardHandler.AuthorizeNode = proxy.AuthorizeNode
+			// Audit every forward attempt, refused ones included. Extracted so this
+			// does not push main over its complexity budget (same reason wireMetering
+			// is a helper).
+			wireForwardAudit(forwardHandler, meteringService)
 			root.Handle("/control/nodes/{id}/forward", forwardHandler)
 			// Web Push: in-memory subscriptions, VAPID keys persisted across
 			// restarts so browser subscriptions keep working. The center only
@@ -594,6 +598,36 @@ func openAccountsStore(cfg *config.Config) (*accounts.Service, func()) {
 		return nil, func() {}
 	}
 	return service, func() { _ = service.Close() }
+}
+
+// wireForwardAudit routes center-side forwarding attempts into the metering
+// store's audit table.
+//
+// The HTTP proxy has metered itself for a while, but the TCP forward path — the
+// CLI tunnel and the managed tunnels — recorded nothing at all, so "who opened
+// a stream into which target" was unanswerable, and a REFUSED attempt left no
+// trace anywhere: the node answers tcp_close and logs nothing, and the center
+// only counted requests that succeeded. This closes both halves — allowed and
+// denied attempts alike — with the identity taken from the NodeAccess decision
+// rather than from headers, so a caller cannot choose whose audit trail its
+// attempt is filed under.
+//
+// Lives at the composition point so package relay keeps no storage dependency.
+func wireForwardAudit(forwardHandler *relay.ForwardHandler, meteringService *metering.Service) {
+	if forwardHandler == nil || meteringService == nil {
+		return
+	}
+	forwardHandler.AuditRecorder = func(attempt relay.ForwardAudit) {
+		meteringService.RecordForwardAuditQuiet(metering.ForwardAuditRecord{
+			TenantID: attempt.TenantID,
+			UserID:   attempt.UserID,
+			NodeID:   attempt.NodeID,
+			Target:   attempt.Target,
+			Allowed:  attempt.Allowed,
+			Reason:   attempt.Reason,
+			At:       attempt.At.UTC().Format(time.RFC3339Nano),
+		})
+	}
 }
 
 // wireMetering points the relay proxy's usage hook at the metering store.

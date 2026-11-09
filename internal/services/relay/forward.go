@@ -34,12 +34,61 @@ type ForwardHandler struct {
 	// tenants exist means reaching another tenant's network services.
 	// nil skips the check, keeping existing callers unchanged.
 	AuthorizeNode func(r *http.Request, nodeID string) identity.Decision
+	// AuditRecorder, when set, receives one record per forward ATTEMPT —
+	// refused and allowed alike. nil skips auditing, keeping existing callers
+	// unchanged.
+	//
+	// This exists because a REFUSED forward used to be invisible: the node
+	// answered tcp_close and logged nothing, so "someone tried to reach a
+	// service they may not touch" left no trace anywhere, and the center could
+	// not even tell that the attempt happened. An audit trail that records only
+	// successes cannot answer the question it exists for.
+	AuditRecorder func(ForwardAudit)
+}
+
+// ForwardAudit is one forwarding attempt as seen by the center: who tried to
+// reach which target on which node, and whether it was allowed.
+//
+// Carries no payload content — only who/where/whether — which keeps decision ②
+// ("the center forwards tenant data without storing it") intact: an audit row
+// must not become the place that data accumulates.
+type ForwardAudit struct {
+	// TenantID/UserID come from the NodeAccess decision, not from headers — the
+	// same rule the HTTP metering path follows, and for the same reason: a caller
+	// must not be able to choose whose audit trail its attempt is filed under.
+	TenantID string
+	UserID   string
+	NodeID   string
+	// Target is the host:port the caller asked for. Empty when the refusal
+	// happened before any target was named (NodeAccess refuses the whole node).
+	Target string
+	// Allowed reports the decision; Reason explains a refusal — either the
+	// policy's reason or the node's own egress-refusal message.
+	Allowed bool
+	Reason  string
+	At      time.Time
 }
 
 // NewForwardHandler creates the center-side forward endpoint. authorize may be
 // nil to accept every client (web token check).
 func NewForwardHandler(hub *Hub, authorize func(*http.Request) bool) *ForwardHandler {
 	return &ForwardHandler{hub: hub, authorize: authorize}
+}
+
+// recordAudit reports one attempt to the wired recorder, if any.
+func (h *ForwardHandler) recordAudit(caller identity.Decision, nodeID, target string, allowed bool, reason string) {
+	if h == nil || h.AuditRecorder == nil {
+		return
+	}
+	h.AuditRecorder(ForwardAudit{
+		TenantID: caller.TenantID,
+		UserID:   caller.UserID,
+		NodeID:   nodeID,
+		Target:   target,
+		Allowed:  allowed,
+		Reason:   reason,
+		At:       time.Now(),
+	})
 }
 
 // ServeHTTP upgrades the WebSocket and runs the forward session.
@@ -57,10 +106,15 @@ func (h *ForwardHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// NodeAccess (P0): checked before the WebSocket upgrade so a denial is an
 	// ordinary HTTP 403 rather than an upgraded-then-closed socket.
+	var caller identity.Decision
 	if h.AuthorizeNode != nil {
-		if decision := h.AuthorizeNode(r, nodeID); !decision.Allowed {
+		caller = h.AuthorizeNode(r, nodeID)
+		if !caller.Allowed {
 			logger.Warnf("relay forward: denied caller=%s target=%s reason=%s user=%s",
-				clientIP(r), nodeID, decision.Reason, decision.UserID)
+				clientIP(r), nodeID, caller.Reason, caller.UserID)
+			// Audited before the response: the refusal is the event an audit trail
+			// exists to capture, and a rejection that returns early must not skip it.
+			h.recordAudit(caller, nodeID, "", false, caller.Reason)
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
@@ -78,6 +132,7 @@ func (h *ForwardHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	session := &forwardSession{
 		handler: h,
+		caller:  caller,
 		nodeID:  nodeID,
 		conn:    conn,
 		streams: make(map[string]*tcpStream),
@@ -89,6 +144,10 @@ func (h *ForwardHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // multiplexed by conn_id.
 type forwardSession struct {
 	handler *ForwardHandler
+	// caller is the NodeAccess decision this session was admitted under. Kept on
+	// the session because the per-TARGET decision happens later, when a tcp_open
+	// frame arrives, and the audit row for that attempt needs the identity.
+	caller  identity.Decision
 	nodeID  string
 	conn    *websocket.Conn
 	mu      sync.Mutex
@@ -125,9 +184,16 @@ func (s *forwardSession) handleOpen(ctx context.Context, frame Frame) {
 	}
 	stream, err := s.handler.hub.OpenTCPStream(ctx, s.nodeID, payload.ConnID, payload.Target)
 	if err != nil {
+		// Covers the node's own egress refusal too: the node answers
+		// "forward target not allowed" as a tcp_close, which OpenTCPStream
+		// surfaces as this error. That is the case the audit trail exists for —
+		// a target the operator's allowlist refuses was previously invisible
+		// everywhere.
+		s.handler.recordAudit(s.caller, s.nodeID, payload.Target, false, err.Error())
 		s.replyClose(payload.ConnID, err.Error())
 		return
 	}
+	s.handler.recordAudit(s.caller, s.nodeID, payload.Target, true, "")
 	s.mu.Lock()
 	s.streams[payload.ConnID] = stream.(*tcpStream)
 	s.mu.Unlock()

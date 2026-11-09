@@ -19,7 +19,21 @@ func registerUsageRoutes(mux *http.ServeMux, protected func(http.Handler) http.H
 	if usageService == nil {
 		return
 	}
-	mux.Handle("GET /usage/keys", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// The meta LLM gateway's keys, models, calls and sessions describe THIS
+	// instance's own gateway traffic, so they are operator data. (The tenant-scoped
+	// view of RELAY usage is /usage/relay, a different registrar that stays open to
+	// the caller's own tenant — see routes_metering.go.)
+	//
+	// Measured 2026-11-10 with a TENANT MEMBER's session, before this gate: /usage/keys,
+	// /usage/models, /usage/summary, /usage/calls, /usage/sessions and
+	// /usage/time-series all returned 200. An earlier sweep had reported 404 for
+	// these, because THAT fixture had no usage store wired — an unregistered route
+	// proves nothing about a gate, which is the same "it is handled elsewhere"
+	// mistake in another costume.
+	//
+	// Node actors stay admitted: a node's own usage page is proxied to it.
+	centerLocal := requireCenterLocalData(protected)
+	mux.Handle("GET /usage/keys", centerLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		keys, err := usageService.ListKeysWithSystemEntries()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
@@ -27,7 +41,7 @@ func registerUsageRoutes(mux *http.ServeMux, protected func(http.Handler) http.H
 		}
 		writeJSON(w, http.StatusOK, keys)
 	})))
-	mux.Handle("POST /usage/keys", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /usage/keys", centerLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req usage.KeyCreateRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -40,7 +54,7 @@ func registerUsageRoutes(mux *http.ServeMux, protected func(http.Handler) http.H
 		}
 		writeJSON(w, http.StatusCreated, resp)
 	})))
-	mux.Handle("PATCH /usage/keys/{id}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("PATCH /usage/keys/{id}", centerLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req usage.KeyUpdateRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -53,7 +67,7 @@ func registerUsageRoutes(mux *http.ServeMux, protected func(http.Handler) http.H
 		}
 		writeJSON(w, http.StatusOK, key)
 	})))
-	mux.Handle("POST /usage/keys/{id}/reset", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /usage/keys/{id}/reset", centerLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Reset rotates the secret and returns the new plaintext exactly once.
 		// The previous secret stops authenticating immediately; the new secret is
 		// not stored on the key, so callers must copy it now or rotate again.
@@ -64,7 +78,7 @@ func registerUsageRoutes(mux *http.ServeMux, protected func(http.Handler) http.H
 		}
 		writeJSON(w, http.StatusOK, resp)
 	})))
-	mux.Handle("GET /usage/models", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /usage/models", centerLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		models, err := usageService.ListModels()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
@@ -72,7 +86,7 @@ func registerUsageRoutes(mux *http.ServeMux, protected func(http.Handler) http.H
 		}
 		writeJSON(w, http.StatusOK, models)
 	})))
-	mux.Handle("POST /usage/models", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /usage/models", centerLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req usage.ModelCreateRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -85,7 +99,7 @@ func registerUsageRoutes(mux *http.ServeMux, protected func(http.Handler) http.H
 		}
 		writeJSON(w, http.StatusCreated, m)
 	})))
-	mux.Handle("PATCH /usage/models/{id}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("PATCH /usage/models/{id}", centerLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req usage.ModelUpdateRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -98,7 +112,7 @@ func registerUsageRoutes(mux *http.ServeMux, protected func(http.Handler) http.H
 		}
 		writeJSON(w, http.StatusOK, m)
 	})))
-	mux.Handle("GET /usage/summary", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /usage/summary", centerLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rangeType := r.URL.Query().Get("range")
 		apiKeyID := r.URL.Query().Get("api_key_id")
 		if rangeType == "" {
@@ -111,7 +125,7 @@ func registerUsageRoutes(mux *http.ServeMux, protected func(http.Handler) http.H
 		}
 		writeJSON(w, http.StatusOK, summary)
 	})))
-	mux.Handle("GET /usage/calls", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /usage/calls", centerLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		date := r.URL.Query().Get("date")
 		apiKeyID := r.URL.Query().Get("api_key_id")
 		calls, err := usageService.GetCalls(date, apiKeyID)
@@ -121,7 +135,7 @@ func registerUsageRoutes(mux *http.ServeMux, protected func(http.Handler) http.H
 		}
 		writeJSON(w, http.StatusOK, calls)
 	})))
-	mux.Handle("GET /usage/cache-stats", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /usage/cache-stats", centerLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		query := usage.CacheStatsQuery{
 			RangeType: r.URL.Query().Get("range"),
 			Model:     r.URL.Query().Get("model"),
@@ -196,7 +210,7 @@ func registerUsageRoutes(mux *http.ServeMux, protected func(http.Handler) http.H
 	}))
 
 	// ---- Time-series (trend charts) ----
-	mux.Handle("GET /usage/time-series", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /usage/time-series", centerLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		query := usage.TimeSeriesQuery{
 			Granularity: q.Get("granularity"),
@@ -218,7 +232,7 @@ func registerUsageRoutes(mux *http.ServeMux, protected func(http.Handler) http.H
 	})))
 
 	// ---- Session usage ----
-	mux.Handle("GET /usage/sessions", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /usage/sessions", centerLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		apiKeyID := q.Get("api_key_id")
 		limit := parseIntQuery(q.Get("limit"), 20)
@@ -231,7 +245,7 @@ func registerUsageRoutes(mux *http.ServeMux, protected func(http.Handler) http.H
 		writeJSON(w, http.StatusOK, sessions)
 	})))
 
-	mux.Handle("GET /usage/sessions/{id}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /usage/sessions/{id}", centerLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		summary, err := usageService.GetSessionUsage(id)
 		if err != nil {

@@ -14,7 +14,20 @@ import (
 )
 
 func registerRuntimeServiceRoutes(mux *http.ServeMux, serviceRuntime serviceRuntimeProvider, protected func(http.Handler) http.Handler) {
-	mux.Handle("GET /runtime/service", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Service runtime control acts on the instance ANSWERING the request
+	// (`godex service restart`), so it is platform administration, not a per-user
+	// setting. Measured 2026-11-10 before this gate: a tenant member's session got
+	// 400 "service runtime control is unavailable" — that 400 is the handler's own
+	// nil-guard, so the request had already passed authentication and reached the
+	// handler. On a configured instance the same call would have restarted the
+	// service, letting any signed-in user of any tenant bounce the platform (and
+	// every other tenant's traffic with it).
+	//
+	// Node actors stay admitted: /runtime/service is node-scoped in the UI, so a
+	// node opening its own service panel must not be refused. The pass/deny set is
+	// identical to requireCenterLocalData's.
+	operatorOnly := requirePlatformAdminOrNodeActor(protected)
+	mux.Handle("GET /runtime/service", operatorOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if serviceRuntime == nil {
 			writeJSON(w, http.StatusOK, map[string]any{"managed": false, "detail": "service runtime control is unavailable"})
 			return
@@ -26,7 +39,7 @@ func registerRuntimeServiceRoutes(mux *http.ServeMux, serviceRuntime serviceRunt
 		}
 		writeJSON(w, http.StatusOK, status)
 	})))
-	mux.Handle("POST /runtime/service/restart", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /runtime/service/restart", operatorOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if serviceRuntime == nil {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("service runtime control is unavailable"))
 			return

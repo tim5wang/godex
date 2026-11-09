@@ -83,7 +83,27 @@ func registerBizRoutes(mux *http.ServeMux, protected func(http.Handler) http.Han
 	if usageService == nil {
 		return
 	}
-	mux.Handle("POST /v1/biz/keys", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Biz keys are the operator-issued credentials for the Agent Step Platform:
+	// minted here, handed to a business system, and used to authenticate machine
+	// callers on /v1/agent-steps and /v1/gateway. Creating, listing, DELETING or
+	// REVEALING one is platform administration.
+	//
+	// Measured 2026-11-10 with a TENANT MEMBER's session, before this gate:
+	//
+	//	GET    /v1/biz/keys              -> 200 (the operator's key list)
+	//	POST   /v1/biz/keys              -> 201 (created one)
+	//	POST   /v1/biz/keys/{id}/reveal  -> 200 WITH THE PLAINTEXT SECRET
+	//	DELETE /v1/biz/keys/{id}         -> 204, and the key was really gone
+	//
+	// So any signed-in user of any tenant could read, mint, reveal and destroy the
+	// platform's machine credentials. Reveal is the sharpest edge: it returns the
+	// plaintext, so the pin check it relies on protects nothing when the caller could
+	// simply mint their own key instead.
+	//
+	// Node actors stay admitted, as on the other instance-wide surfaces: with a
+	// remote node selected, the request is proxied to it.
+	centerLocal := requireCenterLocalData(protected)
+	mux.Handle("POST /v1/biz/keys", centerLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req usage.BizKeyCreateRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -96,7 +116,7 @@ func registerBizRoutes(mux *http.ServeMux, protected func(http.Handler) http.Han
 		}
 		writeJSON(w, http.StatusCreated, resp)
 	})))
-	mux.Handle("GET /v1/biz/keys", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /v1/biz/keys", centerLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		keys, err := usageService.ListBizKeys()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
@@ -104,7 +124,7 @@ func registerBizRoutes(mux *http.ServeMux, protected func(http.Handler) http.Han
 		}
 		writeJSON(w, http.StatusOK, keys)
 	})))
-	mux.Handle("GET /v1/biz/keys/{id}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /v1/biz/keys/{id}", centerLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key, err := usageService.GetBizKey(r.PathValue("id"))
 		if err != nil {
 			writeError(w, http.StatusNotFound, err)
@@ -112,7 +132,7 @@ func registerBizRoutes(mux *http.ServeMux, protected func(http.Handler) http.Han
 		}
 		writeJSON(w, http.StatusOK, key)
 	})))
-	mux.Handle("PATCH /v1/biz/keys/{id}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("PATCH /v1/biz/keys/{id}", centerLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req usage.BizKeyUpdateRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -125,14 +145,14 @@ func registerBizRoutes(mux *http.ServeMux, protected func(http.Handler) http.Han
 		}
 		writeJSON(w, http.StatusOK, key)
 	})))
-	mux.Handle("DELETE /v1/biz/keys/{id}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("DELETE /v1/biz/keys/{id}", centerLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := usageService.DeleteBizKey(r.PathValue("id")); err != nil {
 			writeError(w, http.StatusNotFound, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})))
-	mux.Handle("POST /v1/biz/keys/{id}/reset", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/biz/keys/{id}/reset", centerLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Reset rotates the secret and returns the new plaintext exactly once
 		// (mirrors /usage/keys/{id}/reset).
 		resp, err := usageService.ResetBizKey(r.PathValue("id"))
@@ -142,7 +162,7 @@ func registerBizRoutes(mux *http.ServeMux, protected func(http.Handler) http.Han
 		}
 		writeJSON(w, http.StatusOK, resp)
 	})))
-	mux.Handle("POST /v1/biz/keys/{id}/reveal", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/biz/keys/{id}/reveal", centerLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Reveal returns the plaintext secret after pin verification (bounded
 		// wrong-pin attempts lock the reveal until a reset).
 		var req usage.BizKeyRevealRequest
@@ -157,7 +177,7 @@ func registerBizRoutes(mux *http.ServeMux, protected func(http.Handler) http.Han
 		}
 		writeJSON(w, http.StatusOK, resp)
 	})))
-	mux.Handle("POST /v1/biz/keys/{id}/migrate-template", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/biz/keys/{id}/migrate-template", centerLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// M4 P1 convergence: generate a template from the key's whitelist
 		// fields (single source of truth), then pin the key to it. The
 		// generated template is a normal user template so the admin can

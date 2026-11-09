@@ -10,7 +10,21 @@ import (
 )
 
 func registerChannelStatusRoute(mux *http.ServeMux, channels statusProvider, protected func(http.Handler) http.Handler) {
-	mux.Handle("GET /channels", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// WHICH channel bots are bound to this instance is platform administration, not
+	// a per-user setting — the same call the weixin binding routes in this file
+	// already make. Measured 2026-11-10: a tenant member's session got 200 with the
+	// channel list, so it was readable by any signed-in user of any tenant.
+	//
+	// Node actors stay admitted: /channels is node-scoped (it is NOT in the web
+	// client's "answered by this instance" list), so with a remote node active the
+	// request is proxied there and arrives as the relay-trust node identity; a
+	// platform-only gate would make a remote node's channel page impossible.
+	//
+	// The pass/deny set is identical to requireCenterLocalData's. This gate is named
+	// for its intent — an instance-wide setting a node must still be able to change
+	// about itself — which is what this surface is.
+	operatorOnly := requirePlatformAdminOrNodeActor(protected)
+	mux.Handle("GET /channels", operatorOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if channels == nil {
 			writeJSON(w, http.StatusOK, rtchannels.StatusReport{GeneratedAt: time.Now(), Channels: nil})
 			return

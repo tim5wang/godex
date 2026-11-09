@@ -1,6 +1,6 @@
 # 工作桌面的注意力经济学（Attention Economics）：现状核查与增强方案
 
-> 状态：Partial（§3 为代码实证基线；**AE1、AE3、AE4、AE5 已实施**，见 §6.1–§6.3；**AE2 已实施**，见 §6.4；§7 保留实施前的调研与选型记录）
+> 状态：Partial（§3 为代码实证基线；**AE1–AE5 已全部实施**，见 §6.1–§6.6；§7 保留实施前的调研与选型记录。剩余未做项集中在本节末与 §6.6）
 > 日期：2026-11-07
 > 关联：[work-context-desktop-design.md](./work-context-desktop-design.md)（工作桌面主设计）、[taskboard-plugin-design.md](./taskboard-plugin-design.md)（委派执行器）、[memory-design-principles.md](./memory-design-principles.md)（记忆治理）、[agent-role-and-bundle-design.md](./agent-role-and-bundle-design.md)（Agent 模板/多入口）
 > 定位：解释「工作桌面」这一层在注意力经济中的位置，指出现有实现的杠杆缺口，并给出可分期落地的增强方案。本文不引入第二套 Agent Runtime，不改变既有权限与执行边界。
@@ -161,10 +161,10 @@ Agent     = 条目的生产者（delegate / executor / flow_inspect / 记忆候�
 | 期 | 内容 | 依赖 | 门禁 |
 |---|---|---|---|
 | AE1 | L1 完整化 + 合批 + 杠杆排序 | 无新采集 | ✅ 已实施（2026-11-07），见 §6.1 |
-| AE2 | L1 动词（claim/snooze/dismiss/委托） | 需新增少量接口（动作本身要落审计） | ✅ 已实施（2026-11-07，claim/snooze/dismiss；「委托」未做），见 §6.4 |
+| AE2 | L1 动词（claim/snooze/dismiss/委托） | 需新增少量接口（动作本身要落审计） | ✅ 已实施（2026-11-07 首版；**2026-11-09 补完「委派给 Agent」**），见 §6.4 / §6.6 |
 | AE3 | L2 验收包 + 证据徽章 | 复用卡 Execution/Checklist | ✅ 已实施（2026-11-07），见 §6.2 |
-| AE4 | L3 digest + 配额 + 老化降级 | 依赖 AE1 排序 | ✅ 已实施（2026-11-07，仅老化降级 + 按主线配额；每日 digest 未做），见 §6.3 |
-| AE5 | L4 度量 | 依赖 AE2 动作记录 | ✅ 已实施（2026-11-07，部分：预算/未读/老化三项，依赖 AE2 的「注意力收益率」未做），见 §6.3 |
+| AE4 | L3 digest + 配额 + 老化降级 | 依赖 AE1 排序 | ✅ 已实施（2026-11-07 老化 + 配额；**2026-11-09 补完每日 digest**），见 §6.3 / §6.6 |
+| AE5 | L4 度量 | 依赖 AE2 动作记录 | ✅ 已实施（2026-11-07 预算/未读/老化；**2026-11-09 补完注意力收益率**），见 §6.3 / §6.6 |
 
 通用门禁（延续既有约定）：
 
@@ -219,7 +219,7 @@ Agent     = 条目的生产者（delegate / executor / flow_inspect / 记忆候�
 - 修法：把「待回应的揭示请求」从组件 ref 移到 store（`changesFocusNonce` + `changesFocusAck` + `ackChangesFocus`），面板消费后确认；`FoldCard` 的 `revealNonce` 换成布尔 `reveal`（只在 true 方向动作，回应请求的回落不会与用户自己的折叠打架）。
 - 高亮本身：一次性瞬时高亮（accent 描边 + 淡出，2s）后自动消失，**不新增常驻 UI**；带 `prefers-reduced-motion` 降级（保留标记、去掉动画）。
 
-**二、AE4：老化降级 + 按主线配额（每日 digest 未做）。**
+**二、AE4：老化降级 + 按主线配额（每日 digest 见 §6.6）。**
 
 - **老化降级**（`unreadAgingAfter = 72h`）：超过 3 天的未读不再当作待办提醒，红点降级为**静音数字**（可点、计数仍真实）。这是「老化」而非「隐藏」——净不掉的标记长期存在会从「请求」变成「背景负债感」。服务端算（`NewestUnreadEventAt`），两个视图不会对「哪条主线陈旧」得出不同结论。**空未读的主线永不被标陈旧**，否则安静主线会永久带灰点。
 - **按主线配额**（`attentionPerStreamDailyCap = 4`）：只有 owner 级全局上限时，**哪条主线碰巧到期项最多就吃光全天预算、其它主线永远不说话**。两道限额都在**写事件之前**检查，保留「静默时段不烧提醒」不变量（`pushAllowed` 现在收 contextID）。
@@ -236,7 +236,7 @@ Agent     = 条目的生产者（delegate / executor / flow_inspect / 记忆候�
 
 ### 6.4 AE2 实施记录：收件箱动词（2026-11-07）
 
-按 §7 的选型结论实施（选项 B：**新表**，而非事件派生）。实施了 claim / snooze / dismiss；「委托给 Agent」未做（它需要真的能启一个 Agent，与 P4 默认动作一并考虑）。
+按 §7 的选型结论实施（选项 B：**新表**，而非事件派生）。2026-11-07 实施了 claim / snooze / dismiss；「委托给 Agent」于 2026-11-09 补完（见 §6.6）。
 
 **一、存储：migration 4 新表 `wc_attention_actions`。**
 
@@ -275,7 +275,7 @@ Agent     = 条目的生产者（delegate / executor / flow_inspect / 记忆候�
 - `playwright work-desktop` **三端 34 passed / 50 skipped / 0 failed**；新增 3 条：snooze 行离开列表、进入折叠推迟区（显示到期时间）、撤销后回来；claim 行仍在列且标「已接手」+ 今日决策计数；dismiss 必须填理由才能确认（确认按钮先 disabled）。
 - 无新增前端依赖；样式 `wd-attention-verbs` / `wd-attention-deferred-*` 追加入 `workDesktop.css`。
 
-**未做 / 待定**：委托给 Agent（P4 前置）；snooze 时长目前固定 3 天（`DefaultSnoozeDuration`，客户端可传 `until_at` 覆盖，但 UI 未给选项）。
+**未做 / 待定**：snooze 时长目前固定 3 天（`DefaultSnoozeDuration`，客户端可传 `until_at` 覆盖，但 UI 未给选项）。
 
 ### 6.5 动词细化：单条动作 + 自适应老化（2026-11-07）
 
@@ -306,6 +306,42 @@ Agent     = 条目的生产者（delegate / executor / flow_inspect / 记忆候�
 - `go build`/`go vet` 干净；core/workcontext 与 httpapi 全量通过。
 - 前端：`pnpm typecheck` 通过；`vitest` 49 文件 / 503 通过；i18n 中英对齐通过。
 - `playwright work-desktop` **三端 36 passed / 54 skipped / 0 failed**；新增 2 条：逐条处置后行存活且被处置条目进推迟区（含理由可读回）、自由文本条目不提供条目动词且说明原因。
+
+### 6.6 AE2 委派 / AE4 digest / AE5 收益率（2026-11-09）
+
+三项一起做完，都是「把已声明的缺口补上」，且都先读代码纠正了原计划的前提。
+
+**一、AE5 注意力收益率（完成的有效工作 ÷ 人投入的决策）。**
+
+- **分子改了来源（重要）**。计划里写的是「taskboard 卡完成数」，但核对发现 card **没有 owner/tenant 归属**（只有 `created_by` 演员名，ledger 是共享存储），照它实现就是把所有租户的工作混进某人的收益率——与 AE1 里 flow 失败 run 被阻塞是同一类错误。改用 `wc_todos`：计划项自带 `owner_id`，可正确隔离。
+- **完成时间必须精确**：新增 `completed_at`（迁移 5），**只在「进入 done」这一跃迁上盖一次**，离开 done 时清空。若用 `updated_at` 近似，则任何对已完成条目的后续编辑都会把它再算一次「今天完成」——自报指标最不能在这方向上撒谎。迁移用 `ALTER` 而非改迁移 1：既有库走 ALTER，新库按 1..5 顺序跑；改迁移 1 会让新库的 ALTER 以 duplicate column name 失败。既有库的历史已完成条目**不回填**（未知就是未知）。
+- **比值在展示处由两个计数导出**，服务端只多报 `completed_today`——一个公式，比值永远不会和它旁边的数字不一致。分母为 0 时显示「待有决策」而不是 `0.0×`：后者读起来像「我的注意力毫无产出」，而真相是「今天还没做决定」。
+
+**二、AE4 每日 digest（把早晨积压的提醒合成一页）。**
+
+- **先纠正两个前提**。① 「静默时段的提醒攒到 08:00 给出」听起来像要抢救丢失的提醒，实际不是：`pushAllowed` 的静默检查跑在**写事件之前**，被拦下的提醒从未落盘、下次 sweep 自然重试，并没有丢。digest 的价值是**避免 08:00 的一波推送**（一次性给出），不是兜底。② digest **不能写成 per-stream 事件**：`UnreadCounts` 是 kind-agnostic 的（`unread_kinds_test.go` 钉住），记事件会点亮未读红点并出现在「变了什么」里——关于噪音的通知本身变成噪音（与 AE2 拒绝把动词记为事件同一个坑）。故新建独立台账 `wc_digest_deliveries`（迁移 6），与 `wc_seen` / `wc_attention_actions` 同构。
+- **每天每人最多一页**由主键原子保证（sweep 每分钟一次，没有 claim 就会整天重复发）。
+- **窗口限定在早晨**（静默结束后 4 小时内）：批量是为**隔夜积压**服务的；14:00 才浮出的单条应当直接说清是什么，而不是包成一行「今日汇总」。
+- **候选先收集再路由**：同一集合要么塌成一页、要么逐个推送；必须在任何推送**之前**定路由，因为推送一旦落盘就被 dedup 永久去重，无法再改批。
+- **页数受当日预算约束，且报告几条就消耗几个额度**：预算是约束「要求注意力的内容量」，一页 5 条仍是 5 条内容。
+- **顺序（安全性的关键）**：先 claim → 发送 → 成功后才记为已报。反过来先记后会**永久吞掉**用户从未收到的提醒（与既有 `pushNudge` 同因）。有专门测试钉住「digest 失败不吞提醒」。
+- 只报新条目：已报过且仍逾期的条目不逐日重报（加只读 `HasEventDedup`，按 owner join 隔离）。
+
+**三、AE2 补完「委派给 Agent」。**
+
+- **动手前先确认执行边界**：`DelegateWork` 建卡时 `StartStatus=todo`，且**没有任何自动派发**（执行要人点）。所以从收件箱发起委派**不获得任何新的执行权**——真正的执行权变更属于 P4 默认动作，不属于这个动词。本次不动权限、不加超时。
+- 只是**接线**，不新建机制：每行加「委派给 Agent」按钮 → 选中该行所属主线 + 用该行标题预填「委派目标」→ 走**既有**委派编辑器。验收条件**故意留空**（什么算完成是人的输入，表单本来就拒绝无验收条件提交）。
+- 刻意**不是**一个被记录的动词：委派是创造工作、不是对某行做出裁决；记成裁决会让卡片完成后该行永久显示「已委派」而不再回到清单。
+
+验证（2026-11-09）：
+
+- AE5：存储层 2 测试（完成时间只盖一次：重复 patch / 重新断言 done 都不重复计入、离开 done 清空；计数按 owner 隔离且边界由调用方给）+ 服务层 1 测试（分子进 ledger，且完成工作**不算决策**）+ **迁移路径回归测试**（手工按迁移 1..4 建 v4 库含历史已完成条目 → Open 升级到 5 → 列存在、历史不回填）；迁移另在真实 v4 库**副本**上实测通过（12 条已完成项、0 条被回填）。
+- AE4：服务层 5 测试（一页合并 4 条积压含「另有 N 项」诚实截断；每天最多一页且次日不重报；仅早晨窗口生效；**失败不吞提醒**；已 dismiss 的行不再报）。
+- AE2：`pnpm typecheck` 通过；`vitest` 50 文件 / 519 通过；新增 e2e（预填标题、验收条件留空且**无验收条件提交被拒**、建卡成功且**仍不自动执行**、该行仍在清单且未记录裁决）。
+- 全部门禁：`playwright work-desktop + acceptance` **73 passed / 0 failed**（三视口）。
+- 已知红灯（非本次引入）：`TestGoFunctionComplexityBudget`（`routes_account.go` 45>40，经 A/B 对照确认为 HEAD 既有）；backend 全量既有 TempDir flake（A/B 对照：我的改动与基线都失败、每轮失败集合不同、隔离跑不复现）。
+
+**仍未做**：AE1 的 flow 失败 run（**阻塞**——`flowRunRecord` 无 `(tenant, owner)` 字段，按 owner 投影无归属信号 = 跨用户泄露，前提是先给 flow run 建归属）；snooze 时长可选项（接口已支持 `until_at`，UI 未给选项）；P4 默认动作 + 事后否决（需要真正的执行权设计）。
 
 ## 7. AE2 前置调研：动词状态放哪（2026-11-07；选项 A 的副作用已实测，其余为静态核查）
 

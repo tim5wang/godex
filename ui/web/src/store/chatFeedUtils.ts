@@ -156,9 +156,12 @@ export function isLedgerBookkeepingTool(name: string | undefined, input: Record<
  *   …report → work_context checkpoint → work_context ack → one-line wrap-up
  *
  * Two signals together, because either one alone is wrong:
- *  - STRUCTURAL: the text directly follows a ledger bookkeeping call. This is what
- *    separates a wrap-up from a legitimately short final answer ("done.") that simply
- *    follows the work.
+ *  - STRUCTURAL: a ledger bookkeeping call appears BETWEEN the preceding report and this
+ *    line. Deliberately NOT "the immediately preceding segment": every assistant message in
+ *    a real transcript carries a thinking block and read actions interleave, so the real shape
+ *    is "report → propose_fact → thinking → focus → thinking → ack → thinking → closing".
+ *    Requiring adjacency was the earlier bug — the interleaved segments broke it, the closing
+ *    line took the answer slot again, and the report was folded away a second time.
  *  - LENGTH GUARD: an earlier non-thinking text is much longer. Without it, an "answer →
  *    ack → short but real closing question" would lose the answer slot.
  */
@@ -173,8 +176,19 @@ export function isTrailingWrapUpNote(segments: FeedSegment[], index: number): bo
   if (hasTextAfter) {
     return false;
   }
-  const previous = segments[index - 1];
-  if (!previous || previous.type !== "tool" || !isLedgerBookkeepingTool(previous.item?.title, previous.item?.input)) {
+  // Walk back to the previous non-thinking text (the report) and look for a bookkeeping call
+  // anywhere in between, including thinking/read segments.
+  let sawBookkeeping = false;
+  for (let i = index - 1; i >= 0; i--) {
+    const previous = segments[i]!;
+    if (previous.type === "text" && !previous.thinking && previous.text?.trim()) {
+      break;
+    }
+    if (previous.type === "tool" && isLedgerBookkeepingTool(previous.item?.title, previous.item?.input)) {
+      sawBookkeeping = true;
+    }
+  }
+  if (!sawBookkeeping) {
     return false;
   }
   const own = segment.text.trim().length;

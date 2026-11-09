@@ -27,7 +27,7 @@ func (s *Service) newWorkContextTool(sessionID string) tools.Tool {
 		TodoOwner    string                 `json:"todo_owner"`
 		TodoDueAt    string                 `json:"todo_due_at"`
 	}
-	return tools.NewTypedTool(tools.NewToolSpec("work_context", "Read the work stream this session is linked to, recall related knowledge, save the checkpoint, plan items (todos) and record evidence-backed facts. focus shows what changed since the stream was last seen plus the plan; plan reads or adds a plan item; todo_patch edits one (status/owner/due); ack marks the stream seen after reporting the focus. list_streams searches your other streams by keyword. Use it proactively while working: update the checkpoint as progress happens, keep plan items current (owner/due), propose facts for conclusions with sources, and supersede an outdated fact by id instead of editing it. It cannot confirm facts, accept tasks, change permissions or query production automatically. IMPORTANT: if_version means the version of the entity the action writes, and it differs per action — for checkpoint it is the STREAM's version (from action=get), for todo_patch it is that PLAN ITEM's own version (from action=plan, usually 1-2, never the stream's). Passing the wrong entity's version always conflicts. Omit if_version to write without a precondition; a conflict error reports the current version to retry with.", map[string]interface{}{
+	return tools.NewTypedTool(tools.NewToolSpec("work_context", "Read the work stream this session is linked to, recall related knowledge, save the checkpoint, plan items (todos) and record evidence-backed facts. focus shows what changed since the stream was last seen plus the plan; plan reads or adds a plan item; todo_patch edits one (status/owner/due); ack marks the stream seen (do it BEFORE your final message — see the ordering note below). list_streams searches your other streams by keyword. Use it proactively while working: update the checkpoint as progress happens, keep plan items current (owner/due), propose facts for conclusions with sources, and supersede an outdated fact by id instead of editing it. ORDERING: finish every work_context call (checkpoint, propose_fact, todo_patch, ack) BEFORE the text the user reads, and end the turn with that text. A work_context call appended AFTER your final text makes the closing line look like the turn's answer and folds the actual report away (the feed shows the last text as the answer). It cannot confirm facts, accept tasks, change permissions or query production automatically. IMPORTANT: if_version means the version of the entity the action writes, and it differs per action — for checkpoint it is the STREAM's version (from action=get), for todo_patch it is that PLAN ITEM's own version (from action=plan, usually 1-2, never the stream's). Passing the wrong entity's version always conflicts. Omit if_version to write without a precondition; a conflict error reports the current version to retry with.", map[string]interface{}{
 		"type": "object", "properties": map[string]interface{}{
 			"action":     map[string]interface{}{"type": "string", "enum": []string{"list_streams", "get", "brief", "recall", "focus", "ack", "checkpoint", "plan", "todo_patch", "propose_fact", "supersede"}},
 			"query":      map[string]string{"type": "string"},
@@ -79,8 +79,10 @@ func (s *Service) newWorkContextTool(sessionID string) tools.Tool {
 		case "focus":
 			out, err = store.Focus(ctx, scope, id)
 		case "ack":
-			// Marking seen is explicit so read-receipts stay truthful: the model acks
-			// only after it has actually reported the focus to the user.
+			// Marking seen is explicit so read-receipts stay truthful: the model acks once it has
+			// DECIDED what to report. The guidance is to do this BEFORE the final message, not after
+			// it: a work_context call appended after the closing text made that text look like the
+			// turn's answer in the feed and folded the real report away.
 			previous, ackErr := store.MarkSeen(ctx, scope, id)
 			if ackErr != nil {
 				err = ackErr

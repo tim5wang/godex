@@ -245,4 +245,44 @@ describe("ledger bookkeeping calls at the end of a turn", () => {
     const { answer } = splitTurnSegments(grouped[0].segments ?? []);
     expect(answer.some((s) => s.text === "done.")).toBe(true);
   });
+
+  it("keeps the report visible when a READ action sits between it and the closing line", () => {
+    // The regression, taken from a real session (2026-11-09):
+    //   report(1865) + propose_fact → focus → ack → "无新请求…"(465)
+    //
+    // The earlier fix only recognised a closing line that DIRECTLY followed a bookkeeping
+    // call. A read action (focus) in between broke that adjacency, the 465-char status line
+    // took the answer slot again, and the 1865-char report was folded into the process
+    // summary — i.e. the turn the user was reading appeared to collapse all over again.
+    // The presence of a bookkeeping call ANYWHERE before the closing line is the signal;
+    // requiring it to be the immediate neighbour was the bug.
+    const report = "R".repeat(1865);
+    const closing = "无新请求（仅运行态日期信息）。上一轮的说明已交付，我不启动新工作。";
+    const ledger = (id: string, action: string): FeedItem =>
+      makeItem({ id, kind: "tool", title: "work_context", input: { action }, status: "finished" });
+    // EVERY assistant message in the real transcript carries a thinking block, so a thinking
+    // text segment sits between the bookkeeping call and the closing line. Requiring the
+    // closing line's IMMEDIATE neighbour to be a bookkeeping call is therefore the bug: the
+    // interleaved thinking segment breaks that adjacency.
+    const thinking = (id: string): FeedItem =>
+      makeItem({ id, kind: "background", title: "Thinking…", body: "reasoning " + id, turnId: "t1", timestamp: "2026-11-09T18:00:01Z" });
+    const items: FeedItem[] = [
+      makeItem({ id: "assistant:t1", kind: "assistant", turnId: "t1", body: report, timestamp: "2026-11-09T18:00:00Z" }),
+      ledger("tool:fact", "propose_fact"),
+      thinking("think:1"),
+      ledger("tool:focus", "focus"),
+      thinking("think:2"),
+      ledger("tool:ack", "ack"),
+      thinking("think:3"),
+      makeItem({ id: "assistant:t1#2", kind: "assistant", turnId: "t1", body: closing, timestamp: "2026-11-09T18:01:00Z" }),
+    ];
+    const grouped = groupFeedItemsIntoTurns(items);
+    const { process, answer } = splitTurnSegments(grouped[0].segments ?? []);
+    const answerText = answer.map((s) => s.text ?? "").join("");
+    expect(answerText).toContain(report);
+    // And the report is not buried in the collapsed process summary.
+    expect(process.some((s) => s.text === report)).toBe(false);
+    // The closing line stays visible (it is real text), just not as THE answer.
+    expect(answerText).toContain(closing);
+  });
 });

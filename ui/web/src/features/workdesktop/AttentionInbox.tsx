@@ -1,11 +1,40 @@
 import { useState } from "react";
-import { Badge, Button, Card, Input, Popconfirm, Segmented, Space, Tag, Typography } from "antd";
-import { ThunderboltOutlined } from "@ant-design/icons";
+import { Badge, Button, Card, Dropdown, Input, Popconfirm, Segmented, Space, Tag, Typography } from "antd";
+import { DownOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import dayjs from "dayjs";
 import { useI18n } from "../../i18n";
 import { InfoHint } from "./workDesktopHints";
 import { FoldCard } from "./workDesktopFold";
 import { formatTimestamp } from "./workDesktopView";
 import type { AttentionAction, AttentionItem, AttentionVerb, DeferredAttention } from "../../lib/apiWorkContext";
+
+/** The explicit snooze windows offered in the inbox. */
+export type SnoozeChoice = "tomorrow" | "threeDays" | "nextWeek";
+
+export const SNOOZE_CHOICES: ReadonlyArray<SnoozeChoice> = ["tomorrow", "threeDays", "nextWeek"];
+
+/**
+ * The wake time for a snooze choice, computed at click time.
+ *
+ * Explicit windows instead of one fixed rule: how long "later" is depends on the item, and a
+ * single hard-coded window is wrong in both directions — too short for something you will only
+ * revisit next week, too long for something you just need to see again tomorrow.
+ *
+ * Every choice is hours-to-days out, so a small clock skew between browser and server cannot
+ * produce an until_at in the past (the server rejects those outright). "Tomorrow" lands on a
+ * stable 09:00 rather than "24h from now", because a reminder arriving at 23:40 is not what
+ * anyone means by tomorrow.
+ */
+export function snoozeUntilAt(choice: SnoozeChoice, now: dayjs.Dayjs = dayjs()): string {
+  switch (choice) {
+    case "tomorrow":
+      return now.add(1, "day").hour(9).minute(0).second(0).millisecond(0).toISOString();
+    case "nextWeek":
+      return now.add(7, "day").toISOString();
+    default:
+      return now.add(3, "day").toISOString();
+  }
+}
 
 /**
  * AttentionInbox is the cross-stream "needs me" list.
@@ -25,7 +54,7 @@ export function AttentionInbox(props: {
   onScopeChange: (scope: "current" | "all") => void;
   /** Rows the owner already ruled on, reported so deferral is visible and undoable. */
   deferred?: DeferredAttention[];
-  onAction?: (contextId: string, itemKey: string, verb: AttentionVerb, reason?: string) => void;
+  onAction?: (contextId: string, itemKey: string, verb: AttentionVerb, opts?: { reason?: string; untilAt?: string }) => void;
   onUndo?: (contextId: string, itemKey: string) => void;
   /**
    * Turn a row into delegated work. Not a recorded verb (see the store's openDelegateEditor):
@@ -71,6 +100,19 @@ export function AttentionInbox(props: {
       >
         {tr("attentionSnooze")}
       </Button>
+      {/* Explicit windows live behind a caret so the COMMON case stays one click: the plain
+          button keeps the server's default, and this only adds the choice. A compact triage
+          row cannot afford three snooze buttons, and a picker on every click would tax the
+          case that does not care. */}
+      <Dropdown
+        trigger={["click"]}
+        menu={{
+          items: SNOOZE_CHOICES.map((choice) => ({ key: choice, label: tr(`attentionSnooze${choice[0]!.toUpperCase()}${choice.slice(1)}`) })),
+          onClick: ({ key }) => onAction?.(contextId, actionKey, "snooze", { untilAt: snoozeUntilAt(key as SnoozeChoice) }),
+        }}
+      >
+        <Button size="small" type="text" icon={<DownOutlined aria-hidden="true" />} aria-label={tr("attentionSnoozePick")} />
+      </Dropdown>
       {/* Dismiss hides work, so it takes a reason first: a verdict with no recorded
           reason is indistinguishable from losing the work, and this is what makes undo
           meaningful. */}
@@ -90,7 +132,7 @@ export function AttentionInbox(props: {
         onConfirm={() => {
           const reason = (dismissReason[actionKey] ?? "").trim();
           if (!reason) return;
-          onAction?.(contextId, actionKey, "dismiss", reason);
+          onAction?.(contextId, actionKey, "dismiss", { reason });
           setDismissReason((prev) => ({ ...prev, [actionKey]: "" }));
         }}
       >

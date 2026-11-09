@@ -311,9 +311,9 @@ export function useWorkDesktopData() {
   // and the deferred list) but never touch the stream's version or seen watermark —
   // ruling on a row is not reading the stream, and it is not an edit of the work.
   const attentionActionMutation = useMutation({
-    mutationFn: (values: { contextId: string; itemKey: string; verb: AttentionVerb; reason?: string }) =>
+    mutationFn: (values: { contextId: string; itemKey: string; verb: AttentionVerb; reason?: string; untilAt?: string }) =>
       recordWorkAttentionAction(token || null, values.contextId, {
-        item_key: values.itemKey, verb: values.verb, reason: values.reason,
+        item_key: values.itemKey, verb: values.verb, reason: values.reason, until_at: values.untilAt,
       }),
     onSuccess: () => { void attentionQuery.refetch(); },
     onError: (error) => fail(error, "saveFailed"),

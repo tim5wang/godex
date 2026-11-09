@@ -229,7 +229,7 @@ export function WorkDesktopSectionBoard(props: { section: string; data: WorkDesk
           scope={attentionScope}
           onScopeChange={setAttentionScope}
           deferred={scopedDeferred}
-          onAction={(contextId, itemKey, verb, reason) => attentionActionMutation.mutate({ contextId, itemKey, verb, reason })}
+          onAction={(contextId, itemKey, verb, opts) => attentionActionMutation.mutate({ contextId, itemKey, verb, reason: opts?.reason, untilAt: opts?.untilAt })}
           onUndo={(contextId, itemKey) => attentionUndoMutation.mutate({ contextId, itemKey })}
           onDelegate={openDelegateEditor}
         />

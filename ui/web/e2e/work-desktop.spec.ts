@@ -1367,6 +1367,35 @@ test("snoozing a row takes it off the list without losing it, and it comes back 
   await expect(row).toBeVisible();
 });
 
+// The explicit snooze windows. The plain "稍后" button keeps the server's default (one click,
+// unchanged), and this asserts the OTHER path: picking a window sends an until_at, and the
+// recorded wake time matches the chosen window rather than the default.
+test("a snooze can take an explicit window instead of the 3-day default", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  const store = await install(page, seededStore());
+  await openSection(page, "待处理");
+
+  const inbox = boards(page).locator(".wd-attention");
+  const row = inbox.locator(".wd-attention-item").filter({ hasText: "退化可能来自解码参数" });
+  await expect(row).toBeVisible();
+
+  // The choice is behind a caret so the common case stays one click.
+  const before = Date.now();
+  await row.getByRole("button", { name: "选择推迟时长", exact: true }).click();
+  await page.getByText("下周", { exact: true }).click();
+
+  const stored = store.attentionActions["fact_review:ctx-1"]!;
+  expect(stored.verb).toBe("snooze");
+  // The request carried an explicit wake time...
+  expect(stored.until_at).not.toBe("");
+  // ...and it is the chosen window (~7 days), not the 3-day default — which is the whole
+  // point of the feature: a window the user picked must survive to what is recorded.
+  const wake = Date.parse(stored.until_at);
+  const daysOut = (wake - before) / (24 * 3600 * 1000);
+  expect(daysOut).toBeGreaterThan(6);
+  expect(daysOut).toBeLessThan(8);
+});
+
 test("a snooze is one decision, not a change, and claiming keeps the row listed", async ({ page }) => {
   test.skip((page.viewportSize()?.width ?? 0) < 1024);
   const store = await install(page, seededStore());

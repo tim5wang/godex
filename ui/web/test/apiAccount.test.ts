@@ -2,13 +2,16 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   acceptMemberInvite,
   changePassword,
+  createEnrolmentCode,
   createMemberInvite,
   getAccountProfile,
   listAccountSessions,
+  listEnrolmentCodes,
   listMemberInvites,
   listMembers,
   removeMember,
   revokeAccountSession,
+  revokeEnrolmentCode,
   revokeMemberInvite,
   revokeOtherSessions,
   setMemberRole,
@@ -178,5 +181,55 @@ describe("user centre routes", () => {
   it("attaches the credential to every scoped call", async () => {
     await getAccountProfile("tok-123");
     expect(last().headers.authorization).toBe("Bearer tok-123");
+  });
+});
+
+describe("enrolment code route families", () => {
+  // Same defect class as the member routes above, and it matters more here: the
+  // endpoints look nearly identical, so a mix-up is silent in TypeScript and shows
+  // up as a 403 for a tenant admin (sent to the platform-only route) — i.e. the
+  // self-serve path this round exists for would fail with "not allowed" rather than
+  // "wrong URL", which is the kind of error that gets misdiagnosed for a long time.
+  it("uses the tenant routes for your own tenant", async () => {
+    await listEnrolmentCodes("tok", { kind: "tenant" });
+    expect(last().url).toBe("/api/tenant/join-tokens");
+    expect(last().method).toBe("GET");
+
+    await createEnrolmentCode("tok", { kind: "tenant" }, { label: "laptop", ttlHours: 24 });
+    expect(last().url).toBe("/api/tenant/join-tokens");
+    expect(last().method).toBe("POST");
+    // Empty owner means "the caller" server-side, which is what a user adding their
+    // own second device wants; the wire still carries the field so an explicit owner
+    // travels the same way on both scopes.
+    expect(last().body).toEqual({ owner_user_id: "", label: "laptop", ttl_hours: 24 });
+
+    await revokeEnrolmentCode("tok", { kind: "tenant" }, "jt_1");
+    expect(last().url).toBe("/api/tenant/join-tokens/jt_1");
+    expect(last().method).toBe("DELETE");
+  });
+
+  it("uses the platform routes when a superadmin acts on a tenant by id", async () => {
+    const scope = { kind: "admin", tenantID: "tnt_acme" } as const;
+
+    await listEnrolmentCodes("tok", scope);
+    expect(last().url).toBe("/api/admin/tenants/tnt_acme/join-tokens");
+
+    await createEnrolmentCode("tok", scope, { ownerUserID: "usr_2" });
+    expect(last().url).toBe("/api/admin/tenants/tnt_acme/join-tokens");
+    expect(last().body).toEqual({ owner_user_id: "usr_2", label: "", ttl_hours: 0 });
+
+    // Revoke must stay in the SAME scope: the admin route is the one whose id is
+    // NOT tenant-checked server-side, so sending the tenant path here would 404
+    // instead of revoking.
+    await revokeEnrolmentCode("tok", scope, "jt_1");
+    expect(last().url).toBe("/api/admin/tenants/tnt_acme/join-tokens/jt_1");
+  });
+
+  it("encodes ids so an id containing a slash cannot address another route", async () => {
+    await revokeEnrolmentCode("tok", { kind: "tenant" }, "jt/../../admin");
+    expect(last().url).toBe("/api/tenant/join-tokens/jt%2F..%2F..%2Fadmin");
+
+    await revokeEnrolmentCode("tok", { kind: "admin", tenantID: "tnt/a" }, "jt_1");
+    expect(last().url).toBe("/api/admin/tenants/tnt%2Fa/join-tokens/jt_1");
   });
 });

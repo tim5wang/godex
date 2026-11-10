@@ -141,6 +141,86 @@ function inviteBase(scope: MemberScope): string {
     : `/admin/tenants/${encodeURIComponent(scope.tenantID)}/invites`;
 }
 
+/** JoinTokenScope picks the route family for enrolment codes: a TENANT admin issues
+ *  codes for their own tenant, the platform superadmin for any tenant by id. Same
+ *  shape as MemberScope and for the same reason — one surface serves both, so the
+ *  ownership rule lives in the shape of the scope rather than in duplicated UI. */
+export type JoinTokenScope = { kind: "tenant" } | { kind: "admin"; tenantID: string };
+
+function joinTokenBase(scope: JoinTokenScope): string {
+  return scope.kind === "tenant"
+    ? "/tenant/join-tokens"
+    : `/admin/tenants/${encodeURIComponent(scope.tenantID)}/join-tokens`;
+}
+
+/** EnrolmentCode is one one-time device enrolment code. No credential material:
+ *  the server stores only a hash, so the plaintext exists just once, in the
+ *  response to the create call. */
+export interface EnrolmentCode {
+  id: string;
+  tenant_id: string;
+  owner_user_id?: string;
+  label?: string;
+  created_by?: string;
+  created_at?: string;
+  expires_at?: string;
+  used_at?: string;
+  used_by_node?: string;
+  revoked_at?: string;
+}
+
+/** listEnrolmentCodes lists the codes issued for a scope's tenant.
+ *
+ *  The tenant scope also returns the node allowance (`max_nodes`, 0 = unlimited)
+ *  and how many are used, so the surface can say "you are at your limit" BEFORE the
+ *  user clicks issue — the server refuses an over-allowance issue with 409, and a
+ *  user who only learns that from an error has already lost the click. */
+export function listEnrolmentCodes(
+  token: string | null,
+  scope: JoinTokenScope,
+): Promise<{ join_tokens: EnrolmentCode[]; max_nodes?: number; used_nodes?: number }> {
+  return request<{ join_tokens: EnrolmentCode[]; max_nodes?: number; used_nodes?: number }>(
+    joinTokenBase(scope),
+    { method: "GET" },
+    token,
+  );
+}
+
+/** createEnrolmentCode issues a one-time code. Returns the PLAINTEXT, which the
+ *  store does not keep: the caller must show it now or issue another. */
+export function createEnrolmentCode(
+  token: string | null,
+  scope: JoinTokenScope,
+  input: { ownerUserID?: string; label?: string; ttlHours?: number },
+): Promise<{ join_token: EnrolmentCode; token: string }> {
+  return request<{ join_token: EnrolmentCode; token: string }>(
+    joinTokenBase(scope),
+    {
+      method: "POST",
+      body: JSON.stringify({
+        owner_user_id: input.ownerUserID ?? "",
+        label: input.label ?? "",
+        ttl_hours: input.ttlHours ?? 0,
+      }),
+    },
+    token,
+  );
+}
+
+/** revokeEnrolmentCode withdraws an unused code. Scoped (unlike the admin route),
+ *  so a code belonging to another tenant answers 404 rather than being revoked. */
+export function revokeEnrolmentCode(
+  token: string | null,
+  scope: JoinTokenScope,
+  id: string,
+): Promise<{ revoked: boolean }> {
+  return request<{ revoked: boolean }>(
+    `${joinTokenBase(scope)}/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+    token,
+  );
+}
+
 export function listMembers(token: string | null, scope: MemberScope): Promise<{ members: MemberView[] }> {
   return request<{ members: MemberView[] }>(memberBase(scope), { method: "GET" }, token);
 }

@@ -34,7 +34,7 @@ import {
 } from "../../lib/apiAdmin";
 
 import { AdminCreateTenantCard } from "./AdminCreateTenantCard";
-import { AdminJoinTokensCard } from "./AdminJoinTokensCard";
+import { JoinTokensCard } from "./JoinTokensCard";
 import { AdminRelayUsageCard } from "../usage/relay/RelayUsage";
 import { OperatorGrantsCard } from "./OperatorGrantsCard";
 import { TenantNodeLimitCell } from "./TenantNodeLimitCell";
@@ -337,8 +337,9 @@ export function AdminSettingsPanel({ token }: { token: string | null }) {
       <AdminCreateTenantCard token={token} />
 
       {joinTokenTenant ? (
-        <AdminJoinTokensCard
+        <JoinTokensCard
           token={token}
+          scope={{ kind: "admin", tenantID: joinTokenTenant.id }}
           tenant={{ id: joinTokenTenant.id, name: joinTokenTenant.name }}
           onClose={() => setJoinTokenTenant(null)}
         />

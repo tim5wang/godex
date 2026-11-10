@@ -52,6 +52,7 @@ import { useSettingsStore } from "../../store/settings";
 import { ensurePushSubscription, pushSupported, sendTestPush } from "../../lib/push";
 import { MCPSettingsPanel } from "./MCPSettingsPanel";
 import { AdminSettingsPanel } from "./AdminSettingsPanel";
+import { JoinTokensCard } from "./JoinTokensCard";
 import { TenantAccessCard } from "./TenantAccessCard";
 import { ConfigSectionFields } from "./SettingsConfigFields";
 import {
@@ -570,7 +571,16 @@ export function SettingsPage() {
               authRequired && !token ? (
                 <Alert type="warning" showIcon message={t("settings.authRequired", { area: t("settings.accessTabTitle") })} />
               ) : (
-                <TenantAccessCard token={token || null} />
+                <Space direction="vertical" size={16} style={{ width: "100%" }}>
+                  {/* The tenant's own device codes live on the TENANT's side of the
+                      API (§3.5.1): this round's feature is "the same user on several
+                      devices", so the user must be able to issue their own code
+                      without asking the operator. Putting it in the operator tab only
+                      would leave the endpoint unreachable for the person it exists
+                      for. */}
+                  <JoinTokensCard token={token || null} scope={{ kind: "tenant" }} />
+                  <TenantAccessCard token={token || null} />
+                </Space>
               ),
           },
         ]}

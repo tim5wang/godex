@@ -196,6 +196,21 @@
 只用在 agent 会话内部，不经 HTTP 暴露。所以 `scope=session/personal` 那套与「中心本地面」**不冲突**：
 HTTP 面看到的本就是共享层，闸到操作员即可。
 
+### 5.3 机器调用面（`biz_` / `gdx_`）：不是租户面，按运营集成通道收口（2026-11-11 拍板）
+
+**管理面**（`/v1/biz/keys*`、`/usage/keys*`）走 §5.1 的 `requireCenterLocalData` ⇒ **租户 403**、
+仅超管 + 节点行动者。回归测试 `center_local_gate_usage_test.go`（含 `TestTenantCannotDestroyTheOperatorsBizKey`）。
+
+**调用面**（`/v1/agent-steps*`、`/v1/gateway/{route}`、`/v1/chat/completions` 的 `gdx_` 分支）
+**只有 key 鉴权、无租户闸门**——这是**拍板的选项 a**，不是遗漏：该面服务**运营签发的集成方**，
+本期无任何租户应持有此类凭据；且它**不写 `relay_usage`** ⇒ 不纳入日配额（与 TCP 隧道同一条取舍，设计 §7.3）。
+
+**已接受的代价**：① 该凭据是**中心执行级**——泄露即在中心工作区跑 agent ⇒ 按运营级管理
+（最小白名单 / 轮换 / `Enabled`）；② 审计**只能归因到 key id**，查不到租户。
+若将来把「业务智能体」做成租户可买的功能，须**先**给 key 加 `tenant_id`（设计 §7.5 记了触发条件）。
+
+**已知 UX 瑕疵**：前端 `appRegistry.tsx` 不按角色隐藏导航 ⇒ 租户看得见 Business Agents 入口、点进去 403。
+
 ## 6. 已知缺口（本文不含「已解决」的部分）
 
 | 缺口 | 现状 |

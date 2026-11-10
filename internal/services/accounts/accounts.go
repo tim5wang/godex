@@ -72,6 +72,12 @@ type Service struct {
 	db  *sql.DB
 	mu  sync.Mutex
 	now func() time.Time
+	// freeTierMaxNodes / freeTierMaxDailyBytes are the allowance a FRESH self-serve
+	// tenant starts with (0 = unlimited = write no policy row). Set once at startup
+	// from configuration; read inside the signup transaction so a new tenant is never
+	// briefly unlimited on a deployment that means to cap it.
+	freeTierMaxNodes      int
+	freeTierMaxDailyBytes int64
 }
 
 // New opens (creating if needed) the account store under stateDir.
@@ -350,6 +356,40 @@ type RegisterResult struct {
 	Created bool
 }
 
+// SetFreeTierDefaults records the allowance a FRESH self-serve tenant starts with.
+//
+// Why this belongs next to Register rather than in the route: signup creates the
+// tenant, so the policy row has to be written in the same transaction that creates
+// it — otherwise a crash between the two would leave a tenant with no allowance, or
+// (worse) a new tenant briefly unlimited on a deployment that means to cap it.
+//
+// Zero means "write no policy row", i.e. the tenant keeps the default of UNLIMITED,
+// which is what every deployment did before this became settable. That encoding
+// matters: the free tier is the operator's choice, not something an upgrade should
+// impose, and a center with no configuration must behave exactly as it did.
+//
+// Called once at startup, before any request is served.
+func (s *Service) SetFreeTierDefaults(maxNodes int, maxDailyBytes int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if maxNodes < 0 {
+		maxNodes = 0
+	}
+	if maxDailyBytes < 0 {
+		maxDailyBytes = 0
+	}
+	s.freeTierMaxNodes = maxNodes
+	s.freeTierMaxDailyBytes = maxDailyBytes
+}
+
+// FreeTierDefaults reports what a fresh tenant starts with (0 = unlimited), so the
+// admin surface can show the operator what signups will actually get.
+func (s *Service) FreeTierDefaults() (maxNodes int, maxDailyBytes int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.freeTierMaxNodes, s.freeTierMaxDailyBytes
+}
+
 // Register creates a user and a tenant they own, then signs them in.
 //
 // Signup always creates a fresh tenant with the caller as owner: this is the SaaS
@@ -424,6 +464,18 @@ func (s *Service) Register(input RegisterInput) (RegisterResult, error) {
 	if _, err := tx.Exec(`INSERT INTO memberships (tenant_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)`,
 		member.TenantID, member.UserID, member.Role, member.JoinedAt); err != nil {
 		return RegisterResult{}, fmt.Errorf("insert membership: %w", err)
+	}
+	// The free-tier allowance is written in the SAME transaction as the tenant, so a
+	// new signup is never briefly unlimited on a deployment that means to cap it.
+	// A zero default writes no row at all, which keeps the default UNLIMITED and
+	// leaves every pre-existing behaviour (and stored policy) untouched.
+	if s.freeTierMaxNodes > 0 || s.freeTierMaxDailyBytes > 0 {
+		if _, err := tx.Exec(
+			`INSERT INTO tenant_policies (tenant_id, max_nodes, max_daily_bytes, updated_at) VALUES (?, ?, ?, ?)`,
+			tenant.ID, s.freeTierMaxNodes, s.freeTierMaxDailyBytes, now,
+		); err != nil {
+			return RegisterResult{}, fmt.Errorf("insert free-tier policy: %w", err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return RegisterResult{}, fmt.Errorf("commit register: %w", err)

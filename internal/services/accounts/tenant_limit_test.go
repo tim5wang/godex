@@ -180,6 +180,94 @@ func TestDailyByteLimitDoesNotClobberTheOtherPolicies(t *testing.T) {
 	}
 }
 
+// TestFreeTierDefaultsAreZeroByDefault: an unconfigured center must behave exactly as
+// it did before these knobs existed — unlimited, and no policy row written.
+func TestFreeTierDefaultsAreZeroByDefault(t *testing.T) {
+	service := newTestService(t)
+	maxNodes, maxDailyBytes := service.FreeTierDefaults()
+	if maxNodes != 0 || maxDailyBytes != 0 {
+		t.Fatalf("defaults = (%d, %d), want (0, 0) = unlimited", maxNodes, maxDailyBytes)
+	}
+
+	result := registerUser(t, service, "owner@example.com", "correct-horse")
+	tenantID := result.Tenant.ID
+	if got := service.TenantMaxNodes(tenantID); got != 0 {
+		t.Errorf("fresh signup MaxNodes = %d, want 0 (unlimited)", got)
+	}
+	if got := service.TenantMaxDailyBytes(tenantID); got != 0 {
+		t.Errorf("fresh signup MaxDailyBytes = %d, want 0 (unlimited)", got)
+	}
+}
+
+// TestFreeTierDefaultsApplyToNewSignups is the point of the feature: a self-serve
+// signup starts with the operator's free allowance instead of being unlimited.
+func TestFreeTierDefaultsApplyToNewSignups(t *testing.T) {
+	service := newTestService(t)
+	const hundredMB = 100 * 1024 * 1024
+	service.SetFreeTierDefaults(2, hundredMB)
+
+	fresh := registerUser(t, service, "new@example.com", "correct-horse")
+	if got := service.TenantMaxNodes(fresh.Tenant.ID); got != 2 {
+		t.Errorf("fresh signup MaxNodes = %d, want 2", got)
+	}
+	if got := service.TenantMaxDailyBytes(fresh.Tenant.ID); got != hundredMB {
+		t.Errorf("fresh signup MaxDailyBytes = %d, want %d", got, hundredMB)
+	}
+
+	// Defaults apply to SIGNUP only. A tenant that already exists keeps the policy it
+	// was created with, so raising a default cannot silently change the terms someone
+	// already enrolled under.
+	before := registerUser(t, service, "before@example.com", "correct-horse")
+	service.SetFreeTierDefaults(99, 999)
+	if got := service.TenantMaxNodes(before.Tenant.ID); got != 2 {
+		t.Errorf("existing tenant MaxNodes = %d, want 2 (defaults are not retroactive)", got)
+	}
+	if got := service.TenantMaxDailyBytes(before.Tenant.ID); got != hundredMB {
+		t.Errorf("existing tenant MaxDailyBytes = %d, want %d (not retroactive)", got, hundredMB)
+	}
+
+	// A later signup gets the NEW default.
+	after := registerUser(t, service, "after@example.com", "correct-horse")
+	if got := service.TenantMaxNodes(after.Tenant.ID); got != 99 {
+		t.Errorf("signup after raising the default: MaxNodes = %d, want 99", got)
+	}
+}
+
+// TestFreeTierDefaultsOnlyNodesOrOnlyBytes: either knob may be set alone, and 0 for
+// the other must stay "unlimited" rather than being read as "none".
+func TestFreeTierDefaultsOnlyNodesOrOnlyBytes(t *testing.T) {
+	service := newTestService(t)
+	service.SetFreeTierDefaults(2, 0)
+	onlyNodes := registerUser(t, service, "nodes@example.com", "correct-horse")
+	if got := service.TenantMaxNodes(onlyNodes.Tenant.ID); got != 2 {
+		t.Errorf("MaxNodes = %d, want 2", got)
+	}
+	if got := service.TenantMaxDailyBytes(onlyNodes.Tenant.ID); got != 0 {
+		t.Errorf("MaxDailyBytes = %d, want 0 (unlimited: only the node knob was set)", got)
+	}
+
+	service.SetFreeTierDefaults(0, 4096)
+	onlyBytes := registerUser(t, service, "bytes@example.com", "correct-horse")
+	if got := service.TenantMaxNodes(onlyBytes.Tenant.ID); got != 0 {
+		t.Errorf("MaxNodes = %d, want 0 (unlimited: only the byte knob was set)", got)
+	}
+	if got := service.TenantMaxDailyBytes(onlyBytes.Tenant.ID); got != 4096 {
+		t.Errorf("MaxDailyBytes = %d, want 4096", got)
+	}
+}
+
+// TestFreeTierDefaultsClampNegatives: a negative allowance has no meaning, and
+// silently storing it would read back as "unlimited" anyway (the getters clamp), so
+// clamping at the setter keeps what is stored and what is enforced consistent.
+func TestFreeTierDefaultsClampNegatives(t *testing.T) {
+	service := newTestService(t)
+	service.SetFreeTierDefaults(-5, -4096)
+	maxNodes, maxDailyBytes := service.FreeTierDefaults()
+	if maxNodes != 0 || maxDailyBytes != 0 {
+		t.Fatalf("defaults = (%d, %d), want (0, 0) after clamping negatives", maxNodes, maxDailyBytes)
+	}
+}
+
 // TestInitMigratesTenantPoliciesWithoutMaxNodes is the upgrade path that matters
 // most for this feature.
 //

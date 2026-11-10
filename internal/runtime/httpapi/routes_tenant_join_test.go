@@ -17,7 +17,7 @@ import (
 // remove. Note the request carries NO web token: the tenant session is the whole
 // credential.
 func TestTenantAdminIssuesOwnDeviceCode(t *testing.T) {
-	server, service, registry := newJoinServer(t)
+	server, _, registry := newJoinServer(t)
 	adminToken, tenantID, adminUserID := registerTenantOwner(t, server, "admin@example.com")
 
 	resp, body := doJSON(t, http.MethodPost, server.URL+"/tenant/join-tokens", adminToken, map[string]any{
@@ -64,7 +64,6 @@ func TestTenantAdminIssuesOwnDeviceCode(t *testing.T) {
 	if _, ok := listed["used_nodes"]; !ok {
 		t.Errorf("list response has no used_nodes: %v", listed)
 	}
-	_ = service
 }
 
 // TestTenantPlainMemberCannotIssueCodes: issuing an enrolment code adds a machine

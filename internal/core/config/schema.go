@@ -70,6 +70,8 @@ func baseSchema() []SectionSchema {
 			Fields: []FieldSchema{
 				{Path: "web.token", Label: "Shared Bearer Token", Description: "Protects chat and config HTTP APIs.", Type: "string", Secret: true, LiveApply: true, PlatformAdmin: true, Env: "GODEX_WEB_TOKEN"},
 				{Path: "web.allow_self_signup", Label: "Allow Self Signup", Description: "Open POST /auth/register to anonymous callers. Closed by default: signup mints a new tenant, so leaving it open lets anyone who can reach this instance create their own. The platform admin can always create a tenant with the web token.", Type: "bool", LiveApply: true, Env: "GODEX_WEB_ALLOW_SELF_SIGNUP"},
+				{Path: "web.free_tier_max_nodes", Label: "Free Tier Max Nodes", Description: "Node allowance a FRESH self-serve signup starts with. 0 (the default) means unlimited and writes no policy row. Applies to signup only: an existing tenant's stored policy is never rewritten, so raising this cannot change the terms someone already enrolled under.", Type: "int", Env: "GODEX_WEB_FREE_TIER_MAX_NODES"},
+				{Path: "web.free_tier_max_daily_mb", Label: "Free Tier Max Daily MB", Description: "Daily forwarded-traffic allowance (MB) a FRESH self-serve signup starts with. 0 (the default) means unlimited. Expressed in MB because that is the unit an operator reasons in; enforcement compares against bytes on the forwarded-request path.", Type: "int", Env: "GODEX_WEB_FREE_TIER_MAX_DAILY_MB"},
 			},
 		},
 		{

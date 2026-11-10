@@ -605,6 +605,15 @@ func openAccountsStore(cfg *config.Config) (*accounts.Service, func()) {
 		logger.Warnf("accounts store unavailable, email/password sign-in disabled: %v", err)
 		return nil, func() {}
 	}
+	// Free-tier defaults are set before any request is served, so a new signup can
+	// never be briefly unlimited on a deployment that means to cap it. The MB→bytes
+	// conversion lives on Config, so this and the httpapi's on-demand store cannot
+	// drift on the multiplier.
+	//
+	// Deliberately not live-applied: the value affects FUTURE signups only (an
+	// existing tenant's stored policy is never rewritten), so a restart costs nothing
+	// and avoids two sources of truth for what a signup "would" get.
+	service.SetFreeTierDefaults(cfg.WebFreeTierDefaults())
 	return service, func() { _ = service.Close() }
 }
 

@@ -429,6 +429,12 @@ web:
   # tenant, so an open instance lets anyone who can reach it create their own.
   # Environment override: GODEX_WEB_ALLOW_SELF_SIGNUP.
   allow_self_signup: {{ .Web.AllowSelfSignup }}
+  # Allowance a FRESH signup starts with. 0 (the default) means unlimited, which is
+  # what every deployment did before these existed. Applies to signup only: an
+  # existing tenant's stored policy is never rewritten.
+  # Environment overrides: GODEX_WEB_FREE_TIER_MAX_NODES / GODEX_WEB_FREE_TIER_MAX_DAILY_MB.
+  free_tier_max_nodes: {{ .Web.FreeTierMaxNodes }}
+  free_tier_max_daily_mb: {{ .Web.FreeTierMaxDailyMB }}
 
 cron:
   # Enable the background cron scheduler in serve mode. Environment override: GODEX_CRON_ENABLED.

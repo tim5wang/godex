@@ -323,6 +323,10 @@ func registerAdminRoutes(mux *http.ServeMux, accountsService *accounts.Service, 
 		if !adminAccountsAvailable(w, accountsService) {
 			return
 		}
+		// What a FRESH signup starts with (0 = unlimited). Reported here so the console
+		// can show the operator the actual terms new users get, instead of the client
+		// guessing from a config file it cannot read.
+		freeTierNodes, freeTierDailyBytes := accountsService.FreeTierDefaults()
 		writeJSON(w, http.StatusOK, map[string]any{
 			// Default visibility for a newly claimed node (decision ⑥).
 			"default_visibility": identity.VisibilityPrivate,
@@ -331,6 +335,8 @@ func registerAdminRoutes(mux *http.ServeMux, accountsService *accounts.Service, 
 				identity.RoleTenantAdmin,
 				identity.RoleTenantMember,
 			},
+			"free_tier_max_nodes":       freeTierNodes,
+			"free_tier_max_daily_bytes": freeTierDailyBytes,
 		})
 	})))
 }

@@ -22,19 +22,26 @@ const (
 
 // Config holds the fully resolved runtime configuration.
 type Config struct {
-	APIKey               string
-	Model                string
-	ReasoningEffort      string
-	BaseURL              string
-	DefaultProfileID     string
-	DefaultModelRef      string
-	FallbackProfileIDs   []string
-	AutoFallbackEnabled  bool
-	ModelProfiles        map[string]ModelProfileConfig
-	LLMProviders         map[string]llm.ProviderConfig
-	LLMStrategy          llm.StrategyConfig
-	WebToken             string
-	WebAllowSelfSignup   bool
+	APIKey              string
+	Model               string
+	ReasoningEffort     string
+	BaseURL             string
+	DefaultProfileID    string
+	DefaultModelRef     string
+	FallbackProfileIDs  []string
+	AutoFallbackEnabled bool
+	ModelProfiles       map[string]ModelProfileConfig
+	LLMProviders        map[string]llm.ProviderConfig
+	LLMStrategy         llm.StrategyConfig
+	WebToken            string
+	WebAllowSelfSignup  bool
+	// Free-tier allowance a FRESH signup starts with; 0 = unlimited, which writes no
+	// policy row and keeps the pre-existing behaviour. Names are kept within the
+	// block's existing width on purpose, so adding them does not force gofmt to
+	// realign every other field (a whitespace-only diff across the whole struct).
+	// Applies to signup only: an existing tenant's stored policy is never rewritten.
+	WebFreeTierNodes     int
+	WebFreeTierDailyMB   int
 	MaxTokens            int
 	APITimeoutSeconds    int
 	HomeDir              string
@@ -177,6 +184,27 @@ const (
 	AgentProfileGeneral = "general"
 	AgentProfileCoding  = "coding"
 )
+
+// WebFreeTierDefaults returns the allowance a FRESH self-serve signup starts with,
+// as (maxNodes, maxDailyBytes). Zero means unlimited for either.
+//
+// The MB→bytes conversion lives HERE, in one place, because two call sites need it
+// (cmd/godex's store opener and the httpapi's on-demand store) and a second copy of
+// the multiplier is how the two would eventually disagree.
+//
+// Binary MB (1024*1024), not 10^6: an operator's "100M" already means 100 MiB
+// everywhere else in this codebase, and a quota that silently used a different
+// megabyte would be off by 4.9%.
+func (c *Config) WebFreeTierDefaults() (maxNodes int, maxDailyBytes int64) {
+	if c == nil {
+		return 0, 0
+	}
+	return c.WebFreeTierNodes, int64(c.WebFreeTierDailyMB) * bytesPerMB
+}
+
+// bytesPerMB is the binary megabyte used to convert a configured allowance into the
+// bytes the forwarding seam measures.
+const bytesPerMB = 1024 * 1024
 
 func NormalizeAgentProfile(profile string) string {
 	switch strings.ToLower(strings.TrimSpace(profile)) {

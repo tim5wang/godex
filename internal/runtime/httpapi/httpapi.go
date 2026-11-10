@@ -134,6 +134,11 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	accountsService := deps.Accounts
 	if accountsService == nil && manager != nil {
 		if created, err := accounts.New(manager.Current().StateDir); err == nil {
+			// Same free-tier wiring as cmd/godex's store opener: an on-demand store must
+			// not let a signup outrun the configured allowance. An INJECTED service is
+			// left alone on purpose — its owner (a test, or an embedder) decides its own
+			// defaults and this package should not overwrite them.
+			created.SetFreeTierDefaults(manager.Current().WebFreeTierDefaults())
 			accountsService = created
 		}
 	}

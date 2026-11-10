@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/identity"
@@ -270,4 +271,174 @@ func ensureNodeProxyToken(ctx context.Context, manager *config.Manager) (string,
 		return "", fmt.Errorf("persist node proxy token: %w", err)
 	}
 	return proxyToken, nil
+}
+
+// registerTenantJoinTokenRoutes wires the TENANT side of enrolment (§3.5): a
+// tenant owner/admin issues one-time codes for their OWN devices without ever
+// holding the center's web token.
+//
+// Why this exists: the admin surface (/admin/tenants/{id}/join-tokens) is
+// requirePlatformAdmin, so before this a self-serve user could reach the enrolment
+// endpoint (/control/self/join) but had NO way to obtain a code to put in it — every
+// device had to go through the operator. That turns "the same user on several
+// devices" into an operator-mediated operation, which is the one thing this round
+// is supposed to make self-service.
+//
+// Gate: a tenant admin of the CALLER'S OWN tenant. Note there is deliberately no
+// tenant id in the path and none accepted in the body — the tenant comes from the
+// authenticated principal, so a tenant cannot mint codes for another tenant. That
+// is the same shape /tenant/members already uses.
+func registerTenantJoinTokenRoutes(mux *http.ServeMux, registry controlNodeRegistry, accountsService *accounts.Service, protected func(http.Handler) http.Handler) {
+	// tenantAdminActor resolves the caller's tenant and refuses anyone who is not an
+	// admin of it. Returns ok=false after writing the response.
+	tenantAdminActor := func(w http.ResponseWriter, r *http.Request) (string, accounts.MemberActor, bool) {
+		if !authServiceAvailable(w, accountsService) {
+			return "", accounts.MemberActor{}, false
+		}
+		tenantID, actor, ok := tenantActor(w, r, accountsService)
+		if !ok {
+			return "", accounts.MemberActor{}, false
+		}
+		if !accountsService.IsTenantAdmin(tenantID, actor.UserID) {
+			writeError(w, http.StatusForbidden, accounts.ErrNotMemberActor)
+			return "", accounts.MemberActor{}, false
+		}
+		return tenantID, actor, true
+	}
+
+	mux.Handle("GET /tenant/join-tokens", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tenantID, _, ok := tenantAdminActor(w, r)
+		if !ok {
+			return
+		}
+		tokens, err := accountsService.ListJoinTokens(tenantID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"join_tokens": tokens,
+			// The allowance is reported alongside the codes so the UI can say "you are
+			// at your device limit" before the user clicks issue. 0 means unlimited,
+			// the same encoding the policy uses.
+			"max_nodes":  accountsService.TenantMaxNodes(tenantID),
+			"used_nodes": countTenantNodes(r.Context(), registry, tenantID),
+		})
+	})))
+
+	mux.Handle("POST /tenant/join-tokens", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tenantID, actor, ok := tenantAdminActor(w, r)
+		if !ok {
+			return
+		}
+		var req struct {
+			OwnerUserID string `json:"owner_user_id,omitempty"`
+			Label       string `json:"label,omitempty"`
+			TTLHours    int    `json:"ttl_hours,omitempty"`
+		}
+		if err := decodeJSONAllowEmpty(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if req.TTLHours < 0 {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("ttl_hours must not be negative"))
+			return
+		}
+		// Refuse up front when the tenant already holds its allowance: the code is
+		// ONE-TIME, so handing one out that cannot be redeemed burns it and leaves the
+		// user with a failure they cannot explain. Enforcement itself stays at
+		// enrolment (RegisterOwned → checkAllowance), which is the only atomic place;
+		// this is the advisory pre-check.
+		if maxNodes := accountsService.TenantMaxNodes(tenantID); maxNodes > 0 {
+			if used := countTenantNodes(r.Context(), registry, tenantID); used >= maxNodes {
+				writeError(w, http.StatusConflict, fmt.Errorf(
+					"this tenant already holds its allowance of %d node(s); delete a device or raise the allowance before adding another", maxNodes))
+				return
+			}
+		}
+		// The owner defaults to the CALLER, not to the tenant owner member: a tenant
+		// admin provisioning their own laptop must end up owning it. Leaving it empty
+		// would make redemption fall back to the tenant's owner member, so an admin who
+		// is not the owner would get a device they cannot see (default visibility is
+		// private).
+		owner := strings.TrimSpace(req.OwnerUserID)
+		if owner == "" {
+			owner = actor.UserID
+		}
+		record, plaintext, err := accountsService.CreateJoinToken(accounts.CreateJoinTokenInput{
+			TenantID:    tenantID,
+			OwnerUserID: owner,
+			Label:       req.Label,
+			CreatedBy:   actor.UserID,
+			TTL:         time.Duration(req.TTLHours) * time.Hour,
+		})
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		// The plaintext exists only here: the store keeps a hash, so the caller must
+		// copy it now or issue another.
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"join_token": record,
+			"token":      plaintext,
+		})
+	})))
+
+	// DELETE /tenant/join-tokens/{id} — revoke a code the caller's tenant issued.
+	//
+	// RevokeJoinToken resolves the token by id alone and is not tenant-scoped, so the
+	// id is checked against THIS tenant's list first: otherwise the route would
+	// silently mean "any tenant's code", which is the same defect the admin invite
+	// revoke guards against.
+	mux.Handle("DELETE /tenant/join-tokens/{id}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tenantID, _, ok := tenantAdminActor(w, r)
+		if !ok {
+			return
+		}
+		id := strings.TrimSpace(r.PathValue("id"))
+		tokens, err := accountsService.ListJoinTokens(tenantID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		found := false
+		for _, token := range tokens {
+			if token.ID == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeError(w, http.StatusNotFound, fmt.Errorf("join token not found: %s", id))
+			return
+		}
+		if err := accountsService.RevokeJoinToken(id); err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"revoked": true})
+	})))
+}
+
+// countTenantNodes reports how many nodes the tenant currently owns.
+//
+// Returns 0 for a nil registry rather than an error: the callers use this for an
+// advisory message and a pre-check, and a deployment without a registry has no
+// nodes to count. The AUTHORITATIVE allowance check lives in the registry at
+// enrolment, so a wrong number here can only produce a bad message, never a bypass.
+func countTenantNodes(ctx context.Context, registry controlNodeRegistry, tenantID string) int {
+	if registry == nil {
+		return 0
+	}
+	nodes, err := registry.List(ctx)
+	if err != nil {
+		return 0
+	}
+	used := 0
+	for _, node := range nodes {
+		if strings.TrimSpace(node.TenantID) == tenantID {
+			used++
+		}
+	}
+	return used
 }

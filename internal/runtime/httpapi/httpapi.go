@@ -246,6 +246,10 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	// token is the credential. Requiring the web token as well would reintroduce
 	// exactly the master-key-per-tenant problem this replaces.
 	registerJoinRoute(mux, manager, controlRegistry, accountsService)
+	// Tenant-side enrolment codes: a tenant admin issues codes for their OWN devices
+	// without the center's web token, which is what makes "the same user on several
+	// devices" self-service rather than operator-mediated.
+	registerTenantJoinTokenRoutes(mux, controlRegistry, accountsService, protected)
 	registerNodeProxyTokenRoute(mux, manager, protected, controlRegistry)
 	registerSelfProxyCredentialRoute(mux, manager, controlRegistry)
 	registerControlNodeRoutes(mux, controlRegistry, overviewProvider, protected, nodeProxyRead, nodeAccessPolicy, accountsService)

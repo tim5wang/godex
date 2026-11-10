@@ -261,6 +261,28 @@ func (s *Service) forwardAudits(whereClause string, limit int, args ...any) ([]F
 	return out, rows.Err()
 }
 
+// TenantBytesSince sums a tenant's forwarded bytes since a point in time.
+//
+// Used by the daily-quota seam, which needs ONE number per request: it is a SUM
+// rather than a list of rows so the forwarding path never has to read a day's
+// traffic back into memory to decide whether the next request fits.
+//
+// Request and response bytes are added together because the quota is about how
+// much traffic the center moves for a tenant, in either direction.
+func (s *Service) TenantBytesSince(tenantID string, since time.Time) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var total sql.NullInt64
+	err := s.db.QueryRow(
+		`SELECT SUM(request_bytes + response_bytes) FROM relay_usage WHERE tenant_id = ? AND at >= ?`,
+		strings.TrimSpace(tenantID), since.UTC().Format(time.RFC3339Nano),
+	).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("sum tenant bytes: %w", err)
+	}
+	return total.Int64, nil
+}
+
 // Summary aggregates one tenant over [since, now].
 func (s *Service) Summary(tenantID string, since time.Time) (Summary, error) {
 	tenantID = strings.TrimSpace(tenantID)

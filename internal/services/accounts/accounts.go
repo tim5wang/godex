@@ -304,7 +304,13 @@ func (s *Service) migrateTenantPolicyColumns() error {
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterate tenant_policies columns: %w", err)
 	}
-	adds := []string{"max_nodes INTEGER NOT NULL DEFAULT 0"}
+	// Defaults are 0 = unlimited for both columns: an upgraded center must keep the
+	// behaviour it had before the column existed rather than silently start
+	// refusing traffic or enrolments.
+	adds := []string{
+		"max_nodes INTEGER NOT NULL DEFAULT 0",
+		"max_daily_bytes INTEGER NOT NULL DEFAULT 0",
+	}
 	for _, add := range adds {
 		col := strings.Fields(add)[0]
 		if have[col] {
@@ -609,8 +615,14 @@ type TenantPolicy struct {
 	// permissive here for the same reason it is for SharingEnabled — the limit is
 	// an additive commercial control, and defaulting it to "no nodes allowed"
 	// would break every tenant that existed before the column did.
-	MaxNodes  int
-	UpdatedAt string
+	MaxNodes int
+	// MaxDailyBytes caps the forwarded bytes this tenant may move through the
+	// center per UTC day. 0 means UNLIMITED, the same encoding MaxNodes uses and
+	// the same permissive default for a tenant with no stored policy row: this is
+	// an additive commercial control, and defaulting it to "no traffic allowed"
+	// would stop every tenant that existed before the column did.
+	MaxDailyBytes int64
+	UpdatedAt     string
 }
 
 // TenantSharingEnabled reports whether tenant members may expose their nodes to
@@ -693,6 +705,52 @@ func (s *Service) SetTenantMaxNodes(tenantID string, maxNodes int) (TenantPolicy
 		TenantID:       tenantID,
 		SharingEnabled: s.tenantSharingEnabledLocked(tenantID),
 		MaxNodes:       maxNodes,
+		MaxDailyBytes:  s.tenantMaxDailyBytesLocked(tenantID),
+		UpdatedAt:      now,
+	}, nil
+}
+
+// TenantMaxDailyBytes returns the tenant's daily byte allowance (design §7).
+// 0 means unlimited. An unknown tenant returns 0 for the same reason
+// TenantMaxNodes does: policy may be set before the tenant exists.
+func (s *Service) TenantMaxDailyBytes(tenantID string) int64 {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tenantMaxDailyBytesLocked(tenantID)
+}
+
+// SetTenantMaxDailyBytes sets the tenant's daily byte allowance. maxBytes <= 0
+// clears the limit rather than meaning "no traffic": the operator expresses
+// "unlimited" by the same value the default uses, so there is one encoding.
+func (s *Service) SetTenantMaxDailyBytes(tenantID string, maxBytes int64) (TenantPolicy, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return TenantPolicy{}, fmt.Errorf("missing tenant id")
+	}
+	if maxBytes < 0 {
+		maxBytes = 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.timestamp()
+	// Only max_daily_bytes is written, so setting the byte allowance cannot
+	// silently reset the node allowance or the sharing switch.
+	if _, err := s.db.Exec(
+		`INSERT INTO tenant_policies (tenant_id, max_daily_bytes, updated_at) VALUES (?, ?, ?)
+		 ON CONFLICT(tenant_id) DO UPDATE SET max_daily_bytes = excluded.max_daily_bytes, updated_at = excluded.updated_at`,
+		tenantID, maxBytes, now,
+	); err != nil {
+		return TenantPolicy{}, fmt.Errorf("set tenant daily byte limit: %w", err)
+	}
+	return TenantPolicy{
+		TenantID:       tenantID,
+		SharingEnabled: s.tenantSharingEnabledLocked(tenantID),
+		MaxNodes:       s.tenantMaxNodesLocked(tenantID),
+		MaxDailyBytes:  maxBytes,
 		UpdatedAt:      now,
 	}, nil
 }
@@ -707,6 +765,9 @@ type TenantSummary struct {
 	// itself is not here because this store does not own the node registry — the
 	// admin route pairs the two.
 	MaxNodes int
+	// MaxDailyBytes is the tenant's daily forwarded-byte allowance; 0 means
+	// unlimited. Like MaxNodes it is a policy knob, not identity.
+	MaxDailyBytes int64
 }
 
 // ListTenants returns every tenant with its member count and sharing state.
@@ -748,6 +809,7 @@ func (s *Service) ListTenants() ([]TenantSummary, error) {
 		out[i].MemberCount = count
 		out[i].SharingEnabled = s.tenantSharingEnabledLocked(id)
 		out[i].MaxNodes = s.tenantMaxNodesLocked(id)
+		out[i].MaxDailyBytes = s.tenantMaxDailyBytesLocked(id)
 	}
 	return out, nil
 }
@@ -775,6 +837,21 @@ func (s *Service) tenantMaxNodesLocked(tenantID string) int {
 		return 0
 	}
 	return maxNodes
+}
+
+// tenantMaxDailyBytesLocked is the byte-allowance counterpart. Caller holds s.mu.
+//
+// Same reasoning as tenantMaxNodesLocked: a missing row is "unlimited", never
+// "no traffic", so an un-migrated or un-policied tenant cannot be silently cut off.
+func (s *Service) tenantMaxDailyBytesLocked(tenantID string) int64 {
+	var maxBytes int64
+	if err := s.db.QueryRow(`SELECT max_daily_bytes FROM tenant_policies WHERE tenant_id = ?`, tenantID).Scan(&maxBytes); err != nil {
+		return 0
+	}
+	if maxBytes < 0 {
+		return 0
+	}
+	return maxBytes
 }
 
 // Members lists a tenant's memberships. Operator-only surface, like ListTenants.

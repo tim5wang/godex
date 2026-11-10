@@ -229,3 +229,54 @@ func TestRecordForwardAuditQuietSurvivesClosedStore(t *testing.T) {
 	}
 	service.RecordForwardAuditQuiet(ForwardAuditRecord{TenantID: "t1", NodeID: "n1"})
 }
+
+// TestTenantBytesSinceSumsBothDirections is the quota seam's read: the allowance is
+// about how much traffic the center moves for a tenant, so request and response
+// bytes both count, and only that tenant's rows do.
+func TestTenantBytesSinceSumsBothDirections(t *testing.T) {
+	service := newTestService(t)
+	_ = service.Record(Record{TenantID: "t1", RequestBytes: 10, ResponseBytes: 90})
+	_ = service.Record(Record{TenantID: "t1", RequestBytes: 5, ResponseBytes: 5})
+	// Another tenant's traffic must not count against t1's allowance.
+	_ = service.Record(Record{TenantID: "t2", RequestBytes: 1000, ResponseBytes: 1000})
+
+	got, err := service.TenantBytesSince("t1", time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("TenantBytesSince: %v", err)
+	}
+	if got != 110 {
+		t.Errorf("t1 bytes = %d, want 110 (10+90+5+5)", got)
+	}
+}
+
+// TestTenantBytesSinceExcludesBeforeTheWindow is what makes the allowance reset: a
+// row from yesterday must not count against today.
+func TestTenantBytesSinceExcludesBeforeTheWindow(t *testing.T) {
+	service := newTestService(t)
+	base := time.Now()
+	service.SetNow(func() time.Time { return base.Add(-48 * time.Hour) })
+	_ = service.Record(Record{TenantID: "t1", RequestBytes: 500, ResponseBytes: 500})
+	service.SetNow(func() time.Time { return base })
+	_ = service.Record(Record{TenantID: "t1", RequestBytes: 7, ResponseBytes: 3})
+
+	got, err := service.TenantBytesSince("t1", base.Add(-24*time.Hour))
+	if err != nil {
+		t.Fatalf("TenantBytesSince: %v", err)
+	}
+	if got != 10 {
+		t.Errorf("in-window bytes = %d, want 10 (yesterday's 1000 excluded)", got)
+	}
+}
+
+// TestTenantBytesSinceEmptyIsZeroNotError: a tenant with no traffic reports 0 so the
+// quota gate can compare against the limit without special-casing a fresh account.
+func TestTenantBytesSinceEmptyIsZeroNotError(t *testing.T) {
+	service := newTestService(t)
+	got, err := service.TenantBytesSince("never-seen", time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("TenantBytesSince: %v", err)
+	}
+	if got != 0 {
+		t.Errorf("bytes = %d, want 0", got)
+	}
+}

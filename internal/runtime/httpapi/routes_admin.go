@@ -28,6 +28,10 @@ type adminTenantResponse struct {
 	CreatedAt      string `json:"created_at,omitempty"`
 	// MaxNodes is the tenant's node allowance (design §7); 0 means unlimited.
 	MaxNodes int `json:"max_nodes"`
+	// MaxDailyBytes is the tenant's daily forwarded-byte allowance; 0 means
+	// unlimited. Reported alongside MaxNodes so the console can render both limits
+	// from one source rather than reading the policy per tenant.
+	MaxDailyBytes int64 `json:"max_daily_bytes"`
 	// NodeCount is how many nodes the tenant currently owns, so the operator sees
 	// "3 of 5" rather than having to count /admin/nodes themselves. It is reported
 	// even when MaxNodes is 0, because the count is useful on its own.
@@ -80,6 +84,7 @@ func registerAdminRoutes(mux *http.ServeMux, accountsService *accounts.Service, 
 				MemberCount:    summary.MemberCount,
 				CreatedAt:      summary.Tenant.CreatedAt,
 				MaxNodes:       summary.MaxNodes,
+				MaxDailyBytes:  summary.MaxDailyBytes,
 				NodeCount:      nodeCounts[summary.Tenant.ID],
 			})
 		}
@@ -181,6 +186,45 @@ func registerAdminRoutes(mux *http.ServeMux, accountsService *accounts.Service, 
 			"tenant_id":  policy.TenantID,
 			"max_nodes":  policy.MaxNodes,
 			"updated_at": policy.UpdatedAt,
+		})
+	})))
+
+	// PUT /admin/tenants/{id}/max-daily-bytes — the tenant's daily forwarded-byte
+	// allowance (design §7, basic tier).
+	//
+	// Its own route for the same reason /max-nodes is one: writing only this field
+	// means setting a traffic allowance cannot silently reset the node allowance or
+	// the sharing switch. A pointer distinguishes an omitted field from an explicit
+	// 0, because 0 means "unlimited" and defaulting a malformed request to 0 would
+	// silently lift the limit the operator was trying to enforce.
+	mux.Handle("PUT /admin/tenants/{id}/max-daily-bytes", requirePlatformAdmin(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !adminAccountsAvailable(w, accountsService) {
+			return
+		}
+		var req struct {
+			MaxDailyBytes *int64 `json:"max_daily_bytes"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if req.MaxDailyBytes == nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("max_daily_bytes is required"))
+			return
+		}
+		if *req.MaxDailyBytes < 0 {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("max_daily_bytes must not be negative"))
+			return
+		}
+		policy, err := accountsService.SetTenantMaxDailyBytes(strings.TrimSpace(r.PathValue("id")), *req.MaxDailyBytes)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"tenant_id":       policy.TenantID,
+			"max_daily_bytes": policy.MaxDailyBytes,
+			"updated_at":      policy.UpdatedAt,
 		})
 	})))
 

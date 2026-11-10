@@ -104,6 +104,82 @@ func TestListTenantsReportsMaxNodes(t *testing.T) {
 	}
 }
 
+// TestTenantMaxDailyBytesDefaultsToUnlimited mirrors the node-allowance default:
+// a tenant with no stored policy row has no traffic limit, so adding the column
+// cannot silently start refusing traffic for tenants that predate it.
+func TestTenantMaxDailyBytesDefaultsToUnlimited(t *testing.T) {
+	service := newTestService(t)
+	if got := service.TenantMaxDailyBytes("tenant-unknown"); got != 0 {
+		t.Fatalf("TenantMaxDailyBytes(unknown) = %d, want 0 (unlimited)", got)
+	}
+	if got := service.TenantMaxDailyBytes(""); got != 0 {
+		t.Fatalf("TenantMaxDailyBytes(\"\") = %d, want 0 (unlimited)", got)
+	}
+}
+
+func TestSetTenantMaxDailyBytesRoundTrips(t *testing.T) {
+	service := newTestService(t)
+	result := registerUser(t, service, "owner@example.com", "correct-horse")
+	tenantID := result.Tenant.ID
+
+	const hundredMB = 100 * 1024 * 1024
+	policy, err := service.SetTenantMaxDailyBytes(tenantID, hundredMB)
+	if err != nil {
+		t.Fatalf("SetTenantMaxDailyBytes: %v", err)
+	}
+	if policy.MaxDailyBytes != hundredMB {
+		t.Errorf("returned MaxDailyBytes = %d, want %d", policy.MaxDailyBytes, hundredMB)
+	}
+	if got := service.TenantMaxDailyBytes(tenantID); got != hundredMB {
+		t.Errorf("TenantMaxDailyBytes = %d, want %d", got, hundredMB)
+	}
+
+	// A negative value clears the limit rather than meaning "no traffic", the same
+	// encoding the node allowance uses.
+	if _, err := service.SetTenantMaxDailyBytes(tenantID, -1); err != nil {
+		t.Fatalf("clear limit: %v", err)
+	}
+	if got := service.TenantMaxDailyBytes(tenantID); got != 0 {
+		t.Errorf("after clearing, MaxDailyBytes = %d, want 0 (unlimited)", got)
+	}
+}
+
+// TestDailyByteLimitDoesNotClobberTheOtherPolicies: each endpoint writes only its
+// own column, so setting a traffic allowance cannot silently revert a node
+// allowance or a sharing decision the operator made separately.
+func TestDailyByteLimitDoesNotClobberTheOtherPolicies(t *testing.T) {
+	service := newTestService(t)
+	result := registerUser(t, service, "owner@example.com", "correct-horse")
+	tenantID := result.Tenant.ID
+
+	if _, err := service.SetTenantSharing(tenantID, false); err != nil {
+		t.Fatalf("SetTenantSharing: %v", err)
+	}
+	if _, err := service.SetTenantMaxNodes(tenantID, 2); err != nil {
+		t.Fatalf("SetTenantMaxNodes: %v", err)
+	}
+	if _, err := service.SetTenantMaxDailyBytes(tenantID, 4096); err != nil {
+		t.Fatalf("SetTenantMaxDailyBytes: %v", err)
+	}
+
+	if service.TenantSharingEnabled(tenantID) {
+		t.Error("sharing switch was reset by writing the byte allowance")
+	}
+	if got := service.TenantMaxNodes(tenantID); got != 2 {
+		t.Errorf("MaxNodes = %d, want 2 (unchanged by the byte write)", got)
+	}
+	if got := service.TenantMaxDailyBytes(tenantID); got != 4096 {
+		t.Errorf("MaxDailyBytes = %d, want 4096", got)
+	}
+	// And the reverse direction: a node-allowance write must not clear the bytes.
+	if _, err := service.SetTenantMaxNodes(tenantID, 3); err != nil {
+		t.Fatalf("SetTenantMaxNodes (second): %v", err)
+	}
+	if got := service.TenantMaxDailyBytes(tenantID); got != 4096 {
+		t.Errorf("MaxDailyBytes after a node write = %d, want 4096", got)
+	}
+}
+
 // TestInitMigratesTenantPoliciesWithoutMaxNodes is the upgrade path that matters
 // most for this feature.
 //

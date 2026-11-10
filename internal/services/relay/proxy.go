@@ -3,6 +3,7 @@ package relay
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -52,6 +53,77 @@ type ProxyHandler struct {
 	//
 	// nil skips metering, keeping every existing caller unchanged.
 	UsageRecorder func(ForwardUsage)
+	// QuotaGate, when set, decides whether the caller's tenant may forward right now
+	// (design §7: the free daily byte allowance). Checked AFTER NodeAccess and
+	// BEFORE any dispatch, so a tenant over its allowance moves no traffic while a
+	// request it is still entitled to send is untouched.
+	//
+	// nil skips the check, which keeps every existing caller working unchanged.
+	QuotaGate func(tenantID string) QuotaDecision
+}
+
+// QuotaDecision is one tenant's forwarding allowance verdict.
+//
+// A local type rather than the account store's, so this package keeps no storage
+// dependency: the relay moves bytes and the composition point supplies the policy
+// (the same shape as ForwardUsage and the audit record).
+type QuotaDecision struct {
+	Allowed bool
+	// Kind names WHICH allowance was exceeded (currently "daily_bytes"). Carried so
+	// a refusal can say what ran out rather than only that something did.
+	Kind string
+	// Used and Limit are bytes; ResetAt is when the allowance returns.
+	Used    int64
+	Limit   int64
+	ResetAt time.Time
+}
+
+// quotaExceededBody is the 429 payload.
+//
+// Deliberately explicit: a bare "Too Many Requests" leaves the client unable to
+// tell a quota from a rate limit, or to say when service resumes — and the whole
+// point of a free allowance is that the user can see it and wait (or subscribe).
+type quotaExceededBody struct {
+	Error       string `json:"error"`
+	Quota       string `json:"quota"`
+	UsedBytes   int64  `json:"used_bytes"`
+	LimitBytes  int64  `json:"limit_bytes"`
+	ResetAt     string `json:"reset_at"`
+	UpgradeHint string `json:"upgrade_hint,omitempty"`
+}
+
+// QuotaDayWindow returns the start of the current UTC day and the moment the
+// allowance resets.
+//
+// UTC rather than the operator's local day on purpose: the reset must be one
+// unambiguous instant for every tenant, and a local-day boundary would make the
+// same tenant's allowance reset at different times depending on where the center
+// happens to run.
+func QuotaDayWindow(now time.Time) (start time.Time, resetAt time.Time) {
+	utc := now.UTC()
+	start = time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
+	return start, start.Add(24 * time.Hour)
+}
+
+// writeQuotaExceeded renders the 429 for an exhausted allowance.
+func writeQuotaExceeded(w http.ResponseWriter, decision QuotaDecision) {
+	body := quotaExceededBody{
+		Error:       "daily forwarding allowance exhausted",
+		Quota:       decision.Kind,
+		UsedBytes:   decision.Used,
+		LimitBytes:  decision.Limit,
+		ResetAt:     decision.ResetAt.UTC().Format(time.RFC3339),
+		UpgradeHint: "raise the allowance or wait for the daily reset",
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		// Status-only refusal rather than a half-written body.
+		http.Error(w, `{"error":"quota exceeded"}`, http.StatusTooManyRequests)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusTooManyRequests)
+	_, _ = w.Write(data)
 }
 
 // ForwardUsage is one forwarded request's metering record.
@@ -177,6 +249,19 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			logger.Warnf("relay proxy: denied caller=%s target=%s reason=%s user=%s",
 				clientIP(r), nodeID, decision.Reason, decision.UserID)
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+	}
+
+	// Quota (design §7): the tenant's daily byte allowance is checked here, at the
+	// single point every forwarded request passes. AFTER NodeAccess on purpose, so a
+	// request that is not authorised at all is reported as forbidden rather than as
+	// a quota problem.
+	if p.QuotaGate != nil {
+		if verdict := p.QuotaGate(decision.TenantID); !verdict.Allowed {
+			logger.Warnf("relay proxy: quota refused tenant=%s kind=%s used=%d limit=%d",
+				decision.TenantID, verdict.Kind, verdict.Used, verdict.Limit)
+			writeQuotaExceeded(w, verdict)
 			return
 		}
 	}

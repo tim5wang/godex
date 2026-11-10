@@ -474,9 +474,10 @@ func main() {
 			nodeProxyToken := httpapi.NewNodeProxyTokenChecker(manager, httpapi.NodeProxyTokenLookupFrom(controlRegistry))
 			registerForwardRoutes(root, forwardServer, manager, nodeProxyAuthorize(manager, nodeProxyToken, accountsService), authorizeNodeFor("forward"))
 			proxy := relay.NewProxyHandler(relayHub, nodeProxyAuthorize(manager, nodeProxyToken, accountsService))
-			// Meter every forwarded request (design §7 basic tier). Extracted to a
-			// helper so this nil check does not push main over its complexity budget.
 			wireMetering(proxy, meteringService)
+			// Enforce the tenant's daily byte allowance (design §7). Wired here, at the
+			// composition point, so package relay keeps no storage dependency.
+			wireQuota(proxy, meteringService, accountsService)
 			// The center also runs as its own node: requests targeting the self
 			// node are served locally (no relay round-trip), so the server can be
 			// operated from its own web UI. These local-direct requests bypass the
@@ -664,6 +665,54 @@ func wireForwardAudit(forwardHandler *relay.ForwardHandler, meteringService *met
 			Reason:   attempt.Reason,
 			At:       attempt.At.UTC().Format(time.RFC3339Nano),
 		})
+	}
+}
+
+// wireQuota points the relay proxy's quota gate at the tenant policy + the usage
+// counters (design §7: the free daily byte allowance).
+//
+// The gate runs on EVERY forwarded request, so it must be a cheap read: the used
+// amount is one indexed SUM over today's rows, and the limit is one policy lookup.
+// Both are cheap enough to do inline; a cache would add a staleness window in which
+// a tenant could keep spending past its allowance.
+//
+// Only the HTTP proxy is gated. The TCP forward tunnels are not metered into
+// relay_usage at all (see design §7.1.1), so gating them here would mean charging
+// against a counter that never moves — the honest boundary is that the allowance
+// covers proxied traffic, and the tunnels are the operator-created path.
+//
+// Extracted for the same reason as wireMetering: this nil-check + closure would
+// otherwise push main over its complexity budget.
+func wireQuota(proxy *relay.ProxyHandler, meteringService *metering.Service, accountsService *accounts.Service) {
+	if proxy == nil || meteringService == nil || accountsService == nil {
+		return
+	}
+	proxy.QuotaGate = func(tenantID string) relay.QuotaDecision {
+		trimmed := strings.TrimSpace(tenantID)
+		if trimmed == "" {
+			// Unscoped caller (the operator's own direct traffic, or a node acting through
+			// the center). There is no tenant to charge and no allowance to exceed.
+			return relay.QuotaDecision{Allowed: true}
+		}
+		limit := accountsService.TenantMaxDailyBytes(trimmed)
+		if limit <= 0 {
+			// 0 = unlimited, the default for a tenant with no stored policy row.
+			return relay.QuotaDecision{Allowed: true}
+		}
+		windowStart, resetAt := relay.QuotaDayWindow(time.Now())
+		used, err := meteringService.TenantBytesSince(trimmed, windowStart)
+		if err != nil {
+			// Fail OPEN on a counter read error. The alternative — refusing traffic
+			// because the counter could not be read — turns an accounting problem into
+			// an outage for a tenant that may well be under its allowance, and the same
+			// trade-off is already made for recording (metering must not fail a request).
+			logger.Warnf("relay quota: could not read usage for tenant %s, allowing: %v", trimmed, err)
+			return relay.QuotaDecision{Allowed: true}
+		}
+		if used >= limit {
+			return relay.QuotaDecision{Allowed: false, Kind: "daily_bytes", Used: used, Limit: limit, ResetAt: resetAt}
+		}
+		return relay.QuotaDecision{Allowed: true, Kind: "daily_bytes", Used: used, Limit: limit, ResetAt: resetAt}
 	}
 }
 

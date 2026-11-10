@@ -108,3 +108,80 @@ func TestAdminMaxNodesRequiresPlatformAdmin(t *testing.T) {
 		t.Fatalf("status = %d, want 401 without an operator credential", resp.StatusCode)
 	}
 }
+
+// TestAdminMaxDailyBytesRequiresExplicitValue: 0 means unlimited, so an omitted field
+// must NOT be read as 0 — that would silently lift the allowance the operator was
+// trying to enforce.
+func TestAdminMaxDailyBytesRequiresExplicitValue(t *testing.T) {
+	server, _ := newAdminServer(t, "web-secret")
+	resp, _ := doJSON(t, http.MethodPut, server.URL+"/admin/tenants/tnt_x/max-daily-bytes", "web-secret", map[string]any{})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 when max_daily_bytes is omitted", resp.StatusCode)
+	}
+}
+
+func TestAdminMaxDailyBytesRejectsNegative(t *testing.T) {
+	server, _ := newAdminServer(t, "web-secret")
+	resp, _ := doJSON(t, http.MethodPut, server.URL+"/admin/tenants/tnt_x/max-daily-bytes", "web-secret",
+		map[string]any{"max_daily_bytes": -1})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for a negative allowance", resp.StatusCode)
+	}
+}
+
+// TestAdminMaxDailyBytesPersistsAndIsSeparateFromTheNodeAllowance: the value must
+// reach the seam that enforces it (the policy read), and writing it must not revert
+// the node allowance — the two answer different questions and share a row.
+func TestAdminMaxDailyBytesPersistsAndIsSeparateFromTheNodeAllowance(t *testing.T) {
+	server, accountsService := newAdminServer(t, "web-secret")
+	_, session := postAuth(t, server.URL+"/auth/register", map[string]any{
+		"email": "founder@example.com", "password": "correct-horse",
+	})
+	tenantID, _ := (session["tenant"].(map[string]any))["id"].(string)
+
+	const hundredMB = 100 * 1024 * 1024
+	// Set the node allowance first so the byte write has something to clobber.
+	if resp, body := doJSON(t, http.MethodPut, server.URL+"/admin/tenants/"+tenantID+"/max-nodes",
+		"web-secret", map[string]any{"max_nodes": 2}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("max-nodes: %d %v", resp.StatusCode, body)
+	}
+
+	resp, body := doJSON(t, http.MethodPut, server.URL+"/admin/tenants/"+tenantID+"/max-daily-bytes",
+		"web-secret", map[string]any{"max_daily_bytes": hundredMB})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %v", resp.StatusCode, body)
+	}
+	if body["max_daily_bytes"] != float64(hundredMB) {
+		t.Fatalf("response = %v, want max_daily_bytes %d", body, hundredMB)
+	}
+	// The stored policy is what the forwarding seam reads.
+	if got := accountsService.TenantMaxDailyBytes(tenantID); got != hundredMB {
+		t.Errorf("TenantMaxDailyBytes = %d, want %d", got, hundredMB)
+	}
+	if got := accountsService.TenantMaxNodes(tenantID); got != 2 {
+		t.Errorf("the byte write changed the node allowance to %d, want 2", got)
+	}
+
+	// The tenant list carries it too, so the console renders from one source.
+	_, listed := doJSON(t, http.MethodGet, server.URL+"/admin/tenants", "web-secret", nil)
+	tenants, _ := listed["tenants"].([]any)
+	row, _ := tenants[0].(map[string]any)
+	if row["max_daily_bytes"] != float64(hundredMB) {
+		t.Errorf("list shows max_daily_bytes = %v, want %d", row["max_daily_bytes"], hundredMB)
+	}
+	// The admin list must expose the field, or the console cannot render it at all.
+	if _, ok := row["max_daily_bytes"]; !ok {
+		t.Errorf("tenant list omits max_daily_bytes: %v", row)
+	}
+}
+
+// TestAdminMaxDailyBytesRequiresPlatformAdmin: the traffic allowance is a commercial
+// control, so a tenant must not be able to raise its own.
+func TestAdminMaxDailyBytesRequiresPlatformAdmin(t *testing.T) {
+	server, _ := newAdminServer(t, "web-secret")
+	resp, _ := doJSON(t, http.MethodPut, server.URL+"/admin/tenants/tnt_x/max-daily-bytes", "",
+		map[string]any{"max_daily_bytes": 1})
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 without an operator credential", resp.StatusCode)
+	}
+}

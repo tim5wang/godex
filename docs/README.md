@@ -83,7 +83,8 @@
 |------|------|------|
 | [research_of_dsh_for_godex_optimize.md](./research_of_dsh_for_godex_optimize.md) | DSH/Cordis → pluginrt/toolruntime/WASM/ACP 演进记录 | 阶段 0/A/B 与 P1–P4 已落地，C 为 MVP/演进 |
 | [p3-foundations-design.md](./p3-foundations-design.md) | Flow 画布、执行可观测性、节点库与运行时上下文的前置设计 | Draft；落地情况以功能矩阵与源码为准 |
-| [work-context-attention-economics.md](./work-context-attention-economics.md) | 工作桌面的注意力经济学：三种实践（桌面/看板/Agent Team）的成本坐标系、现有实现的杠杆缺口（收件箱不完整/缺杠杆排序/无动词/无配额）、L1-L5 增强方案与分期门禁 | Partial（2026-11-07）；§3 为代码实证基线，AE1（收件箱完整化+合批+杠杆排序）已实施见 §6.1，AE2–AE5 待评审 |
+| [work-context-attention-economics.md](./work-context-attention-economics.md) | 工作桌面的注意力经济学：三种实践（桌面/看板/Agent Team）的成本坐标系、现有实现的杠杆缺口（收件箱不完整/缺杠杆排序/无动词/无配额）、L1-L5 增强方案与分期门禁 | Partial（2026-11-07）；§3 为代码实证基线，AE1（收件箱完整化+合批+杠杆排序）已实施见 §6.1，AE2–AE5 已实施见 §6.4–§6.6 |
+| [work-context-adoption-candidates.md](./work-context-adoption-candidates.md) | 工作桌面「借鉴候选」评估：7 条 + 安全面 2 条的逐条代码实证核对与建议（含两处与候选描述不符的纠正） | Analysis（2026-11-11）；不改代码，只交付评估结论 |
 | [node-mesh-design.md](./node-mesh-design.md) | Node Mesh v2 实现与剩余路线 | Phase 1–3 已完成，Phase 4/5 Partial |
 | [remote-sandbox-design.md](./remote-sandbox-design.md) | A 会话 + B 工具执行的远程沙箱设计 | Draft（待确认后实施） |
 | [multi-tenant-commercialization-design.md](./multi-tenant-commercialization-design.md) | 商业化多租户设计（SaaS 中继 · 订阅制）：身份/租户模型、节点归属与可见性、NodeAccess 重构、只转发边界、两档订阅、账号面（§3.7）；含 5 处阻断项实证 | Active / Partial（P0–P3 主体已落地；未完成项见 §8 状态表与 §9）；§1 为可复现现状 |

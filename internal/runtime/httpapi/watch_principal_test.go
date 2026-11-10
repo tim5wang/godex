@@ -101,11 +101,15 @@ func TestWatchPrincipalHoldsNoCapabilities(t *testing.T) {
 	}
 }
 
-// TestWatchPrincipalIsUnscopedAndThereforeCannotReachNodes documents the
-// deliberate empty TenantID (watchauth.Device has no tenant binding yet): an
-// unscoped non-operator principal authorizes as cross-tenant, so the gap fails
-// closed. If this flips to allowed, a missing tenant binding would silently
-// become "this wrist reaches every node on the platform".
+// TestWatchPrincipalIsUnscopedAndThereforeCannotReachNodes documents the fail-safe
+// reading for a device with NO tenant binding: an unscoped non-operator principal
+// authorizes as cross-tenant, so the gap closes rather than opening. If this flips to
+// allowed, a missing tenant binding would silently become "this wrist reaches every node
+// on the platform".
+//
+// A device paired through the API DOES carry its tenant (written from the approving
+// principal); this test builds one without it, which is what an upgraded node's existing
+// pairings look like until they are re-paired.
 func TestWatchPrincipalIsUnscopedAndThereforeCannotReachNodes(t *testing.T) {
 	principal := watchDevicePrincipal(watchauth.Device{DeviceID: "wch-1"})
 

@@ -50,7 +50,7 @@
 | 节点归属只由可信路径写入，注册请求不能自报 | `TestNodeInputDoesNotAcceptOwnership`、`TestRegistryRegisterCannotOverwriteOwnership`、`TestRegistryOwnershipDefaultsToPrivate`（`noderegistry/ownership_test.go`） |
 | **节点角色 ≠ 操作员**（`nk_` / relay 身份不获得 `center_execution`） | `TestNodeActorIsNotOperator` |
 | 机器凭据（proxy key）无租户 → 不可达任何节点 | `TestProxyKeyPrincipalIsUnscopedAndThereforeCannotReachNodes`、`TestProxyKeyPrincipalHoldsNoCapabilities`（`httpapi/proxy_key_identity_test.go`） |
-| 手表凭据无租户 → 不可达任何节点 | `TestWatchPrincipalIsUnscopedAndThereforeCannotReachNodes`、`TestWatchPrincipalHoldsNoCapabilities`（`httpapi/watch_principal_test.go`） |
+| 手表凭据**无租户**时 → 不可达任何节点（fail-safe） | `TestWatchPrincipalIsUnscopedAndThereforeCannotReachNodes`、`TestWatchPrincipalHoldsNoCapabilities`（`httpapi/watch_principal_test.go`）。注：手表现在会携带它所属租户（配对时从批准者 Principal 写入）；无租户只适用于历史遗留设备，此测试断言的是那种情况 |
 
 ## 4. 中心执行与平台面（与节点面并列的另一组边界）
 
@@ -201,7 +201,7 @@ HTTP 面看到的本就是共享层，闸到操作员即可。
 | 缺口 | 现状 |
 |---|---|
 | **`nk_` 已改 per-node（P1+P2）** | ✅ 已实现（2026-10-28）：签发 per-node、解析先查 per-node 再退回全局（双认）、节点自助换发（CLI + 401 自愈）。主体首次带 `(NodeID, TenantID)` ⇒ **多租户下**节点只能触达自己租户节点。**但仍剩一处**：单租户（节点无 tenant）下节点行动者依旧放行，故「403 vs 404 探测 id 是否存在」在该形态下仍存在；彻底消除需可达性策略，本期不做 → 设计 §1.3 / §9 R2 |
-| 手表转发面（`withForwardToNode`） | 经面 4 的同一个 proxy handler 转发（`watchRelay.Set(bridgeProxy)`），因此继承面 4 的闸门；手表侧测试覆盖在 `httpapi/routes_watch_proxy*_test.go`，**未**像面 1–6 那样逐条断言跨租户 403 |
+| 手表转发面（`withForwardToNode`） | **已收口（2026-11-10）**：经面 4 同一个 proxy handler 转发，但转发前凭据**被换成实例 web token** ⇒ 它继承的是**操作员级**准入，而非限制租户的那道闸（旧表述「因此继承面 4 的闸门」不准确，已改）。现在另有两道：① 手表**占它主办的设备额度**（配对批准时经 `RegisterOwned` 写入，被拒则 409 且**不消耗一次性码**），② `GET /watch/devices` 按**属主**过滤、`DELETE` 先校归属（跨属主 404）。测试：`httpapi/watch_device_pool_test.go`。**仍存的缺口**：不经节点选择器直达的**读体**（sessions/approvals/cross-device）仍按本机空 filter 取数，对“被中心本地服务”的租户手表而言仍是跨租户读；补它需要先回答「本实例属于哪个租户」——节点并未记录该事实 |
 
 ## 7. 维护约定
 

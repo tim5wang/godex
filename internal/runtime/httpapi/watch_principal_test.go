@@ -22,7 +22,7 @@ func pairedWatch(t *testing.T, auth *watchauth.Service, scopes ...string) (watch
 	if err != nil {
 		t.Fatalf("start pairing: %v", err)
 	}
-	device, err := auth.ApprovePairing(pairing.UserCode, scopes)
+	device, err := auth.ApprovePairing(watchauth.ApproveInput{UserCode: pairing.UserCode, Scopes: scopes})
 	if err != nil {
 		t.Fatalf("approve pairing: %v", err)
 	}

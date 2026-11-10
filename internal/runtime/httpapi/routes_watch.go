@@ -14,10 +14,14 @@ import (
 	"time"
 
 	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"github.com/tim5wang/godex/internal/core/identity"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/domain/todo"
+	"github.com/tim5wang/godex/internal/platform/logger"
+	"github.com/tim5wang/godex/internal/services/accounts"
 	"github.com/tim5wang/godex/internal/services/backend"
+	"github.com/tim5wang/godex/internal/services/noderegistry"
 	"github.com/tim5wang/godex/internal/services/watchauth"
 	"github.com/tim5wang/godex/internal/tools"
 )
@@ -239,6 +243,11 @@ type watchAPI struct {
 	// relay channel, so a node that has never seen the wrist can still act for it
 	// (see routes_watch_proxy.go).
 	trust func(*http.Request) bool
+	// accounts reads the tenant's per-member device allowance, so a pairing can be
+	// refused while the user is at their limit instead of silently handing out an
+	// uncounted device. nil skips the enforcement, which keeps a deployment without an
+	// account store working unchanged (it simply has no allowance to enforce).
+	accounts *accounts.Service
 	// selfNodeID is this node's own id, so the device list can mark which entry is
 	// the machine the watch is paired with. Empty when unknown; the list then just
 	// omits the flag rather than guessing.
@@ -260,6 +269,7 @@ func registerWatchRoutes(
 	selfNodeID string,
 	localProxy *WatchRelayHolder,
 	webToken func() string,
+	accountsService *accounts.Service,
 ) {
 	api := watchAPI{
 		auth:            auth,
@@ -275,6 +285,7 @@ func registerWatchRoutes(
 		},
 		trust:      trust,
 		selfNodeID: selfNodeID,
+		accounts:   accountsService,
 	}
 
 	// Scope guards accept a watch credential OR a scope-vouched forward from the
@@ -347,8 +358,30 @@ func registerWatchPairingRoutes(mux *http.ServeMux, api watchAPI, protected func
 			writeError(w, http.StatusBadRequest, fmt.Errorf("user_code is required"))
 			return
 		}
-		device, err := auth.ApprovePairing(req.UserCode, req.Scopes)
+		// The device is attributed to the APPROVING principal, never to the request
+		// body: a pairing that could name its own owner would let one member enrol a
+		// device into someone else's allowance (and read that person's sessions).
+		principal, ok := PrincipalFromContext(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, fmt.Errorf("missing authenticated principal"))
+			return
+		}
+		ownerUserID := strings.TrimSpace(principal.UserID)
+		tenantID := strings.TrimSpace(principal.TenantID)
+		device, err := auth.ApprovePairing(watchauth.ApproveInput{
+			UserCode:    req.UserCode,
+			Scopes:      req.Scopes,
+			OwnerUserID: ownerUserID,
+			TenantID:    tenantID,
+			Enroll:      enrollWatchDevice(r, api, ownerUserID, tenantID),
+		})
 		if err != nil {
+			// At the device allowance is 409, not 400: the code is valid and the caller did
+			// nothing wrong — the account is full, which the user can act on.
+			if errors.Is(err, noderegistry.ErrDeviceLimitReached) {
+				writeError(w, http.StatusConflict, err)
+				return
+			}
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
@@ -383,11 +416,57 @@ func registerWatchPairingRoutes(mux *http.ServeMux, api watchAPI, protected func
 	}))
 }
 
+// enrollWatchDevice writes a newly approved watch into the node registry, so the
+// wrist occupies one of its owner's device slots.
+//
+// A watch is a device like a laptop or a phone: the plan's unit is devices PER MEMBER,
+// so "2 devices" has to mean two across all of them. Enrolling it here is what makes
+// that true — and the registry is where the ACTUAL limit is enforced (atomically, under
+// its own lock), not this handler.
+//
+// Returns nil when the pieces are absent (no account store, no registry, or a pairing
+// with no tenant): a deployment that has no allowance to enforce must keep pairing
+// watches exactly as it did before this existed.
+func enrollWatchDevice(r *http.Request, api watchAPI, ownerUserID, tenantID string) func(watchauth.Device) error {
+	if api.accounts == nil || api.controlRegistry == nil || tenantID == "" {
+		return nil
+	}
+	return func(device watchauth.Device) error {
+		// Visibility is private, matching a device its owner just enrolled: it is theirs,
+		// not the whole tenant's, until they say otherwise.
+		enroller, ok := api.controlRegistry.(nodeEnroller)
+		if !ok {
+			// A registry without the atomic enrolment capability cannot enforce the
+			// allowance. Falling back here would mean "watch pairing skips the quota", so
+			// the device is registered plainly and the caller keeps its prior behaviour.
+			_, err := api.controlRegistry.Register(r.Context(), noderegistry.NodeInput{
+				ID:   device.DeviceID,
+				Name: device.Name,
+				Kind: noderegistry.KindWatch,
+			})
+			return err
+		}
+		_, err := enroller.RegisterOwned(r.Context(), noderegistry.NodeInput{
+			ID:   device.DeviceID,
+			Name: device.Name,
+			Kind: noderegistry.KindWatch,
+		}, tenantID, ownerUserID, identity.VisibilityPrivate, api.accounts.TenantMaxDevicesPerUser(tenantID))
+		return err
+	}
+}
+
 // registerWatchDeviceRoutes covers device management (plan W3).
 //
 // These are trusted-endpoint operations: only the normal web credential reaches
 // them, never a watch's own scoped token. A compromised watch must not be able to
 // enumerate or revoke its siblings.
+//
+// They are also scoped to the CALLER. The registry holds one row per device on this
+// node, so listing it unfiltered handed every signed-in user the whole node's wrists —
+// and revoking by id accepted anyone's, which let a tenant member cut off a stranger's
+// device (a denial-of-service on someone else's hardware, not just a disclosure). A
+// platform operator still sees everything, because that is the job.
+
 func registerWatchDeviceRoutes(mux *http.ServeMux, api watchAPI, protected func(http.Handler) http.Handler) {
 	auth := api.auth
 
@@ -396,7 +475,7 @@ func registerWatchDeviceRoutes(mux *http.ServeMux, api watchAPI, protected func(
 			writeJSON(w, http.StatusOK, []watchauth.Device{})
 			return
 		}
-		writeJSON(w, http.StatusOK, auth.List(r.Context()))
+		writeJSON(w, http.StatusOK, visibleWatchDevices(r, auth))
 	})))
 
 	mux.Handle("DELETE /watch/devices/{id}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -404,13 +483,79 @@ func registerWatchDeviceRoutes(mux *http.ServeMux, api watchAPI, protected func(
 			writeError(w, http.StatusServiceUnavailable, fmt.Errorf("watch registry is not enabled on this node"))
 			return
 		}
-		device, err := auth.Revoke(r.PathValue("id"))
+		id := strings.TrimSpace(r.PathValue("id"))
+		// Ownership is checked BEFORE revoking: Revoke resolves a device by id alone, so
+		// without this check the route would silently mean "anyone's watch". 404 rather
+		// than 403 so the answer does not confirm that someone else's device id exists —
+		// the same reasoning the tenant join-token revoke uses.
+		if !callerOwnsWatchDevice(r, auth, id) {
+			writeError(w, http.StatusNotFound, fmt.Errorf("unknown watch device %q", id))
+			return
+		}
+		device, err := auth.Revoke(id)
 		if err != nil {
 			writeError(w, http.StatusNotFound, err)
 			return
 		}
+		// Revoking must also release the device slot it occupied, or the allowance would
+		// be a ratchet: every watch the user ever paired would keep consuming one of their
+		// fixed number of devices, and at the limit they could never pair another —
+		// deleting the old one would be exactly the action that failed to help.
+		//
+		// Best effort and after the revocation: the credential is already dead at this
+		// point, and failing the request over a registry hiccup would report a successful
+		// revoke as an error. A leftover registry row with no live credential is harmless
+		// and visible on the nodes list, which is the honest failure mode.
+		if api.controlRegistry != nil {
+			if _, err := api.controlRegistry.Delete(r.Context(), device.DeviceID); err != nil {
+				logger.Warnf("watch revoke: device %s revoked but its registry row was not removed: %v", device.DeviceID, err)
+			}
+		}
 		writeJSON(w, http.StatusOK, device)
 	})))
+}
+
+// visibleWatchDevices returns the devices the caller may see.
+//
+// A platform operator (or a node acting for one) sees the whole node: that is the
+// management view. Everyone else sees only their OWN devices — scoped by owner, not by
+// tenant, because "my watches" is the question this surface answers, and a tenant-wide
+// list would show a colleague's wrists on a page the user reads as theirs.
+func visibleWatchDevices(r *http.Request, auth *watchauth.Service) []watchauth.Device {
+	all := auth.List(r.Context())
+	principal, ok := PrincipalFromContext(r.Context())
+	if !ok || principal.IsPlatformAdmin() || principal.IsNodeActor() {
+		return all
+	}
+	ownerID := strings.TrimSpace(principal.UserID)
+	visible := make([]watchauth.Device, 0, len(all))
+	for _, device := range all {
+		if strings.TrimSpace(device.OwnerUserID) == ownerID {
+			visible = append(visible, device)
+		}
+	}
+	return visible
+}
+
+// callerOwnsWatchDevice reports whether the caller may act on this device.
+//
+// A device with no owner (paired before ownership was recorded) is treated as the
+// operator's own: only the operator may touch it. That is the conservative reading —
+// nobody can claim an unattributed wrist — and it keeps an upgraded node's existing
+// pairings manageable by the one principal that could see them at all.
+func callerOwnsWatchDevice(r *http.Request, auth *watchauth.Service, id string) bool {
+	device, ok := auth.Get(id)
+	if !ok {
+		return false
+	}
+	principal, ok := PrincipalFromContext(r.Context())
+	if !ok {
+		return false
+	}
+	if principal.IsPlatformAdmin() || principal.IsNodeActor() {
+		return true
+	}
+	return strings.TrimSpace(device.OwnerUserID) == strings.TrimSpace(principal.UserID)
 }
 
 // registerWatchReadRoutes covers the read-only session/node surface (watch:read).

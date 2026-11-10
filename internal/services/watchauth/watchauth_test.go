@@ -47,7 +47,7 @@ func pairDevice(t *testing.T, s *Service, scopes []string) (Device, string) {
 		t.Fatal("token must not be issued before approval")
 	}
 
-	device, err := s.ApprovePairing(p.UserCode, scopes)
+	device, err := s.ApprovePairing(ApproveInput{UserCode: p.UserCode, Scopes: scopes})
 	if err != nil {
 		t.Fatalf("ApprovePairing: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestUserCodeIsAcceptedWithSeparators(t *testing.T) {
 	}
 	// The watch renders the code as "1234 5678"; normalisation must cope.
 	spaced := p.UserCode[:4] + " " + p.UserCode[4:]
-	if _, err := s.ApprovePairing(spaced, nil); err != nil {
+	if _, err := s.ApprovePairing(ApproveInput{UserCode: spaced}); err != nil {
 		t.Fatalf("ApprovePairing with spaced code: %v", err)
 	}
 }
@@ -102,10 +102,10 @@ func TestPairingCodeIsSingleUse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartPairing: %v", err)
 	}
-	if _, err := s.ApprovePairing(p.UserCode, nil); err != nil {
+	if _, err := s.ApprovePairing(ApproveInput{UserCode: p.UserCode}); err != nil {
 		t.Fatalf("first approve: %v", err)
 	}
-	if _, err := s.ApprovePairing(p.UserCode, nil); err == nil {
+	if _, err := s.ApprovePairing(ApproveInput{UserCode: p.UserCode}); err == nil {
 		t.Fatal("second approve with the same code must fail")
 	}
 }
@@ -122,7 +122,7 @@ func TestPairingCodeExpires(t *testing.T) {
 	// Jump past the pairing window.
 	s.SetNow(func() time.Time { return now.Add(defaultPairTTL + time.Second) })
 
-	if _, err := s.ApprovePairing(p.UserCode, nil); err == nil {
+	if _, err := s.ApprovePairing(ApproveInput{UserCode: p.UserCode}); err == nil {
 		t.Fatal("expired pairing code must not be approved")
 	}
 	res, err := s.ExchangeToken(p.DeviceCode)
@@ -143,7 +143,7 @@ func TestRevokeBeforeCollectionStopsTokenIssue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartPairing: %v", err)
 	}
-	device, err := s.ApprovePairing(p.UserCode, nil)
+	device, err := s.ApprovePairing(ApproveInput{UserCode: p.UserCode})
 	if err != nil {
 		t.Fatalf("ApprovePairing: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestExchangeTokenIsSingleUse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartPairing: %v", err)
 	}
-	if _, err := s.ApprovePairing(p.UserCode, nil); err != nil {
+	if _, err := s.ApprovePairing(ApproveInput{UserCode: p.UserCode}); err != nil {
 		t.Fatalf("ApprovePairing: %v", err)
 	}
 	first, err := s.ExchangeToken(p.DeviceCode)

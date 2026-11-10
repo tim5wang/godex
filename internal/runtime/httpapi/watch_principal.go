@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"strings"
+
 	"github.com/tim5wang/godex/internal/core/identity"
 	"github.com/tim5wang/godex/internal/services/watchauth"
 )
@@ -20,13 +22,15 @@ import (
 // No entitlements: a watch must not inherit operator capabilities, so a future
 // gate requiring one denies it by default rather than letting it through.
 //
-// TenantID is empty because watchauth.Device has no tenant binding yet. That is
-// the fail-safe reading, not a hole: Policy.Authorize treats an unscoped
-// non-operator principal as cross-tenant, so a watch cannot reach tenant-scoped
-// nodes by omission. Binding the device to its tenant is a P1 task; until then
-// the gap fails closed.
+// TenantID comes from the device record, which gained its ownership when the pairing
+// was approved. It is what makes the wrist reach exactly the nodes its owner may reach
+// and no others: Policy.Authorize treats a principal with the right tenant as in-tenant
+// and anyone else as cross-tenant. A device paired before ownership existed still has
+// an empty TenantID, which stays the fail-safe reading — an unscoped non-operator is
+// refused rather than silently admitted.
 func watchDevicePrincipal(device watchauth.Device) identity.Principal {
 	return identity.Principal{
+		TenantID:   strings.TrimSpace(device.TenantID),
 		UserID:     device.DeviceID,
 		Kind:       identity.KindWatch,
 		AuthMethod: AuthMethodWatch,

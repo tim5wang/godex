@@ -62,9 +62,20 @@ const (
 
 // Device is one paired watch.
 type Device struct {
-	DeviceID       string    `json:"device_id"`
-	Name           string    `json:"name,omitempty"`
-	Kind           string    `json:"kind,omitempty"` // watch
+	DeviceID string `json:"device_id"`
+	Name     string `json:"name,omitempty"`
+	Kind     string `json:"kind,omitempty"` // watch
+	// OwnerUserID and TenantID attribute the device to the member who approved it,
+	// written from the APPROVING PRINCIPAL and never from the request body: a pairing
+	// that could name its own owner would let one member enrol a device into someone
+	// else's allowance.
+	//
+	// Empty on a device paired before these fields existed. That is the fail-safe
+	// reading rather than a hole: an unattributed watch is not counted against anyone,
+	// and Policy.Authorize already treats an unscoped principal as cross-tenant.
+	OwnerUserID string `json:"owner_user_id,omitempty"`
+	TenantID    string `json:"tenant_id,omitempty"`
+	// Scopes is the device's granted authority.
 	Scopes         []string  `json:"scopes"`
 	CredentialHash string    `json:"credential_hash"`
 	CreatedAt      time.Time `json:"created_at"`
@@ -172,17 +183,38 @@ func (s *Service) StartPairing(name, kind string) (Pairing, error) {
 	return *p, nil
 }
 
+// ApproveInput names what a pending pairing becomes.
+type ApproveInput struct {
+	UserCode string
+	Scopes   []string
+	// OwnerUserID and TenantID come from the approving principal. They are what makes
+	// "this is MY watch" true, and what the device allowance is counted against.
+	OwnerUserID string
+	TenantID    string
+	// Enroll, when set, is called after the pairing code and scopes are validated but
+	// BEFORE anything is stored. It is how the device is written into the node
+	// registry — which is what makes a watch consume one of its owner's device slots —
+	// and its error refuses the pairing.
+	//
+	// Called here rather than after ApprovePairing returns, because the two steps must
+	// not be separable: enrolling afterwards would leave a PAIRED device whenever the
+	// registry refused, and because the code is one-time that device could never be
+	// re-paired. Doing it inside means a refusal leaves the code usable — the user
+	// deletes a device and retries with the same code.
+	Enroll func(device Device) error
+}
+
 // ApprovePairing is called from a trusted endpoint (phone/Web UI). It turns a
 // pending user code into a registered device and returns it.
 //
 // approve: only when the operator is present; scopes are validated here so an
 // unknown scope can never reach storage.
-func (s *Service) ApprovePairing(userCode string, scopes []string) (Device, error) {
+func (s *Service) ApprovePairing(input ApproveInput) (Device, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked()
 
-	code := normalizeUserCode(userCode)
+	code := normalizeUserCode(input.UserCode)
 	deviceCode, ok := s.byUser[code]
 	if !ok {
 		return Device{}, fmt.Errorf("invalid or expired pairing code")
@@ -195,7 +227,7 @@ func (s *Service) ApprovePairing(userCode string, scopes []string) (Device, erro
 		return Device{}, fmt.Errorf("pairing code already used")
 	}
 
-	normalized, err := NormalizeScopes(scopes)
+	normalized, err := NormalizeScopes(input.Scopes)
 	if err != nil {
 		return Device{}, err
 	}
@@ -209,11 +241,21 @@ func (s *Service) ApprovePairing(userCode string, scopes []string) (Device, erro
 		DeviceID:       idgen.New("wch_", 8),
 		Name:           p.Name,
 		Kind:           p.Kind,
+		OwnerUserID:    strings.TrimSpace(input.OwnerUserID),
+		TenantID:       strings.TrimSpace(input.TenantID),
 		Scopes:         normalized,
 		CredentialHash: hash,
 		CreatedAt:      now,
 		LastSeen:       now,
 		ExpiresAt:      now.Add(s.tokenTTL),
+	}
+	// Registered before anything is stored, so a refusal (the owner is at their device
+	// allowance, say) leaves this pairing exactly as it was: the code is still
+	// redeemable and no half-paired device exists.
+	if input.Enroll != nil {
+		if err := input.Enroll(device); err != nil {
+			return Device{}, err
+		}
 	}
 	s.devices[device.DeviceID] = device
 	s.byHash[hash] = device.DeviceID

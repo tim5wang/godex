@@ -342,7 +342,7 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	}
 	registerWatchRoutes(mux, watchAuth, service, protected, controlRegistry, watchASR, watchTTS,
 		deps.CenterBridge, relayTrustChecker(manager), selfNodeID(manager),
-		deps.WatchRelay, func() string { return manager.Current().WebToken })
+		deps.WatchRelay, func() string { return manager.Current().WebToken }, accountsService)
 	capture := deps.LlmCapture
 	if capture == nil {
 		capture = llmcapture.New(llmcapture.Options{DumpDir: manager.Current().StateDir})

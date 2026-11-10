@@ -213,6 +213,12 @@ func (f *watchProxyForwarder) proxiedRequest(r *http.Request, target string, sco
 // body never runs locally. That shape matters: the alternative (forward inside
 // each handler) would let a new handler forget the check and silently execute a
 // remote command on the wrong machine.
+//
+// The local branch is not scoped by this wrapper: the route groups apply their own
+// scoping (the device-management routes filter by owner — visibleWatchDevices). The
+// read bodies (sessions/approvals/cross-device) still list this instance's own
+// workspace with no owner filter, which is the remaining gap for a TENANT-owned wrist
+// served locally; it is recorded in the plan rather than silently assumed handled.
 func (f *watchProxyForwarder) withForwardToNode(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if f.forward(w, r, forwardScopes(r)) {

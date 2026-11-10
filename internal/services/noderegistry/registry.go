@@ -37,6 +37,14 @@ const (
 	KindPC    = "pc"
 	KindCloud = "cloud"
 	KindPhone = "phone"
+	// KindWatch is a paired wrist device.
+	//
+	// It is a node kind rather than a separate registry because the plan's unit is
+	// DEVICES PER MEMBER, not "nodes plus watches": a watch occupies one of the same
+	// allowance slots a laptop or phone does, so "2 devices" has to mean two across all
+	// of them. Keeping it out of this enum is what made a watch uncountable — and an
+	// uncountable device is one nobody can be charged for.
+	KindWatch = "watch"
 
 	// DefaultKind applies when a node declares nothing. "pc" is the honest
 	// default: godex is a desktop-hosted agent, and a node that has not said
@@ -52,7 +60,7 @@ const (
 // typo visible instead of silently persisting as a status no client recognises.
 func NormalizeKind(kind string) string {
 	switch normalized := strings.ToLower(strings.TrimSpace(kind)); normalized {
-	case KindPC, KindCloud, KindPhone:
+	case KindPC, KindCloud, KindPhone, KindWatch:
 		return normalized
 	case "":
 		return DefaultKind

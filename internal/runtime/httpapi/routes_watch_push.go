@@ -349,7 +349,7 @@ func (q *watchPushQueue) ack(ids []string) int {
 // bridge (mobile/) authenticates with the web token it already uses for
 // /api/sessions and has no wrist credential at all. A watch-only gate would leave
 // the phone unable to drain the queue, which is the whole point of W5.
-func withWatchOrWebRead(auth *watchauth.Service, protected func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+func withWatchOrWebRead(auth *watchauth.Service, protected func(http.Handler) http.Handler, localTenant func() string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if device, ok := authenticateWatchRequest(auth, r); ok {
@@ -363,6 +363,13 @@ func withWatchOrWebRead(auth *watchauth.Service, protected func(http.Handler) ht
 				// Attach the device's identity (P0 §7). The web-token branch below is
 				// covered by `protected`, which attaches the operator itself.
 				ctx = WithPrincipal(ctx, watchDevicePrincipal(device))
+				// The push queue is derived from THIS instance's own workspace, so it gets
+				// the same tenant comparison as the read bodies. Without it this route was a
+				// way around that check: a tenant's wrist could read the operator's stream
+				// titles through notifications instead of through /watch/sessions.
+				if refuseForeignTenantWatchLocal(w, r.WithContext(ctx), localTenant) {
+					return
+				}
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
@@ -382,7 +389,7 @@ func registerWatchPushRoutes(
 	if queue == nil {
 		return
 	}
-	access := withWatchOrWebRead(api.auth, protected)
+	access := withWatchOrWebRead(api.auth, protected, api.localTenant)
 
 	mux.Handle("GET /watch/push/pending", access(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		since := int64(parseIntQuery(r.URL.Query().Get("since"), 0))

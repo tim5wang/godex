@@ -350,6 +350,7 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	resolveString("control.default_node", file.Control.DefaultNode, "GODEX_CONTROL_DEFAULT_NODE", func(v string) { current.Control.DefaultNode = v })
 	resolveString("control.trust_level", file.Control.TrustLevel, "GODEX_CONTROL_TRUST_LEVEL", func(v string) { current.Control.TrustLevel = v })
 	resolveString("control.kind", file.Control.Kind, "GODEX_CONTROL_KIND", func(v string) { current.Control.Kind = v })
+	resolveString("control.tenant_id", file.Control.TenantID, "GODEX_CONTROL_TENANT_ID", func(v string) { current.Control.TenantID = v })
 	resolveString("control.center_url", file.Control.CenterURL, "GODEX_CONTROL_CENTER_URL", func(v string) { current.Control.CenterURL = v })
 	resolveString("control.center_token", file.Control.CenterToken, "GODEX_CONTROL_CENTER_TOKEN", func(v string) { current.Control.CenterToken = v })
 	resolveString("control.node_proxy_token", file.Control.NodeProxyToken, "GODEX_CONTROL_NODE_PROXY_TOKEN", func(v string) { current.Control.NodeProxyToken = v })
@@ -896,6 +897,7 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 			NodeID:              file.Control.NodeID,
 			DefaultNode:         file.Control.DefaultNode,
 			TrustLevel:          file.Control.TrustLevel,
+			TenantID:            file.Control.TenantID,
 			Kind:                file.Control.Kind,
 			CenterURL:           file.Control.CenterURL,
 			CenterToken:         file.Control.CenterToken,

@@ -32,6 +32,9 @@ type selfJoinRequest struct {
 
 	// Credential is filled by registerWithCenter (center-issued ck_ value).
 	Credential string `json:"-"`
+	// TenantID is filled by enrollWithJoinToken from the center's reply, so the node
+	// records which tenant it belongs to.
+	TenantID string `json:"-"`
 }
 
 // registerSelfJoinRoute wires the automatic join endpoint. Saving the control
@@ -127,6 +130,12 @@ func registerSelfJoinRoute(mux *http.ServeMux, manager *config.Manager, protecte
 			"control.node_id":     req.NodeID,
 			"control.trust_level": req.TrustLevel,
 		}
+		// Only written when the center named a tenant: a center-side enrolment (the legacy
+		// web-token path) answers with no tenant, and writing an empty value there would be
+		// indistinguishable from never having joined one.
+		if strings.TrimSpace(req.TenantID) != "" {
+			values["control.tenant_id"] = req.TenantID
+		}
 		if req.Name != "" {
 			values["control.node_name"] = req.Name
 		}
@@ -171,6 +180,10 @@ func enrollWithJoinToken(ctx context.Context, req *selfJoinRequest) (string, err
 		NodeID         string `json:"node_id"`
 		Credential     string `json:"credential"`
 		NodeProxyToken string `json:"node_proxy_token"`
+		// TenantID is the tenant the center enrolled this node into. Persisted so the
+		// node can later tell whether a paired wrist belongs to it: with no tenant it is
+		// the operator's own machine, and a tenant's wrist must not read its workspace.
+		TenantID string `json:"tenant_id"`
 	}
 	if err := doCenterJSON(ctx, &http.Client{Timeout: 15 * time.Second}, req.CenterURL, "POST", "/control/join", "", body, &out); err != nil {
 		return "", fmt.Errorf("center join: %w", err)
@@ -184,6 +197,7 @@ func enrollWithJoinToken(ctx context.Context, req *selfJoinRequest) (string, err
 		req.NodeID = out.NodeID
 	}
 	req.Credential = out.Credential
+	req.TenantID = out.TenantID
 	return out.NodeProxyToken, nil
 }
 

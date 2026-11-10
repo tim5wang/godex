@@ -155,7 +155,7 @@ func TestWatchScopeOrRelayNamesTheDeviceOnTheDirectPath(t *testing.T) {
 
 	var got identity.Principal
 	var ok bool
-	handler := withWatchScopeOrRelay(auth, watchauth.ScopeRead, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := withWatchScopeOrRelay(auth, watchauth.ScopeRead, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got, ok = PrincipalFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -185,7 +185,7 @@ func TestWatchScopeOrRelayForwardGetsRelayVouchedPrincipal(t *testing.T) {
 	var ok bool
 	// trust returns true: this request arrives over an authenticated relay channel.
 	trust := func(*http.Request) bool { return true }
-	handler := withWatchScopeOrRelay(auth, watchauth.ScopeRead, trust)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := withWatchScopeOrRelay(auth, watchauth.ScopeRead, trust, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got, ok = PrincipalFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -222,7 +222,7 @@ func TestWatchOrWebReadAttachesDeviceOnTheWatchPath(t *testing.T) {
 	var got identity.Principal
 	var ok bool
 	// protected is never reached on this path; allowAll documents that.
-	handler := withWatchOrWebRead(auth, allowAll)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := withWatchOrWebRead(auth, allowAll, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got, ok = PrincipalFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))

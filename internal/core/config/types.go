@@ -222,12 +222,19 @@ type HeartbeatSection struct {
 	DefaultWatchdogScript string `yaml:"default_watchdog_script"`
 }
 
+// ControlSection holds this instance's control-plane identity.
+//
+// TenantID is the tenant this node was enrolled into, as returned by the center's
+// /control/join. It is what lets a node answer "is this wrist mine?": with no tenant
+// this instance IS the operator's own machine, and a wrist belonging to some tenant
+// must not read its workspace (§6: the center holds no tenant content).
 type ControlSection struct {
 	NodeName            string               `yaml:"node_name"`
 	NodeID              string               `yaml:"node_id"`
 	DefaultNode         string               `yaml:"default_node"`
 	TrustLevel          string               `yaml:"trust_level"`
 	Kind                string               `yaml:"kind"`
+	TenantID            string               `yaml:"tenant_id"`
 	CenterURL           string               `yaml:"center_url"`
 	CenterToken         string               `yaml:"center_token"`
 	NodeProxyToken      string               `yaml:"node_proxy_token"`

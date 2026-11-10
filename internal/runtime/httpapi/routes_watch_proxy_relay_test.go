@@ -161,7 +161,7 @@ func TestWatchScopeOrRelayAuthorization(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ran = false
-			guard := withWatchScopeOrRelay(auth, tc.required, tc.trust)
+			guard := withWatchScopeOrRelay(auth, tc.required, tc.trust, nil)
 			r := httptest.NewRequest(http.MethodPost, "/watch/command", nil)
 			if tc.scopes != "" {
 				r.Header.Set(WatchScopesHeader, tc.scopes)

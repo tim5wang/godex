@@ -340,7 +340,7 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	if watchTTS == nil && manager != nil && manager.Current().Media.Audio.VoiceEnabled {
 		watchTTS = newWatchTTSBridge(manager)
 	}
-	registerWatchRoutes(mux, watchAuth, service, protected, controlRegistry, watchASR, watchTTS,
+	registerWatchRoutes(mux, manager, watchAuth, service, protected, controlRegistry, watchASR, watchTTS,
 		deps.CenterBridge, relayTrustChecker(manager), selfNodeID(manager),
 		deps.WatchRelay, func() string { return manager.Current().WebToken }, accountsService)
 	capture := deps.LlmCapture

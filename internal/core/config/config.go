@@ -389,6 +389,7 @@ type ControlConfig struct {
 	// Kind is the node type reported to a center: pc, cloud, or phone. Empty
 	// resolves to pc (see noderegistry.NormalizeKind).
 	Kind                string
+	TenantID            string
 	CenterURL           string
 	CenterToken         string
 	NodeProxyToken      string

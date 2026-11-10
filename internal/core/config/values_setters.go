@@ -262,6 +262,8 @@ func setControlStoredValue(file *ConfigFile, path string, value any) error {
 		file.Control.TrustLevel = asString(value)
 	case "control.kind":
 		file.Control.Kind = asString(value)
+	case "control.tenant_id":
+		file.Control.TenantID = asString(value)
 	case "control.center_url":
 		file.Control.CenterURL = asString(value)
 	case "control.center_token":

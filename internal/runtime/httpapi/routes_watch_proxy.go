@@ -121,6 +121,11 @@ type watchProxyForwarder struct {
 	// selfID is this node's own id; a request naming it is served locally, which
 	// also prevents the forwarder from relaying into itself.
 	selfID string
+	// targetTenant reports the tenant a node belongs to ("" = unowned or the
+	// operator's own machine). It is what bounds a TENANT's wrist to its own
+	// tenant's nodes; nil skips the check, which keeps a wiring without a registry
+	// behaving as before.
+	targetTenant func(nodeID string) string
 }
 
 // forward sends the request to nodeID over the center proxy and returns true.
@@ -144,6 +149,9 @@ func (f *watchProxyForwarder) forward(w http.ResponseWriter, r *http.Request, sc
 	if f == nil {
 		writeError(w, http.StatusServiceUnavailable, fmt.Errorf(
 			"无法访问节点 %q：当前节点未配置中继能力", target))
+		return true
+	}
+	if !targetAllowedForDevice(w, r, target, f.targetTenant) {
 		return true
 	}
 
@@ -205,6 +213,40 @@ func (f *watchProxyForwarder) proxiedRequest(r *http.Request, target string, sco
 	return clone
 }
 
+// targetAllowedForDevice decides whether the wrist that made this request may reach
+// the node it named, and writes the refusal if not.
+//
+// Why this exists at the ORIGIN node: the target has never seen the wrist, so it
+// cannot validate a wch_ credential. The only available transport credentials are the
+// origin node's own (its web token for the in-process hop, its nk_ over the center
+// bridge), which is why a forwarded wrist request used to arrive as the OPERATOR and be
+// admitted to every node on the platform. The authority had to be established where the
+// device IS known, so this is the source-side check.
+//
+// The rule is deliberately the same tenant rule as the local read refusal: a wrist with
+// no tenant is the operator's own device and keeps the previous behaviour; a wrist that
+// belongs to tenant T may reach only tenant T's nodes. A node that is unowned, missing,
+// or owned by another tenant is refused rather than allowed — for a tenant device the
+// safe direction is closed, and an unowned node is nobody's to be reached by a customer.
+//
+// Returns false only when the request was refused here (the response is already written).
+func targetAllowedForDevice(w http.ResponseWriter, r *http.Request, target string, targetTenant func(string) string) bool {
+	device, ok := watchDeviceFromContext(r.Context())
+	if !ok {
+		return true
+	}
+	deviceTenant := strings.TrimSpace(device.TenantID)
+	if deviceTenant == "" {
+		return true
+	}
+	if targetTenant != nil && strings.TrimSpace(targetTenant(target)) == deviceTenant {
+		return true
+	}
+	writeError(w, http.StatusForbidden, fmt.Errorf(
+		"this watch belongs to a tenant, so it may only reach that tenant's own nodes (node %q is not)", target))
+	return false
+}
+
 // withForwardToNode makes a watch handler able to serve a request aimed at a
 // different node.
 //
@@ -226,6 +268,49 @@ func (f *watchProxyForwarder) withForwardToNode(next http.Handler) http.Handler 
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// refuseForeignTenantWatchLocal reports (and writes) the refusal when a wrist owned by
+// one tenant asks THIS instance to serve its own workspace.
+//
+// The rule is a tenant COMPARISON, not "deny watches": a node enrolled into tenant T
+// serves tenant T's wrists, because that node's workspace IS that tenant's data — which
+// is the whole product. What must not happen is the CENTER (enrolled into no tenant, i.e.
+// the operator's own machine) serving a tenant's wrist: that would hand a customer the
+// operator's conversations. So: a device with no tenant is the operator's own wrist and
+// keeps the previous behaviour; a device WITH a tenant is refused unless this instance is
+// that same tenant's node.
+//
+// Wrapping the whole surface in requireCenterLocalData instead would be simpler and
+// WRONG: it refuses every non-operator principal, which includes a tenant reading its own
+// node — the feature this surface exists for.
+//
+// Applies only to the directly-authenticated device path. A relay-vouched forward carries
+// scopes rather than a device id (the receiving node has never seen the wrist), so there
+// is nothing to compare; that path has already passed the origin node's own scope check.
+//
+// Also skips any request that NAMES another node: that one is being forwarded, and the
+// question for it is "may this wrist reach that node" (targetAllowedForDevice), not "may it
+// read this machine's workspace". Refusing it here would break the very case the forwarder
+// exists for — a tenant's wrist reaching the tenant's own node one hop away.
+func refuseForeignTenantWatchLocal(w http.ResponseWriter, r *http.Request, localTenant func() string) bool {
+	device, ok := watchDeviceFromContext(r.Context())
+	if !ok {
+		return false
+	}
+	if watchNodeTarget(r) != "" {
+		return false
+	}
+	deviceTenant := strings.TrimSpace(device.TenantID)
+	if deviceTenant == "" {
+		return false
+	}
+	if localTenant != nil && strings.TrimSpace(localTenant()) == deviceTenant {
+		return false
+	}
+	writeError(w, http.StatusForbidden, fmt.Errorf(
+		"this watch belongs to a tenant, so it may only read that tenant's own node, not this instance's workspace"))
+	return true
 }
 
 // watchGrantedScopeKey records the single scope a guard has already verified for
@@ -326,6 +411,7 @@ func withWatchScopeOrRelay(
 	auth *watchauth.Service,
 	scope string,
 	trust func(*http.Request) bool,
+	localTenant func() string,
 ) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		// record tags the request with the scope that was just verified, so a
@@ -338,6 +424,9 @@ func withWatchScopeOrRelay(
 		// serving the request — that path carries scopes rather than a device id,
 		// so the wrist cannot be named and the principal records the forward.
 		record := func(w http.ResponseWriter, r *http.Request) {
+			if refuseForeignTenantWatchLocal(w, r, localTenant) {
+				return
+			}
 			principal := watchRelayPrincipal()
 			if device, ok := watchDeviceFromContext(r.Context()); ok {
 				principal = watchDevicePrincipal(device)

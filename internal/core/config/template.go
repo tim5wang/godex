@@ -475,6 +475,10 @@ control:
   default_node: {{ yamlString .Control.DefaultNode }}
   # Trust level reported when registering to a center. Environment override: GODEX_CONTROL_TRUST_LEVEL.
   trust_level: {{ yamlString .Control.TrustLevel }}
+  # Tenant this node was enrolled into, as returned by the center's /control/join.
+  # Empty means this instance IS the operator's own machine (the center).
+  # Environment override: GODEX_CONTROL_TENANT_ID.
+  tenant_id: {{ yamlString .Control.TenantID }}
   # What this runtime is: pc, cloud, or phone. Reported when registering to a center.
   # Environment override: GODEX_CONTROL_KIND.
   kind: {{ yamlString .Control.Kind }}

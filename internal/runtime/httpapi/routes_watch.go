@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/identity"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
@@ -252,12 +253,18 @@ type watchAPI struct {
 	// the machine the watch is paired with. Empty when unknown; the list then just
 	// omits the flag rather than guessing.
 	selfNodeID string
+	// localTenant reports the tenant THIS instance was enrolled into; empty means the
+	// operator's own machine. One field rather than a parameter per registrar, so every
+	// watch surface asks the same question the same way (see
+	// refuseForeignTenantWatchLocal).
+	localTenant func() string
 }
 
 // registerWatchRoutes wires the whole watch surface. The work lives in the
 // per-concern functions below; this only composes them.
 func registerWatchRoutes(
 	mux *http.ServeMux,
+	manager *config.Manager,
 	auth *watchauth.Service,
 	service *backend.Service,
 	protected func(http.Handler) http.Handler,
@@ -282,18 +289,37 @@ func registerWatchRoutes(
 			bridge:   bridge,
 			webToken: webToken,
 			selfID:   selfNodeID,
+			// A tenant's wrist may only reach that tenant's nodes, decided HERE because
+			// the target has never seen the wrist and would otherwise admit it as the
+			// operator (see targetAllowedForDevice).
+			targetTenant: func(nodeID string) string {
+				if controlRegistry == nil {
+					return ""
+				}
+				node, err := controlRegistry.Get(context.Background(), nodeID)
+				if err != nil {
+					return ""
+				}
+				return node.TenantID
+			},
 		},
 		trust:      trust,
 		selfNodeID: selfNodeID,
 		accounts:   accountsService,
+		// The tenant THIS instance was enrolled into (empty = the operator's own
+		// machine). Carried on the API rather than threaded through each registrar, so
+		// every watch surface applies one comparison and a new route cannot miss it.
+		localTenant: func() string { return manager.Current().Control.TenantID },
 	}
 
 	// Scope guards accept a watch credential OR a scope-vouched forward from the
 	// node this watch is paired with, which is what makes one pairing usable
-	// against every node the center can reach.
-	read := withWatchScopeOrRelay(auth, watchauth.ScopeRead, trust)
-	command := withWatchScopeOrRelay(auth, watchauth.ScopeCommand, trust)
-	approve := withWatchScopeOrRelay(auth, watchauth.ScopeApprove, trust)
+	// against every node the center can reach. localTenant lets them refuse a
+	// TENANT's wrist at the operator's own machine (see refuseForeignTenantWatchLocal).
+	localTenant := api.localTenant
+	read := withWatchScopeOrRelay(auth, watchauth.ScopeRead, trust, localTenant)
+	command := withWatchScopeOrRelay(auth, watchauth.ScopeCommand, trust, localTenant)
+	approve := withWatchScopeOrRelay(auth, watchauth.ScopeApprove, trust, localTenant)
 
 	// The push queue is derived state, so it is created here (once per handler,
 	// shared by every request) rather than stored on the node.

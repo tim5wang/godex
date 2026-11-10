@@ -35,6 +35,36 @@ func (s *Store) LastSeen(ctx context.Context, scope Scope, contextID string) (st
 	return seen, nil
 }
 
+// LastSeenByContext returns the "last seen" watermark of every non-archived stream in
+// one query.
+//
+// The desktop list needs it to tell a NEW finished conversation from one the owner has
+// already read. Unread counts alone cannot do that: a stream may have unread events that
+// are plan edits, and claiming "its conversation just finished" off a bare count would be
+// a lie about what changed. Comparing the turn event against this watermark is the one
+// honest test, and per-stream reads would be N queries for one list.
+func (s *Store) LastSeenByContext(ctx context.Context, scope Scope) (map[string]string, error) {
+	tenantID, ownerID := scopeArgs(scope)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.id, COALESCE(s.last_seen_at, '')
+		FROM wc_contexts c
+		LEFT JOIN wc_seen s ON s.tenant_id = c.tenant_id AND s.context_id = c.id
+		WHERE c.tenant_id = ? AND c.owner_id = ? AND c.status <> 'archived'`, tenantID, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var id, seen string
+		if err := rows.Scan(&id, &seen); err != nil {
+			return nil, err
+		}
+		out[id] = seen
+	}
+	return out, rows.Err()
+}
+
 // markSeen sets the watermark to now. Viewing is not an edit, so this never
 // touches the context version.
 func (s *Store) markSeen(ctx context.Context, scope Scope, contextID string) error {

@@ -894,6 +894,10 @@ func (s *Service) finishAgentTurnLocked(ctx context.Context, session *sessionSta
 		Payload:   events.TurnPayload{Status: status},
 	})
 	s.captureSessionSignalCandidates(session, updatedAt, turnID)
+	// Make a backgrounded conversation's completion visible on its work stream: this is
+	// the event behind the desktop list's status, and the reason a user who left a
+	// desktop in the background can see that its conversation moved.
+	s.recordWorkContextSessionTurn(session, turnID, status)
 	_ = s.writeSessionTimeline(session)
 
 	// The turn reached a terminal status and the last persist above captured

@@ -61,6 +61,26 @@ func registerWorkContextRoutes(mux *http.ServeMux, service *backend.Service, pro
 	handle("GET /v1/work-attention", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
 		return service.AttentionInbox(r.Context(), scope)
 	})
+	// Every stream's linked sessions in one call, so the desktop list can say which
+	// streams have a conversation running and which conversation was used last —
+	// without opening each stream (which would be N detail reads for one list).
+	// last_turn names the stream whose conversation just finished, so the card can say
+	// WHAT moved rather than only that something moved.
+	handle("GET /v1/work-context-sessions", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
+		links, err := s.SessionIndex(r.Context(), scope)
+		if err != nil {
+			return nil, err
+		}
+		turns, err := s.NewestSessionTurnByContext(r.Context(), scope, workcontext.SessionTurnEventKind)
+		if err != nil {
+			return nil, err
+		}
+		seen, err := s.LastSeenByContext(r.Context(), scope)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"sessions": links, "last_turn": turns, "seen": seen}, nil
+	})
 	handle("POST /v1/work-contexts", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
 		var input workcontext.ContextInput
 		if err := decodeJSON(r, &input); err != nil {

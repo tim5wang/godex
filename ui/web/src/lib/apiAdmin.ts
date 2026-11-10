@@ -25,6 +25,12 @@ export interface AdminTenant {
    *  a glance; deliberately NOT compared against the per-user limit, because that
    *  ratio is per member and this row does not model members. */
   node_count?: number;
+  /** The tenant's daily forwarded-byte allowance. 0 means unlimited. */
+  max_daily_bytes?: number;
+  /** How much of that allowance is spent in the CURRENT quota day, from the same
+   *  counters and the same window the quota enforces — so this is the number the
+   *  refusal is based on, not a differently-measured approximation of it. */
+  daily_used_bytes?: number;
 }
 
 /** AdminMember is a user's membership inside a tenant. Carries the email but
@@ -111,6 +117,45 @@ export function setTenantMaxUsers(
   );
 }
 
+/** setTenantMaxDailyBytes sets the tenant's daily forwarded-traffic allowance, in MB.
+ *
+ *  MB rather than bytes because that is the unit an operator reasons in ("100", not
+ *  "104857600"), and because the config side already speaks MB for the free tier — two
+ *  units for one number is how an operator ends up setting 1/1000th of what they meant.
+ *  The server converts; this end stays human.
+ *
+ *  0 means unlimited, and lowering it does NOT disconnect anything: it only refuses new
+ *  forwarded requests until the next daily reset. */
+export function setTenantMaxDailyMB(
+  token: string | null,
+  tenantID: string,
+  maxDailyMB: number,
+): Promise<{ tenant_id: string; max_daily_bytes: number; updated_at: string }> {
+  return request<{ tenant_id: string; max_daily_bytes: number; updated_at: string }>(
+    `/admin/tenants/${encodeURIComponent(tenantID)}/max-daily-bytes`,
+    { method: "PUT", body: JSON.stringify({ max_daily_bytes: mbToBytes(maxDailyMB) }) },
+    token,
+  );
+}
+
+/** bytesPerMB is the binary megabyte the server also uses, so a limit set here and the
+ *  free-tier default in config mean the same thing. Using 10^6 here would make "100 MB"
+ *  in this box 4.9% smaller than "100" in the config file. */
+const bytesPerMB = 1024 * 1024;
+
+/** mbToBytes converts a whole number of MB for the wire. Kept as one function so the
+ *  rounding rule lives in one place. */
+export function mbToBytes(mb: number): number {
+  return Math.max(0, Math.round(mb)) * bytesPerMB;
+}
+
+/** bytesToMB is the inverse, for pre-filling the edit box from a stored byte value. */
+export function bytesToMB(bytes?: number): number {
+  if (!bytes || bytes <= 0) {
+    return 0;
+  }
+  return Math.round(bytes / bytesPerMB);
+}
 /** getAdminPolicy returns the effective platform policy so the UI renders
  *  defaults from the same source the authorization seam reads. */
 export function getAdminPolicy(token: string | null): Promise<AdminPolicy> {

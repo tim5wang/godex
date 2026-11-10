@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -8,7 +9,9 @@ import (
 
 	"github.com/tim5wang/godex/internal/core/identity"
 	"github.com/tim5wang/godex/internal/services/accounts"
+	"github.com/tim5wang/godex/internal/services/metering"
 	"github.com/tim5wang/godex/internal/services/noderegistry"
+	"github.com/tim5wang/godex/internal/services/relay"
 )
 
 // Platform administration surface (design §3.6). Everything here crosses tenant
@@ -38,6 +41,16 @@ type adminTenantResponse struct {
 	// unlimited. Reported alongside the other limits so the console renders them all
 	// from one source rather than reading the policy per tenant.
 	MaxDailyBytes int64 `json:"max_daily_bytes"`
+	// DailyUsedBytes is how much of that allowance the tenant has spent so far in
+	// the CURRENT quota day. Reported so the console can show "8.2 MB of 100 MB" —
+	// a limit the operator cannot see the usage of is one they cannot decide about.
+	//
+	// Counted in the SAME window and from the SAME counters the quota enforces
+	// (relay.QuotaDayWindow over relay_usage), so the number here is the number the
+	// refusal is based on. A rolling 24h figure would drift from it and be worse than
+	// showing nothing: the operator would be reading a different measurement than the
+	// one that just refused a user.
+	DailyUsedBytes int64 `json:"daily_used_bytes"`
 	// NodeCount is how many devices the tenant owns ACROSS ALL MEMBERS, so the
 	// operator sees the estate at a glance. It is reported even when
 	// MaxDevicesPerUser is 0, because the count is useful on its own — and it is
@@ -59,7 +72,7 @@ type adminMemberResponse struct {
 // A nil accounts service registers the same patterns with a 503 inside the
 // handler rather than a second registration branch: the route-ownership gate
 // requires exactly one registration site per pattern.
-func registerAdminRoutes(mux *http.ServeMux, accountsService *accounts.Service, controlRegistry controlNodeRegistry, protected func(http.Handler) http.Handler) {
+func registerAdminRoutes(mux *http.ServeMux, accountsService *accounts.Service, controlRegistry controlNodeRegistry, meteringService *metering.Service, protected func(http.Handler) http.Handler) {
 	mux.Handle("GET /admin/tenants", requirePlatformAdmin(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !adminAccountsAvailable(w, accountsService) {
 			return
@@ -84,6 +97,12 @@ func registerAdminRoutes(mux *http.ServeMux, accountsService *accounts.Service, 
 				}
 			}
 		}
+		// Today's usage comes from the same counters and the same UTC day window the
+		// quota enforces (relay.QuotaDayWindow), read ONCE for the whole list rather
+		// than per tenant: one grouped query instead of N. Best effort like the node
+		// counts — a metering failure leaves 0, which reads as "no traffic recorded",
+		// and hiding the whole tenant list over it would be worse.
+		dailyUsed := dailyTenantBytes(r.Context(), meteringService)
 		for _, summary := range tenants {
 			out = append(out, adminTenantResponse{
 				ID:                summary.Tenant.ID,
@@ -95,6 +114,7 @@ func registerAdminRoutes(mux *http.ServeMux, accountsService *accounts.Service, 
 				MaxUsers:          summary.MaxUsers,
 				MaxDevicesPerUser: summary.MaxDevicesPerUser,
 				MaxDailyBytes:     summary.MaxDailyBytes,
+				DailyUsedBytes:    dailyUsed[summary.Tenant.ID],
 				NodeCount:         nodeCounts[summary.Tenant.ID],
 			})
 		}
@@ -392,6 +412,32 @@ func registerTenantAllowanceRoutes(mux *http.ServeMux, accountsService *accounts
 			"updated_at":      policy.UpdatedAt,
 		})
 	})))
+}
+
+// dailyTenantBytes returns every tenant's forwarded bytes so far in the CURRENT quota
+// day, keyed by tenant id.
+//
+// The window is relay.QuotaDayWindow — the same one the quota refuses on — so the figure
+// the console shows is the figure that decides. A rolling 24h number would be a different
+// measurement, and an operator reading it would be looking at something that did not
+// cause the refusal they are investigating.
+//
+// One grouped query for the whole list rather than a query per tenant: the admin list is a
+// scan, and N+1 reads there would make it cost more the more customers exist.
+func dailyTenantBytes(ctx context.Context, meteringService *metering.Service) map[string]int64 {
+	out := map[string]int64{}
+	if meteringService == nil {
+		return out
+	}
+	windowStart, _ := relay.QuotaDayWindow(time.Now())
+	summaries, err := meteringService.TenantSummaries(windowStart)
+	if err != nil {
+		return out
+	}
+	for _, summary := range summaries {
+		out[summary.TenantID] = summary.RequestBytes + summary.ResponseBytes
+	}
+	return out
 }
 
 func adminAccountsAvailable(w http.ResponseWriter, service *accounts.Service) bool {

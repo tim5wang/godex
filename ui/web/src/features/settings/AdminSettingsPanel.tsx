@@ -259,7 +259,10 @@ export function AdminSettingsPanel({ token }: { token: string | null }) {
           rowKey="id"
           size="small"
           dataSource={tenantsQuery.data?.tenants ?? []}
-          scroll={{ x: 860 }}
+          // Widened with the traffic allowance column: the three allowance cells each hold a
+          // tag PLUS an edit button, so the row needs the room rather than squashing them
+          // into ellipses.
+          scroll={{ x: 1040 }}
           columns={[
             {
               title: t("settings.adminTenantCol"),
@@ -320,6 +323,24 @@ export function AdminSettingsPanel({ token }: { token: string | null }) {
                   kind="users"
                   limit={tenant.max_users ?? 0}
                   used={tenant.member_count ?? 0}
+                />
+              ),
+            },
+            {
+              // The traffic allowance is a THIRD number rather than part of either above:
+              // it is the only one measured in bytes, and it is the one a free tier is
+              // actually advertised by ("100 MB a day"). Its used-count comes from the
+              // same counters and the same UTC day window the enforcement uses, so the
+              // figure shown is the figure that refuses.
+              title: t("settings.adminDailyTrafficCol"),
+              dataIndex: "max_daily_bytes",
+              render: (_value: number | undefined, tenant) => (
+                <TenantLimitCell
+                  token={token}
+                  tenantID={tenant.id}
+                  kind="daily_traffic"
+                  limit={tenant.max_daily_bytes ?? 0}
+                  used={tenant.daily_used_bytes ?? 0}
                 />
               ),
             },

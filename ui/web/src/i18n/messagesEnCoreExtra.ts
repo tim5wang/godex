@@ -247,4 +247,11 @@ export const enCoreExtraMessages = {
       revokeConfirm: "The watch stops working immediately and must be paired again.",
       revokeSuccess: "Revoked.",
     },
+    quota: {
+      // The one error a self-service user is expected to ACT on, so it is rendered as a
+      // sentence with the two facts that make it actionable: how much was used against
+      // what, and when it comes back. The server's own message is English prose without
+      // the numbers, which is why this key exists rather than being forwarded.
+      exceeded: "Daily traffic allowance used up: {used} of {limit}. It resets at {reset}. Raise the allowance or wait for the reset — your own devices keep working directly.",
+    },
 } as const;

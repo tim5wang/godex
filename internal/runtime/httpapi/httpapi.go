@@ -231,7 +231,7 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	// /config (gated per ITEM, see config_admin_gate.go).
 	centerLocal := requireCenterLocalData(protected)
 	registerAuthRoutes(mux, manager, accountsService, protected)
-	registerAdminRoutes(mux, accountsService, controlRegistry, protected)
+	registerAdminRoutes(mux, accountsService, controlRegistry, meteringService, protected)
 	// Relay metering (design §7 basic tier). Tenant-scoped and operator-wide views
 	// live in one file because they must agree on the window semantics.
 	registerMeteringRoutes(mux, meteringService, protected)

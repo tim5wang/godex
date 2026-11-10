@@ -2,10 +2,16 @@ import { useNodeContextStore } from "../store/nodeContext";
 
 export class APIError extends Error {
   status: number;
+  /** The parsed error body, when the server sent one. Carried so a caller can use the
+   *  STRUCTURED half of a refusal and not just its message string: a quota 429 names how
+   *  much was used and when it resets, and repeating the server's English sentence to a
+   *  Chinese user would be the one error they cannot act on. */
+  body?: unknown;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, body?: unknown) {
     super(message);
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -137,7 +143,7 @@ export async function request<T>(path: string, init: RequestInit = {}, token: st
 
   if (!response.ok) {
     const data = await response.json().catch(() => ({ error: response.statusText }));
-    throw new APIError(response.status, data.error ?? response.statusText);
+    throw new APIError(response.status, data.error ?? response.statusText, data);
   }
   if (response.status === 204) {
     return undefined as T;
@@ -147,5 +153,5 @@ export async function request<T>(path: string, init: RequestInit = {}, token: st
 
 export async function parseAPIError(response: Response): Promise<APIError> {
   const data = await response.json().catch(() => ({ error: response.statusText }));
-  return new APIError(response.status, data.error ?? response.statusText);
+  return new APIError(response.status, data.error ?? response.statusText, data);
 }

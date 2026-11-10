@@ -250,4 +250,9 @@ export const zhCoreExtraMessages = {
       revokeConfirm: "吊销后手表会立即失效，需要重新配对。",
       revokeSuccess: "已吊销。",
     },
+    quota: {
+      // 自助用户唯一需要「行动」的报错，所以写成带两个可行动事实的整句：用了多少/上限多少、
+      // 何时恢复。服务端原文是英文且不带数字，所以这里不转发而是重写。
+      exceeded: "今日流量额度已用尽：{used} / {limit}，将于 {reset} 重置。可提高额度或等待重置——你自己的设备直连不受影响。",
+    },
 } as const;

@@ -72,12 +72,17 @@ type Service struct {
 	db  *sql.DB
 	mu  sync.Mutex
 	now func() time.Time
-	// freeTierMaxNodes / freeTierMaxDailyBytes are the allowance a FRESH self-serve
-	// tenant starts with (0 = unlimited = write no policy row). Set once at startup
-	// from configuration; read inside the signup transaction so a new tenant is never
-	// briefly unlimited on a deployment that means to cap it.
-	freeTierMaxNodes      int
-	freeTierMaxDailyBytes int64
+	// freeTier* are the allowance a FRESH self-serve tenant starts with (0 =
+	// unlimited = write no policy row). Set once at startup from configuration; read
+	// inside the signup transaction so a new tenant is never briefly unlimited on a
+	// deployment that means to cap it.
+	//
+	// Three knobs, because they answer three different questions: how many PEOPLE
+	// may join (tenant-level), how many DEVICES each of them may have (user-level),
+	// and how much traffic the tenant may move (tenant-level).
+	freeTierMaxUsers          int
+	freeTierMaxDevicesPerUser int
+	freeTierMaxDailyBytes     int64
 }
 
 // New opens (creating if needed) the account store under stateDir.
@@ -149,13 +154,22 @@ func (s *Service) init() error {
 		// policy decisions, not tenant identity, and they get their own audit trail
 		// as features are added.
 		//
-		// max_nodes is the tenant's node allowance (design §7, basic tier); 0 means
-		// unlimited, which is the same "absence is permissive" default sharing_enabled
-		// uses.
+		// The two capability limits live here rather than on `tenants`: they are policy
+		// an operator sets, not identity. Both encode 0 as UNLIMITED, the same
+		// "absence is permissive" default sharing_enabled uses.
+		//
+		// max_users            — how many people may be members of this tenant
+		// max_devices_per_user — how many devices ONE MEMBER may own
+		//
+		// Split rather than one "max nodes", because a single tenant-wide device cap
+		// cannot express "2 devices each": it would make the limit shrink as people
+		// join, so the second member would find the allowance already spent by the
+		// first. The trade is a pair of numbers that an operator can state plainly.
 		`CREATE TABLE IF NOT EXISTS tenant_policies (
 			tenant_id TEXT PRIMARY KEY,
 			sharing_enabled INTEGER NOT NULL DEFAULT 1,
-			max_nodes INTEGER NOT NULL DEFAULT 0,
+			max_users INTEGER NOT NULL DEFAULT 0,
+			max_devices_per_user INTEGER NOT NULL DEFAULT 0,
 			updated_at TEXT NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS sessions (
@@ -310,11 +324,34 @@ func (s *Service) migrateTenantPolicyColumns() error {
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterate tenant_policies columns: %w", err)
 	}
-	// Defaults are 0 = unlimited for both columns: an upgraded center must keep the
+	// Defaults are 0 = unlimited for every column: an upgraded center must keep the
 	// behaviour it had before the column existed rather than silently start
 	// refusing traffic or enrolments.
+	//
+	// max_nodes is RENAMED rather than dropped, and its value is carried over. The
+	// name was the only thing wrong with it: it shipped meaning "nodes this tenant
+	// may own" and now means "devices one member may own". For the single-member
+	// tenants that make up every existing deployment the two readings agree, so
+	// keeping the number preserves exactly the policy the operator set. Leaving a
+	// column named max_nodes holding a per-user limit is the kind of name that lies,
+	// which is why this is a rename and not a redefinition in place.
+	if !have["max_devices_per_user"] {
+		switch {
+		case have["max_nodes"]:
+			if _, err := s.db.Exec(`ALTER TABLE tenant_policies RENAME COLUMN max_nodes TO max_devices_per_user`); err != nil {
+				return fmt.Errorf("rename tenant_policies.max_nodes: %w", err)
+			}
+			have["max_devices_per_user"] = true
+			delete(have, "max_nodes")
+		default:
+			if _, err := s.db.Exec(`ALTER TABLE tenant_policies ADD COLUMN max_devices_per_user INTEGER NOT NULL DEFAULT 0`); err != nil {
+				return fmt.Errorf("add tenant_policies.max_devices_per_user: %w", err)
+			}
+			have["max_devices_per_user"] = true
+		}
+	}
 	adds := []string{
-		"max_nodes INTEGER NOT NULL DEFAULT 0",
+		"max_users INTEGER NOT NULL DEFAULT 0",
 		"max_daily_bytes INTEGER NOT NULL DEFAULT 0",
 	}
 	for _, add := range adds {
@@ -369,25 +406,34 @@ type RegisterResult struct {
 // impose, and a center with no configuration must behave exactly as it did.
 //
 // Called once at startup, before any request is served.
-func (s *Service) SetFreeTierDefaults(maxNodes int, maxDailyBytes int64) {
+func (s *Service) SetFreeTierDefaults(maxUsers, maxDevicesPerUser int, maxDailyBytes int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if maxNodes < 0 {
-		maxNodes = 0
-	}
+	s.freeTierMaxUsers = clampNonNegative(maxUsers)
+	s.freeTierMaxDevicesPerUser = clampNonNegative(maxDevicesPerUser)
 	if maxDailyBytes < 0 {
 		maxDailyBytes = 0
 	}
-	s.freeTierMaxNodes = maxNodes
 	s.freeTierMaxDailyBytes = maxDailyBytes
 }
 
 // FreeTierDefaults reports what a fresh tenant starts with (0 = unlimited), so the
 // admin surface can show the operator what signups will actually get.
-func (s *Service) FreeTierDefaults() (maxNodes int, maxDailyBytes int64) {
+func (s *Service) FreeTierDefaults() (maxUsers, maxDevicesPerUser int, maxDailyBytes int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.freeTierMaxNodes, s.freeTierMaxDailyBytes
+	return s.freeTierMaxUsers, s.freeTierMaxDevicesPerUser, s.freeTierMaxDailyBytes
+}
+
+// clampNonNegative folds a negative allowance to 0 = unlimited, which is the only
+// sensible reading: a limit below zero has no meaning, and storing it would read
+// back as unlimited anyway (the getters clamp too), so clamping here keeps what is
+// stored and what is enforced consistent.
+func clampNonNegative(value int) int {
+	if value < 0 {
+		return 0
+	}
+	return value
 }
 
 // Register creates a user and a tenant they own, then signs them in.
@@ -469,10 +515,10 @@ func (s *Service) Register(input RegisterInput) (RegisterResult, error) {
 	// new signup is never briefly unlimited on a deployment that means to cap it.
 	// A zero default writes no row at all, which keeps the default UNLIMITED and
 	// leaves every pre-existing behaviour (and stored policy) untouched.
-	if s.freeTierMaxNodes > 0 || s.freeTierMaxDailyBytes > 0 {
+	if s.freeTierMaxUsers > 0 || s.freeTierMaxDevicesPerUser > 0 || s.freeTierMaxDailyBytes > 0 {
 		if _, err := tx.Exec(
-			`INSERT INTO tenant_policies (tenant_id, max_nodes, max_daily_bytes, updated_at) VALUES (?, ?, ?, ?)`,
-			tenant.ID, s.freeTierMaxNodes, s.freeTierMaxDailyBytes, now,
+			`INSERT INTO tenant_policies (tenant_id, max_users, max_devices_per_user, max_daily_bytes, updated_at) VALUES (?, ?, ?, ?, ?)`,
+			tenant.ID, s.freeTierMaxUsers, s.freeTierMaxDevicesPerUser, s.freeTierMaxDailyBytes, now,
 		); err != nil {
 			return RegisterResult{}, fmt.Errorf("insert free-tier policy: %w", err)
 		}
@@ -658,21 +704,26 @@ func (s *Service) User(id string) (identity.User, bool) {
 
 // TenantPolicy is the superadmin's per-tenant policy (decision ④).
 // SharingEnabled gates whether a tenant's members may expose nodes to each other.
-// MaxNodes is the tenant's node allowance (design §7, basic tier).
 type TenantPolicy struct {
 	TenantID       string
 	SharingEnabled bool
-	// MaxNodes caps how many nodes this tenant may own. 0 means UNLIMITED, which
-	// is also the default for a tenant with no stored policy row: absence is
-	// permissive here for the same reason it is for SharingEnabled — the limit is
-	// an additive commercial control, and defaulting it to "no nodes allowed"
-	// would break every tenant that existed before the column did.
-	MaxNodes int
+	// MaxUsers caps how many people may be members of this tenant. 0 means
+	// UNLIMITED, which is also the default for a tenant with no stored policy row:
+	// absence is permissive here for the same reason it is for SharingEnabled — the
+	// limit is an additive commercial control, and defaulting it to "nobody may
+	// join" would break every tenant that existed before the column did.
+	MaxUsers int
+	// MaxDevicesPerUser caps how many devices ONE MEMBER of this tenant may own.
+	// 0 means UNLIMITED, same encoding and same permissive default as MaxUsers.
+	//
+	// Per USER, not per tenant, and that is the whole point: a tenant-wide device
+	// cap would shrink for everyone each time somebody joined, so "2 devices" would
+	// leave the second member with nothing. The two numbers stay separate because
+	// they are two different products of the plan (how many people vs how many
+	// machines each), and an operator needs to see both.
+	MaxDevicesPerUser int
 	// MaxDailyBytes caps the forwarded bytes this tenant may move through the
-	// center per UTC day. 0 means UNLIMITED, the same encoding MaxNodes uses and
-	// the same permissive default for a tenant with no stored policy row: this is
-	// an additive commercial control, and defaulting it to "no traffic allowed"
-	// would stop every tenant that existed before the column did.
+	// center per UTC day. 0 means UNLIMITED, the same encoding as the others.
 	MaxDailyBytes int64
 	UpdatedAt     string
 }
@@ -714,52 +765,95 @@ func (s *Service) SetTenantSharing(tenantID string, enabled bool) (TenantPolicy,
 	); err != nil {
 		return TenantPolicy{}, fmt.Errorf("set tenant sharing: %w", err)
 	}
-	return TenantPolicy{TenantID: tenantID, SharingEnabled: enabled, MaxNodes: s.tenantMaxNodesLocked(tenantID), UpdatedAt: now}, nil
+	return TenantPolicy{
+		TenantID:          tenantID,
+		SharingEnabled:    enabled,
+		MaxUsers:          s.tenantMaxUsersLocked(tenantID),
+		MaxDevicesPerUser: s.tenantMaxDevicesPerUserLocked(tenantID),
+		MaxDailyBytes:     s.tenantMaxDailyBytesLocked(tenantID),
+		UpdatedAt:         now,
+	}, nil
 }
 
-// TenantMaxNodes returns the tenant's node allowance (design §7). 0 means
-// unlimited. An unknown tenant returns 0 for the same reason SetTenantSharing
-// accepts one: policy may be set before the tenant exists.
-func (s *Service) TenantMaxNodes(tenantID string) int {
+// TenantMaxDevicesPerUser returns how many devices ONE MEMBER of the tenant may
+// own. 0 means unlimited. An unknown tenant returns 0 for the same reason
+// SetTenantSharing accepts one: policy may be set before the tenant exists.
+func (s *Service) TenantMaxDevicesPerUser(tenantID string) int {
 	tenantID = strings.TrimSpace(tenantID)
 	if tenantID == "" {
 		return 0
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.tenantMaxNodesLocked(tenantID)
+	return s.tenantMaxDevicesPerUserLocked(tenantID)
 }
 
-// SetTenantMaxNodes sets the tenant's node allowance. maxNodes <= 0 clears the
-// limit rather than meaning "no nodes": the operator expresses "unlimited" by
+// TenantMaxUsers returns how many members the tenant may have. 0 means unlimited.
+func (s *Service) TenantMaxUsers(tenantID string) int {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tenantMaxUsersLocked(tenantID)
+}
+
+// SetTenantMaxDevicesPerUser sets the per-member device allowance. <= 0 clears the
+// limit rather than meaning "no devices": the operator expresses "unlimited" by
 // the same value the default uses, so there is one encoding rather than two.
-func (s *Service) SetTenantMaxNodes(tenantID string, maxNodes int) (TenantPolicy, error) {
+func (s *Service) SetTenantMaxDevicesPerUser(tenantID string, maxDevices int) (TenantPolicy, error) {
 	tenantID = strings.TrimSpace(tenantID)
 	if tenantID == "" {
 		return TenantPolicy{}, fmt.Errorf("missing tenant id")
 	}
-	if maxNodes < 0 {
-		maxNodes = 0
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.timestamp()
+	// Only this column is written, so setting it cannot silently reset the
+	// sharing switch, the member limit or the traffic allowance.
+	if _, err := s.db.Exec(
+		`INSERT INTO tenant_policies (tenant_id, max_devices_per_user, updated_at) VALUES (?, ?, ?)
+		 ON CONFLICT(tenant_id) DO UPDATE SET max_devices_per_user = excluded.max_devices_per_user, updated_at = excluded.updated_at`,
+		tenantID, clampNonNegative(maxDevices), now,
+	); err != nil {
+		return TenantPolicy{}, fmt.Errorf("set tenant device-per-user limit: %w", err)
+	}
+	return s.policyLocked(tenantID, now), nil
+}
+
+// SetTenantMaxUsers sets the tenant's member allowance. <= 0 clears the limit.
+func (s *Service) SetTenantMaxUsers(tenantID string, maxUsers int) (TenantPolicy, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return TenantPolicy{}, fmt.Errorf("missing tenant id")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.timestamp()
-	// Only max_nodes is written, so this cannot silently reset the sharing
-	// switch an operator set separately.
 	if _, err := s.db.Exec(
-		`INSERT INTO tenant_policies (tenant_id, max_nodes, updated_at) VALUES (?, ?, ?)
-		 ON CONFLICT(tenant_id) DO UPDATE SET max_nodes = excluded.max_nodes, updated_at = excluded.updated_at`,
-		tenantID, maxNodes, now,
+		`INSERT INTO tenant_policies (tenant_id, max_users, updated_at) VALUES (?, ?, ?)
+		 ON CONFLICT(tenant_id) DO UPDATE SET max_users = excluded.max_users, updated_at = excluded.updated_at`,
+		tenantID, clampNonNegative(maxUsers), now,
 	); err != nil {
-		return TenantPolicy{}, fmt.Errorf("set tenant node limit: %w", err)
+		return TenantPolicy{}, fmt.Errorf("set tenant member limit: %w", err)
 	}
+	return s.policyLocked(tenantID, now), nil
+}
+
+// policyLocked re-reads every column, so each setter returns the whole policy
+// rather than a struct assembled from the one field it happened to write. Assembling
+// by hand is how a setter starts reporting a stale or zero value for a column it did
+// not touch. Caller holds s.mu.
+func (s *Service) policyLocked(tenantID, now string) TenantPolicy {
 	return TenantPolicy{
-		TenantID:       tenantID,
-		SharingEnabled: s.tenantSharingEnabledLocked(tenantID),
-		MaxNodes:       maxNodes,
-		MaxDailyBytes:  s.tenantMaxDailyBytesLocked(tenantID),
-		UpdatedAt:      now,
-	}, nil
+		TenantID:          tenantID,
+		SharingEnabled:    s.tenantSharingEnabledLocked(tenantID),
+		MaxUsers:          s.tenantMaxUsersLocked(tenantID),
+		MaxDevicesPerUser: s.tenantMaxDevicesPerUserLocked(tenantID),
+		MaxDailyBytes:     s.tenantMaxDailyBytesLocked(tenantID),
+		UpdatedAt:         now,
+	}
 }
 
 // TenantMaxDailyBytes returns the tenant's daily byte allowance (design §7).
@@ -799,11 +893,12 @@ func (s *Service) SetTenantMaxDailyBytes(tenantID string, maxBytes int64) (Tenan
 		return TenantPolicy{}, fmt.Errorf("set tenant daily byte limit: %w", err)
 	}
 	return TenantPolicy{
-		TenantID:       tenantID,
-		SharingEnabled: s.tenantSharingEnabledLocked(tenantID),
-		MaxNodes:       s.tenantMaxNodesLocked(tenantID),
-		MaxDailyBytes:  maxBytes,
-		UpdatedAt:      now,
+		TenantID:          tenantID,
+		SharingEnabled:    s.tenantSharingEnabledLocked(tenantID),
+		MaxUsers:          s.tenantMaxUsersLocked(tenantID),
+		MaxDevicesPerUser: s.tenantMaxDevicesPerUserLocked(tenantID),
+		MaxDailyBytes:     maxBytes,
+		UpdatedAt:         now,
 	}, nil
 }
 
@@ -813,12 +908,15 @@ type TenantSummary struct {
 	Tenant         identity.Tenant
 	SharingEnabled bool
 	MemberCount    int
-	// MaxNodes is the tenant's node allowance; 0 means unlimited. The node count
-	// itself is not here because this store does not own the node registry — the
-	// admin route pairs the two.
-	MaxNodes int
+	// MaxUsers is the tenant's member allowance; 0 means unlimited.
+	MaxUsers int
+	// MaxDevicesPerUser is how many devices each MEMBER may own; 0 means unlimited.
+	// Reported per tenant while the enforcement is per member, because the operator
+	// sets one number for the tenant and needs to see the count it applies to — the
+	// per-member used count is the registry's business, not this store's.
+	MaxDevicesPerUser int
 	// MaxDailyBytes is the tenant's daily forwarded-byte allowance; 0 means
-	// unlimited. Like MaxNodes it is a policy knob, not identity.
+	// unlimited. Like the others it is a policy knob, not identity.
 	MaxDailyBytes int64
 }
 
@@ -860,7 +958,8 @@ func (s *Service) ListTenants() ([]TenantSummary, error) {
 		}
 		out[i].MemberCount = count
 		out[i].SharingEnabled = s.tenantSharingEnabledLocked(id)
-		out[i].MaxNodes = s.tenantMaxNodesLocked(id)
+		out[i].MaxUsers = s.tenantMaxUsersLocked(id)
+		out[i].MaxDevicesPerUser = s.tenantMaxDevicesPerUserLocked(id)
 		out[i].MaxDailyBytes = s.tenantMaxDailyBytesLocked(id)
 	}
 	return out, nil
@@ -875,20 +974,26 @@ func (s *Service) tenantSharingEnabledLocked(tenantID string) bool {
 	return enabled != 0
 }
 
-// tenantMaxNodesLocked is the shared default logic. Caller holds s.mu.
+// tenantMaxDevicesPerUserLocked is the shared default logic. Caller holds s.mu.
 //
 // A read failure (no row for this tenant) returns 0 = unlimited, matching the
 // column default, so the enforcement seam cannot accidentally turn a missing
-// policy row into "this tenant may own nothing".
-func (s *Service) tenantMaxNodesLocked(tenantID string) int {
-	var maxNodes int
-	if err := s.db.QueryRow(`SELECT max_nodes FROM tenant_policies WHERE tenant_id = ?`, tenantID).Scan(&maxNodes); err != nil {
+// policy row into "this user may own nothing".
+func (s *Service) tenantMaxDevicesPerUserLocked(tenantID string) int {
+	var maxDevices int
+	if err := s.db.QueryRow(`SELECT max_devices_per_user FROM tenant_policies WHERE tenant_id = ?`, tenantID).Scan(&maxDevices); err != nil {
 		return 0
 	}
-	if maxNodes < 0 {
+	return clampNonNegative(maxDevices)
+}
+
+// tenantMaxUsersLocked is the member-allowance counterpart. Caller holds s.mu.
+func (s *Service) tenantMaxUsersLocked(tenantID string) int {
+	var maxUsers int
+	if err := s.db.QueryRow(`SELECT max_users FROM tenant_policies WHERE tenant_id = ?`, tenantID).Scan(&maxUsers); err != nil {
 		return 0
 	}
-	return maxNodes
+	return clampNonNegative(maxUsers)
 }
 
 // tenantMaxDailyBytesLocked is the byte-allowance counterpart. Caller holds s.mu.

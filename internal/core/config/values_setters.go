@@ -200,8 +200,10 @@ func setWebStoredValue(file *ConfigFile, path string, value any) error {
 		file.Web.Token = asString(value)
 	case "web.allow_self_signup":
 		file.Web.AllowSelfSignup = asBool(value)
-	case "web.free_tier_max_nodes":
-		file.Web.FreeTierMaxNodes = asInt(value)
+	case "web.free_tier_max_users":
+		file.Web.FreeTierMaxUsers = asInt(value)
+	case "web.free_tier_max_devices_per_user":
+		file.Web.FreeTierMaxDevicesPerUser = asInt(value)
 	case "web.free_tier_max_daily_mb":
 		file.Web.FreeTierMaxDailyMB = asInt(value)
 	default:

@@ -432,8 +432,12 @@ web:
   # Allowance a FRESH signup starts with. 0 (the default) means unlimited, which is
   # what every deployment did before these existed. Applies to signup only: an
   # existing tenant's stored policy is never rewritten.
-  # Environment overrides: GODEX_WEB_FREE_TIER_MAX_NODES / GODEX_WEB_FREE_TIER_MAX_DAILY_MB.
-  free_tier_max_nodes: {{ .Web.FreeTierMaxNodes }}
+  # Two knobs: how many PEOPLE may join, and how many DEVICES each of them may have
+  # (pc / cloud / phone / watch all count against the same number).
+  # Environment overrides: GODEX_WEB_FREE_TIER_MAX_USERS, ..._MAX_DEVICES_PER_USER,
+  # ..._MAX_DAILY_MB.
+  free_tier_max_users: {{ .Web.FreeTierMaxUsers }}
+  free_tier_max_devices_per_user: {{ .Web.FreeTierMaxDevicesPerUser }}
   free_tier_max_daily_mb: {{ .Web.FreeTierMaxDailyMB }}
 
 cron:

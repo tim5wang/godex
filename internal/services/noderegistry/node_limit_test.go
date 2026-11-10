@@ -8,10 +8,16 @@ import (
 	"time"
 )
 
-// newLimitRegistry seeds a registry plus the given nodes, all already owned by
-// tenantID except the last one, which is left unclaimed so a test can exercise
-// the "assign into a full tenant" path.
+// newLimitRegistry seeds a registry plus the given devices, all already owned by
+// (tenantID, ownerUserID) except the last one, which is left unclaimed so a test can
+// exercise the "assign into a full account" path.
 func newLimitRegistry(t *testing.T, tenantID string, owned int) *Registry {
+	return newLimitRegistryForOwner(t, tenantID, "user-1", owned)
+}
+
+// newLimitRegistryForOwner is the same fixture with an explicit owner, so a test can
+// put several members' devices in ONE tenant and prove the allowance is per member.
+func newLimitRegistryForOwner(t *testing.T, tenantID, ownerUserID string, owned int) *Registry {
 	t.Helper()
 	registry, err := New(filepath.Join(t.TempDir(), "nodes.json"), time.Minute)
 	if err != nil {
@@ -23,7 +29,7 @@ func newLimitRegistry(t *testing.T, tenantID string, owned int) *Registry {
 		if _, err := registry.Register(ctx, NodeInput{ID: id}); err != nil {
 			t.Fatalf("register %s: %v", id, err)
 		}
-		if _, err := registry.SetOwnership(ctx, id, tenantID, "user-1", "private"); err != nil {
+		if _, err := registry.SetOwnership(ctx, id, tenantID, ownerUserID, "private"); err != nil {
 			t.Fatalf("assign %s: %v", id, err)
 		}
 	}
@@ -33,14 +39,14 @@ func newLimitRegistry(t *testing.T, tenantID string, owned int) *Registry {
 	return registry
 }
 
-// TestSetOwnershipWithinRefusesPastTheAllowance is the basic-tier quota (design
-// §7): a tenant at its limit cannot take on another node.
+// TestSetOwnershipWithinRefusesPastTheAllowance is the basic-tier quota: a member
+// at their device limit cannot take on another device.
 func TestSetOwnershipWithinRefusesPastTheAllowance(t *testing.T) {
 	ctx := context.Background()
 	registry := newLimitRegistry(t, "tenant-a", 2)
 
-	if _, err := registry.SetOwnershipWithin(ctx, "fresh", "tenant-a", "user-1", "private", 2); !errors.Is(err, ErrNodeLimitReached) {
-		t.Fatalf("err = %v, want ErrNodeLimitReached", err)
+	if _, err := registry.SetOwnershipWithin(ctx, "fresh", "tenant-a", "user-1", "private", 2); !errors.Is(err, ErrDeviceLimitReached) {
+		t.Fatalf("err = %v, want ErrDeviceLimitReached", err)
 	}
 	// The refusal must leave the node untouched: a rejected enrolment that still
 	// wrote the tenant would silently consume the allowance it just refused.
@@ -59,9 +65,44 @@ func TestSetOwnershipWithinRefusesPastTheAllowance(t *testing.T) {
 	}
 }
 
+// TestAllowanceIsPerMemberNotPerTenant is why the limit is per user: with a
+// tenant-wide count, the second member to join would find the allowance already
+// spent by the first, so "2 devices each" would be unimplementable.
+func TestAllowanceIsPerMemberNotPerTenant(t *testing.T) {
+	ctx := context.Background()
+	// user-1 already holds their 2. A colleague in the SAME tenant must still be
+	// able to enrol their own first device against the same limit of 2.
+	registry := newLimitRegistryForOwner(t, "tenant-a", "user-1", 2)
+
+	if _, err := registry.SetOwnershipWithin(ctx, "fresh", "tenant-a", "user-2", "private", 2); err != nil {
+		t.Fatalf("a second member was blocked by the first member's devices: %v", err)
+	}
+}
+
+// TestAllowanceRefusesTheSecondDeviceOfTheSameMember is the other half of the same
+// property: the limit does bite for the member who actually reached it.
+func TestAllowanceRefusesTheSecondDeviceOfTheSameMember(t *testing.T) {
+	ctx := context.Background()
+	registry := newLimitRegistryForOwner(t, "tenant-a", "user-1", 1)
+
+	if _, err := registry.SetOwnershipWithin(ctx, "fresh", "tenant-a", "user-2", "private", 1); err != nil {
+		t.Fatalf("user-2's first device was refused: %v", err)
+	}
+	// A SECOND, DISTINCT device for the same member: refused. (Re-saving "fresh"
+	// would prove nothing — the same member re-saving a device they already hold
+	// costs no allowance by design, see
+	// TestSetOwnershipWithinAllowsReassigningAnOwnedNode.)
+	if _, err := registry.Register(ctx, NodeInput{ID: "fresh-2"}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if _, err := registry.SetOwnershipWithin(ctx, "fresh-2", "tenant-a", "user-2", "private", 1); !errors.Is(err, ErrDeviceLimitReached) {
+		t.Fatalf("err = %v, want ErrDeviceLimitReached for user-2's second device", err)
+	}
+}
+
 // TestSetOwnershipWithinHonoursUnlimited: 0 (and any non-positive value) means
 // unlimited, which is what an upgraded center's default resolves to. If this were
-// treated as "no nodes allowed", every pre-existing tenant would stop enrolling.
+// treated as "no devices allowed", every pre-existing tenant would stop enrolling.
 func TestSetOwnershipWithinHonoursUnlimited(t *testing.T) {
 	ctx := context.Background()
 	registry := newLimitRegistry(t, "tenant-a", 3)
@@ -78,14 +119,14 @@ func TestSetOwnershipWithinHonoursUnlimited(t *testing.T) {
 }
 
 // TestSetOwnershipWithinDoesNotEvictOnLoweredLimit: lowering an allowance refuses
-// NEW enrolments but never strips ownership from nodes that already exist. The
+// NEW enrolments but never strips ownership from devices that already exist. The
 // alternative would orphan running machines as a side effect of a policy edit.
 func TestSetOwnershipWithinDoesNotEvictOnLoweredLimit(t *testing.T) {
 	ctx := context.Background()
 	registry := newLimitRegistry(t, "tenant-a", 3)
 
-	if _, err := registry.SetOwnershipWithin(ctx, "fresh", "tenant-a", "user-1", "private", 1); !errors.Is(err, ErrNodeLimitReached) {
-		t.Fatalf("err = %v, want ErrNodeLimitReached", err)
+	if _, err := registry.SetOwnershipWithin(ctx, "fresh", "tenant-a", "user-1", "private", 1); !errors.Is(err, ErrDeviceLimitReached) {
+		t.Fatalf("err = %v, want ErrDeviceLimitReached", err)
 	}
 	nodes, err := registry.List(ctx)
 	if err != nil {
@@ -98,13 +139,13 @@ func TestSetOwnershipWithinDoesNotEvictOnLoweredLimit(t *testing.T) {
 		}
 	}
 	if owned != 3 {
-		t.Errorf("tenant still owns %d nodes, want the 3 that were already assigned", owned)
+		t.Errorf("tenant still owns %d devices, want the 3 that were already assigned", owned)
 	}
 }
 
-// TestSetOwnershipWithinAllowsReassigningAnOwnedNode: re-saving a node the tenant
-// already holds costs no allowance. Without this, an owner changing their node's
-// visibility on a full tenant would be refused for "adding" a node it already had.
+// TestSetOwnershipWithinAllowsReassigningAnOwnedNode: re-saving a device the same
+// member already holds costs no allowance. Without this, an owner changing their
+// device's visibility at their limit would be refused for "adding" one they had.
 func TestSetOwnershipWithinAllowsReassigningAnOwnedNode(t *testing.T) {
 	ctx := context.Background()
 	registry := newLimitRegistry(t, "tenant-a", 2)
@@ -123,8 +164,28 @@ func TestSetOwnershipWithinAllowsReassigningAnOwnedNode(t *testing.T) {
 	}
 }
 
-// TestSetOwnershipWithinIgnoresUnclaimedNodes: unowned nodes are nobody's
-// occupancy, so a tenant at its limit is not blocked by machines nobody claimed.
+// TestSetOwnershipWithinCountsMovingADeviceToAnotherMember: a device moving to a
+// DIFFERENT member changes whose allowance it consumes, so the new owner's headroom
+// is what must be checked. Treating it as "already owned, costs nothing" would let
+// two members trade one device back and forth past the limit.
+func TestSetOwnershipWithinCountsMovingADeviceToAnotherMember(t *testing.T) {
+	ctx := context.Background()
+	registry := newLimitRegistryForOwner(t, "tenant-a", "user-1", 1)
+	// user-2 is already at their limit of 1 without owning node-a.
+	if _, err := registry.Register(ctx, NodeInput{ID: "user2-device"}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if _, err := registry.SetOwnership(ctx, "user2-device", "tenant-a", "user-2", "private"); err != nil {
+		t.Fatalf("assign: %v", err)
+	}
+
+	if _, err := registry.SetOwnershipWithin(ctx, "node-a", "tenant-a", "user-2", "private", 1); !errors.Is(err, ErrDeviceLimitReached) {
+		t.Fatalf("err = %v, want ErrDeviceLimitReached when moving INTO a full member", err)
+	}
+}
+
+// TestSetOwnershipWithinIgnoresUnclaimedNodes: unowned devices are nobody's
+// occupancy, so a member at their limit is not blocked by machines nobody claimed.
 func TestSetOwnershipWithinIgnoresUnclaimedNodes(t *testing.T) {
 	ctx := context.Background()
 	registry := newLimitRegistry(t, "tenant-a", 1)
@@ -151,9 +212,9 @@ func TestPlainSetOwnershipIgnoresTheAllowance(t *testing.T) {
 	}
 }
 
-// TestSetOwnershipWithinCountsOnlyTheTargetTenant: one tenant's occupancy must not
-// consume another's allowance.
-func TestSetOwnershipWithinCountsOnlyTheTargetTenant(t *testing.T) {
+// TestSetOwnershipWithinCountsOnlyTheTargetMember: another tenant's (or another
+// member's) occupancy must not consume this one's allowance.
+func TestSetOwnershipWithinCountsOnlyTheTargetMember(t *testing.T) {
 	ctx := context.Background()
 	registry := newLimitRegistry(t, "tenant-a", 3)
 

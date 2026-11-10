@@ -186,18 +186,21 @@ type WebSection struct {
 	// admin can always create a tenant by presenting the web token, so closing
 	// this removes exposure without removing the capability.
 	AllowSelfSignup bool `yaml:"allow_self_signup"`
-	// FreeTierMaxNodes / FreeTierMaxDailyMB are the allowance a FRESH self-serve
-	// tenant starts with. 0 means unlimited, i.e. write no policy row at all, which
-	// keeps the pre-existing behaviour for every deployment that does not configure
-	// them. They are defaults for SIGNUP only: an existing tenant's stored policy is
-	// never rewritten, so raising a default cannot silently change the terms under
-	// which someone already enrolled.
+	// FreeTierMaxUsers / FreeTierMaxDevicesPerUser / FreeTierMaxDailyMB are the
+	// allowance a FRESH self-serve tenant starts with. 0 means unlimited, i.e. write
+	// no policy row at all, which keeps the pre-existing behaviour for every deployment
+	// that does not configure them. They are defaults for SIGNUP only: an existing
+	// tenant's stored policy is never rewritten, so raising a default cannot silently
+	// change the terms under which someone already enrolled.
 	//
-	// The traffic allowance is in MB rather than bytes because that is the unit an
-	// operator reasons in ("100" not "104857600"), and it keeps the value an int on
-	// every platform rather than needing an int64 field.
-	FreeTierMaxNodes   int `yaml:"free_tier_max_nodes"`
-	FreeTierMaxDailyMB int `yaml:"free_tier_max_daily_mb"`
+	// MaxUsers and MaxDevicesPerUser are two knobs because they answer two different
+	// questions (how many people may join vs how many devices each of them may have);
+	// collapsing them into one "max nodes" is what made "2 devices" impossible to
+	// state. The traffic allowance is in MB rather than bytes because that is the unit
+	// an operator reasons in ("100" not "104857600").
+	FreeTierMaxUsers          int `yaml:"free_tier_max_users"`
+	FreeTierMaxDevicesPerUser int `yaml:"free_tier_max_devices_per_user"`
+	FreeTierMaxDailyMB        int `yaml:"free_tier_max_daily_mb"`
 }
 
 type CronSection struct {

@@ -44,6 +44,13 @@ var (
 	ErrOwnershipProtected = errors.New("the tenant owner cannot be removed or demoted (ownership transfer is not implemented)")
 	// ErrMemberNotFound is returned when the target user is not in the tenant.
 	ErrMemberNotFound = errors.New("member not found")
+	// ErrMemberLimitReached is returned when redeeming an invite would push a tenant
+	// past its member allowance (design §7: how many PEOPLE may join).
+	//
+	// A sentinel rather than a bare message so the HTTP seam can answer 409 rather
+	// than 400: the request is well-formed and the caller holds a valid code — the
+	// tenant is simply full, which is an actionable refusal rather than a typo.
+	ErrMemberLimitReached = errors.New("tenant member limit reached")
 	// ErrCannotGrantOwner is returned when an invite or role change asks for owner.
 	// Deliberately separate from ErrInvalidMemberRole so the message can explain
 	// that ownership transfer is a distinct, deliberate action.
@@ -118,6 +125,29 @@ func (s *Service) mayManageMembersLocked(tenantID string, actor MemberActor) boo
 	return s.isTenantAdminLocked(tenantID, strings.TrimSpace(actor.UserID))
 }
 
+// checkMemberAllowanceLocked refuses a redemption that would ADD a member to a
+// tenant already at its member allowance. Caller holds s.mu; maxUsers <= 0 means
+// unlimited.
+//
+// Checked under the same lock the membership INSERT takes, because "count then
+// insert" without one is exactly the race that lets two concurrent redemptions both
+// see "4 of 5" and both succeed — the failure mode a quota must not have.
+func (s *Service) checkMemberAllowanceLocked(tenantID string) error {
+	maxUsers := s.tenantMaxUsersLocked(tenantID)
+	if maxUsers <= 0 {
+		return nil
+	}
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM memberships WHERE tenant_id = ?`, tenantID).Scan(&count); err != nil {
+		return fmt.Errorf("count members: %w", err)
+	}
+	if count >= maxUsers {
+		return fmt.Errorf("%w: tenant holds %d of %d allowed members",
+			ErrMemberLimitReached, count, maxUsers)
+	}
+	return nil
+}
+
 // CreateUserInvite issues a one-time code that adds a PERSON to a tenant.
 //
 // Returns the PLAINTEXT token, which exists only in this return value: the store
@@ -148,6 +178,14 @@ func (s *Service) CreateUserInvite(input CreateUserInviteInput) (UserInvite, str
 	defer s.mu.Unlock()
 	if !s.mayManageMembersLocked(tenantID, actor) {
 		return UserInvite{}, "", ErrNotMemberActor
+	}
+	// Refuse up front when the tenant is already full: the code is ONE-TIME, so handing
+	// one out that cannot be redeemed burns it and leaves the invited person with a
+	// failure they cannot explain. Enforcement itself stays at redemption
+	// (AcceptUserInvite), which is the only atomic place; this is the advisory
+	// pre-check.
+	if err := s.checkMemberAllowanceLocked(tenantID); err != nil {
+		return UserInvite{}, "", err
 	}
 	now := s.now().UTC()
 	ttl := input.TTL
@@ -298,6 +336,16 @@ func (s *Service) AcceptUserInvite(token, email, password string) (AcceptUserInv
 		if s.isMemberLocked(tenant.ID, user.ID) {
 			return AcceptUserInviteResult{}, fmt.Errorf("this account is already a member of the tenant")
 		}
+	}
+
+	// The member allowance is checked HERE — after the already-a-member branch above (so
+	// an existing member gets that accurate error rather than a quota one) and before
+	// anything is written. s.mu is held for the whole function and every membership
+	// write takes it, so this count cannot be overtaken by a concurrent redemption:
+	// "count then insert" without the lock is exactly how two callers both see "4 of 5"
+	// and both succeed, which is the one failure mode a quota must not have.
+	if err := s.checkMemberAllowanceLocked(tenant.ID); err != nil {
+		return AcceptUserInviteResult{}, err
 	}
 
 	tx, err := s.db.Begin()

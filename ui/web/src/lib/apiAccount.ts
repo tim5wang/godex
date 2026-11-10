@@ -171,15 +171,19 @@ export interface EnrolmentCode {
 
 /** listEnrolmentCodes lists the codes issued for a scope's tenant.
  *
- *  The tenant scope also returns the node allowance (`max_nodes`, 0 = unlimited)
- *  and how many are used, so the surface can say "you are at your limit" BEFORE the
- *  user clicks issue — the server refuses an over-allowance issue with 409, and a
- *  user who only learns that from an error has already lost the click. */
+ *  The tenant scope also returns the caller's device allowance
+ *  (`max_devices_per_user`, 0 = unlimited) and how many devices THAT ACCOUNT already
+ *  holds, so the surface can say "you are at your limit" BEFORE the user clicks
+ *  issue — the server refuses an over-allowance issue with 409, and a user who only
+ *  learns that from an error has already lost the click.
+ *
+ *  Counted per account, not per tenant: a tenant-wide total would read "4 of 2" on a
+ *  plan of 2 devices each, which is a number nobody can act on. */
 export function listEnrolmentCodes(
   token: string | null,
   scope: JoinTokenScope,
-): Promise<{ join_tokens: EnrolmentCode[]; max_nodes?: number; used_nodes?: number }> {
-  return request<{ join_tokens: EnrolmentCode[]; max_nodes?: number; used_nodes?: number }>(
+): Promise<{ join_tokens: EnrolmentCode[]; max_devices_per_user?: number; used_devices?: number }> {
+  return request<{ join_tokens: EnrolmentCode[]; max_devices_per_user?: number; used_devices?: number }>(
     joinTokenBase(scope),
     { method: "GET" },
     token,

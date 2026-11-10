@@ -115,22 +115,24 @@ func registerJoinRoute(mux *http.ServeMux, manager *config.Manager, controlRegis
 		if owner == "" {
 			visibility = identity.VisibilityTenant
 		}
-		// The tenant's node allowance is read here and enforced inside the registry's
-		// lock (see RegisterOwned). It is deliberately NOT enforced on the admin repair
-		// path: an operator fixing a mis-assigned node must not be blocked by the quota
-		// they may be repairing.
-		maxNodes := accountsService.TenantMaxNodes(record.TenantID)
+		// The OWNER's device allowance is read here and enforced inside the registry's
+		// lock (see RegisterOwned). Per member, not per tenant: the device that is
+		// joining consumes its owner's allowance, and a tenant-wide reading would make
+		// each member's limit shrink as colleagues joined. It is deliberately NOT
+		// enforced on the admin repair path: an operator fixing a mis-assigned node must
+		// not be blocked by the quota they may be repairing.
+		maxDevices := accountsService.TenantMaxDevicesPerUser(record.TenantID)
 		node, err := enrollNode(r.Context(), controlRegistry, setter, noderegistry.NodeInput{
 			ID:         req.NodeID,
 			Name:       req.Name,
 			TrustLevel: req.TrustLevel,
-		}, record.TenantID, owner, visibility, maxNodes)
+		}, record.TenantID, owner, visibility, maxDevices)
 		if err != nil {
 			switch {
-			case errors.Is(err, noderegistry.ErrNodeLimitReached):
+			case errors.Is(err, noderegistry.ErrDeviceLimitReached):
 				// 409 rather than 400: the request is well-formed and the caller is
-				// authorized; the tenant is simply at its allowance. The message names the
-				// allowance so the operator need not go read the console.
+				// authorized; the member is simply at their allowance. The message names the
+				// allowance so the user need not go read the console.
 				writeError(w, http.StatusConflict, err)
 			case errors.Is(err, noderegistry.ErrNodeAlreadyRegistered):
 				// The pre-check above covers the ordinary case; a concurrent enrolment
@@ -176,9 +178,9 @@ func registerJoinRoute(mux *http.ServeMux, manager *config.Manager, controlRegis
 // controlNodeRegistry interface, and requiring the quota everywhere would force
 // every implementer (including test fakes) to grow a method for a rule that only
 // tenant enrolment cares about.
-func assignNodeOwnership(ctx context.Context, setter nodeOwnerSetter, id, tenantID, owner, visibility string, maxNodes int) (noderegistry.NodeView, error) {
+func assignNodeOwnership(ctx context.Context, setter nodeOwnerSetter, id, tenantID, owner, visibility string, maxDevicesPerUser int) (noderegistry.NodeView, error) {
 	if within, ok := setter.(nodeOwnerSetterWithin); ok {
-		return within.SetOwnershipWithin(ctx, id, tenantID, owner, visibility, maxNodes)
+		return within.SetOwnershipWithin(ctx, id, tenantID, owner, visibility, maxDevicesPerUser)
 	}
 	return setter.SetOwnership(ctx, id, tenantID, owner, visibility)
 }
@@ -217,15 +219,15 @@ func resolveJoinOwner(accountsService *accounts.Service, tenantID, requested str
 // the assignment is refused — and because the id is then taken, the same device can
 // never retry. The fallback exists only so a registry without the capability keeps
 // working; it enforces no allowance, which is why the real registry implements it.
-func enrollNode(ctx context.Context, registry controlNodeRegistry, setter nodeOwnerSetter, input noderegistry.NodeInput, tenantID, owner, visibility string, maxNodes int) (noderegistry.NodeView, error) {
+func enrollNode(ctx context.Context, registry controlNodeRegistry, setter nodeOwnerSetter, input noderegistry.NodeInput, tenantID, owner, visibility string, maxDevicesPerUser int) (noderegistry.NodeView, error) {
 	if enroller, ok := registry.(nodeEnroller); ok {
-		return enroller.RegisterOwned(ctx, input, tenantID, owner, visibility, maxNodes)
+		return enroller.RegisterOwned(ctx, input, tenantID, owner, visibility, maxDevicesPerUser)
 	}
 	node, err := registry.Register(ctx, input)
 	if err != nil {
 		return noderegistry.NodeView{}, err
 	}
-	return assignNodeOwnership(ctx, setter, node.ID, tenantID, owner, visibility, maxNodes)
+	return assignNodeOwnership(ctx, setter, node.ID, tenantID, owner, visibility, maxDevicesPerUser)
 }
 
 // issueNodeProxyToken returns the nk_ credential a node should be given at
@@ -307,7 +309,7 @@ func registerTenantJoinTokenRoutes(mux *http.ServeMux, registry controlNodeRegis
 	}
 
 	mux.Handle("GET /tenant/join-tokens", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tenantID, _, ok := tenantAdminActor(w, r)
+		tenantID, actor, ok := tenantAdminActor(w, r)
 		if !ok {
 			return
 		}
@@ -318,11 +320,15 @@ func registerTenantJoinTokenRoutes(mux *http.ServeMux, registry controlNodeRegis
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"join_tokens": tokens,
-			// The allowance is reported alongside the codes so the UI can say "you are
-			// at your device limit" before the user clicks issue. 0 means unlimited,
-			// the same encoding the policy uses.
-			"max_nodes":  accountsService.TenantMaxNodes(tenantID),
-			"used_nodes": countTenantNodes(r.Context(), registry, tenantID),
+			// The CALLER's device allowance is reported alongside the codes so the UI can
+			// say "you are at your device limit" before the user clicks issue. 0 means
+			// unlimited, the same encoding the policy uses.
+			//
+			// Counted for the caller, since a code issued here defaults to them as owner:
+			// reporting the tenant-wide total would tell an admin "4 of 2" on a plan of
+			// 2 devices each, which is a number that cannot act on.
+			"max_devices_per_user": accountsService.TenantMaxDevicesPerUser(tenantID),
+			"used_devices":         countOwnerDevices(r.Context(), registry, tenantID, actor.UserID),
 		})
 	})))
 
@@ -344,26 +350,30 @@ func registerTenantJoinTokenRoutes(mux *http.ServeMux, registry controlNodeRegis
 			writeError(w, http.StatusBadRequest, fmt.Errorf("ttl_hours must not be negative"))
 			return
 		}
-		// Refuse up front when the tenant already holds its allowance: the code is
-		// ONE-TIME, so handing one out that cannot be redeemed burns it and leaves the
-		// user with a failure they cannot explain. Enforcement itself stays at
-		// enrolment (RegisterOwned → checkAllowance), which is the only atomic place;
-		// this is the advisory pre-check.
-		if maxNodes := accountsService.TenantMaxNodes(tenantID); maxNodes > 0 {
-			if used := countTenantNodes(r.Context(), registry, tenantID); used >= maxNodes {
-				writeError(w, http.StatusConflict, fmt.Errorf(
-					"this tenant already holds its allowance of %d node(s); delete a device or raise the allowance before adding another", maxNodes))
-				return
-			}
-		}
 		// The owner defaults to the CALLER, not to the tenant owner member: a tenant
 		// admin provisioning their own laptop must end up owning it. Leaving it empty
 		// would make redemption fall back to the tenant's owner member, so an admin who
 		// is not the owner would get a device they cannot see (default visibility is
 		// private).
+		//
+		// Resolved BEFORE the allowance pre-check, because the pre-check has to ask about
+		// the same person the code will end up belonging to.
 		owner := strings.TrimSpace(req.OwnerUserID)
 		if owner == "" {
 			owner = actor.UserID
+		}
+		// Refuse up front when THAT account already holds its device allowance: the code
+		// is ONE-TIME, so handing one out that cannot be redeemed burns it and leaves the
+		// user with a failure they cannot explain. Enforcement itself stays at enrolment
+		// (RegisterOwned → checkDeviceAllowance), which is the only atomic place; this is
+		// the advisory pre-check, and it checks the code's owner rather than the tenant
+		// because the allowance is per member.
+		if maxDevices := accountsService.TenantMaxDevicesPerUser(tenantID); maxDevices > 0 {
+			if used := countOwnerDevices(r.Context(), registry, tenantID, owner); used >= maxDevices {
+				writeError(w, http.StatusConflict, fmt.Errorf(
+					"this account already holds its allowance of %d device(s); delete a device or raise the allowance before adding another", maxDevices))
+				return
+			}
 		}
 		record, plaintext, err := accountsService.CreateJoinToken(accounts.CreateJoinTokenInput{
 			TenantID:    tenantID,
@@ -420,13 +430,17 @@ func registerTenantJoinTokenRoutes(mux *http.ServeMux, registry controlNodeRegis
 	})))
 }
 
-// countTenantNodes reports how many nodes the tenant currently owns.
+// countOwnerDevices reports how many devices ONE MEMBER currently owns.
 //
 // Returns 0 for a nil registry rather than an error: the callers use this for an
 // advisory message and a pre-check, and a deployment without a registry has no
-// nodes to count. The AUTHORITATIVE allowance check lives in the registry at
+// devices to count. The AUTHORITATIVE allowance check lives in the registry at
 // enrolment, so a wrong number here can only produce a bad message, never a bypass.
-func countTenantNodes(ctx context.Context, registry controlNodeRegistry, tenantID string) int {
+//
+// Counts by (tenant, owner) rather than by tenant, because the allowance is per
+// member: a tenant-wide number would tell an admin "4 of 2" on a plan of 2 devices
+// each, which is a number nobody can act on.
+func countOwnerDevices(ctx context.Context, registry controlNodeRegistry, tenantID, ownerUserID string) int {
 	if registry == nil {
 		return 0
 	}
@@ -434,11 +448,18 @@ func countTenantNodes(ctx context.Context, registry controlNodeRegistry, tenantI
 	if err != nil {
 		return 0
 	}
+	ownerUserID = strings.TrimSpace(ownerUserID)
 	used := 0
 	for _, node := range nodes {
-		if strings.TrimSpace(node.TenantID) == tenantID {
-			used++
+		if strings.TrimSpace(node.TenantID) != tenantID {
+			continue
 		}
+		// An empty owner asks for the tenant-wide total, which is what the operator
+		// console wants; a named owner gets just their own devices.
+		if ownerUserID != "" && strings.TrimSpace(node.OwnerUserID) != ownerUserID {
+			continue
+		}
+		used++
 	}
 	return used
 }

@@ -566,7 +566,7 @@ type nodeOwnerSetter interface {
 // the plain setter, so a registry without the capability keeps working (it just
 // enforces no quota).
 type nodeOwnerSetterWithin interface {
-	SetOwnershipWithin(ctx context.Context, id, tenantID, ownerUserID, visibility string, maxNodes int) (noderegistry.NodeView, error)
+	SetOwnershipWithin(ctx context.Context, id, tenantID, ownerUserID, visibility string, maxDevicesPerUser int) (noderegistry.NodeView, error)
 }
 
 // nodeEnroller registers a node together with its ownership in one operation, so a
@@ -574,5 +574,5 @@ type nodeOwnerSetterWithin interface {
 // behind. Optional like the setters above: enrolment falls back to register-then-
 // assign when the registry does not provide it.
 type nodeEnroller interface {
-	RegisterOwned(ctx context.Context, input noderegistry.NodeInput, tenantID, ownerUserID, visibility string, maxNodes int) (noderegistry.NodeView, error)
+	RegisterOwned(ctx context.Context, input noderegistry.NodeInput, tenantID, ownerUserID, visibility string, maxDevicesPerUser int) (noderegistry.NodeView, error)
 }

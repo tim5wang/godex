@@ -56,13 +56,14 @@ func TestTenantAdminIssuesOwnDeviceCode(t *testing.T) {
 		t.Fatalf("registry nodes = %+v, want the enrolled device", registry.nodes)
 	}
 	// The allowance read is reported alongside the codes so the UI can warn before
-	// the user clicks issue (0 = unlimited, the encoding the policy uses).
+	// the user clicks issue (0 = unlimited, the encoding the policy uses). Counted for
+	// the CALLER, since that is who a code issued here will belong to.
 	_, listed := doJSON(t, http.MethodGet, server.URL+"/tenant/join-tokens", adminToken, nil)
-	if _, ok := listed["max_nodes"]; !ok {
-		t.Errorf("list response has no max_nodes: %v", listed)
+	if _, ok := listed["max_devices_per_user"]; !ok {
+		t.Errorf("list response has no max_devices_per_user: %v", listed)
 	}
-	if _, ok := listed["used_nodes"]; !ok {
-		t.Errorf("list response has no used_nodes: %v", listed)
+	if _, ok := listed["used_devices"]; !ok {
+		t.Errorf("list response has no used_devices: %v", listed)
 	}
 }
 
@@ -167,16 +168,16 @@ func TestTenantJoinTokenRevokeIsScopedToTheCallersTenant(t *testing.T) {
 // out that cannot be redeemed burns it and leaves the user with a failure they cannot
 // explain. At the allowance the issue is refused up front with the numbers.
 //
-// Enforcement itself stays at enrolment (RegisterOwned → checkAllowance), which is
-// the only atomic place; this is the advisory pre-check.
+// Enforcement itself stays at enrolment (RegisterOwned → checkDeviceAllowance), which
+// is the only atomic place; this is the advisory pre-check.
 func TestTenantJoinTokenIssueRefusesPastAllowance(t *testing.T) {
 	server, service, registry := newJoinServer(t)
 	adminToken, tenantID, adminUserID := registerTenantOwner(t, server, "admin@example.com")
 
-	if _, err := service.SetTenantMaxNodes(tenantID, 1); err != nil {
-		t.Fatalf("SetTenantMaxNodes: %v", err)
+	if _, err := service.SetTenantMaxDevicesPerUser(tenantID, 1); err != nil {
+		t.Fatalf("SetTenantMaxDevicesPerUser: %v", err)
 	}
-	// The tenant already holds its one node.
+	// The issuer already holds their one device.
 	registry.nodes = append(registry.nodes, noderegistry.NodeView{
 		ID: "existing-device", TenantID: tenantID, OwnerUserID: adminUserID, Visibility: "private",
 	})
@@ -188,7 +189,7 @@ func TestTenantJoinTokenIssueRefusesPastAllowance(t *testing.T) {
 
 	// Raising the allowance makes issuance work again, so the refusal tracked policy
 	// rather than being a blanket block.
-	if _, err := service.SetTenantMaxNodes(tenantID, 2); err != nil {
+	if _, err := service.SetTenantMaxDevicesPerUser(tenantID, 2); err != nil {
 		t.Fatalf("raise allowance: %v", err)
 	}
 	resp, body = doJSON(t, http.MethodPost, server.URL+"/tenant/join-tokens", adminToken, map[string]any{})

@@ -26,15 +26,24 @@ type adminTenantResponse struct {
 	SharingEnabled bool   `json:"sharing_enabled"`
 	MemberCount    int    `json:"member_count"`
 	CreatedAt      string `json:"created_at,omitempty"`
-	// MaxNodes is the tenant's node allowance (design §7); 0 means unlimited.
-	MaxNodes int `json:"max_nodes"`
+	// MaxUsers is the tenant's member allowance; 0 means unlimited. Reported next to
+	// MemberCount so the operator sees "3 of 5 people".
+	MaxUsers int `json:"max_users"`
+	// MaxDevicesPerUser is how many devices EACH MEMBER may own; 0 means unlimited.
+	// The name keeps the unit visible: a tenant-wide device cap cannot express
+	// "2 devices each", which is why this is per user and why it is not called
+	// max_nodes.
+	MaxDevicesPerUser int `json:"max_devices_per_user"`
 	// MaxDailyBytes is the tenant's daily forwarded-byte allowance; 0 means
-	// unlimited. Reported alongside MaxNodes so the console can render both limits
+	// unlimited. Reported alongside the other limits so the console renders them all
 	// from one source rather than reading the policy per tenant.
 	MaxDailyBytes int64 `json:"max_daily_bytes"`
-	// NodeCount is how many nodes the tenant currently owns, so the operator sees
-	// "3 of 5" rather than having to count /admin/nodes themselves. It is reported
-	// even when MaxNodes is 0, because the count is useful on its own.
+	// NodeCount is how many devices the tenant owns ACROSS ALL MEMBERS, so the
+	// operator sees the estate at a glance. It is reported even when
+	// MaxDevicesPerUser is 0, because the count is useful on its own — and it is
+	// deliberately not compared against the per-user limit: the ratio an operator
+	// needs ("does this member have room?") is per member, which this list does not
+	// model.
 	NodeCount int `json:"node_count"`
 }
 
@@ -77,15 +86,16 @@ func registerAdminRoutes(mux *http.ServeMux, accountsService *accounts.Service, 
 		}
 		for _, summary := range tenants {
 			out = append(out, adminTenantResponse{
-				ID:             summary.Tenant.ID,
-				Name:           summary.Tenant.Name,
-				Plan:           summary.Tenant.Plan,
-				SharingEnabled: summary.SharingEnabled,
-				MemberCount:    summary.MemberCount,
-				CreatedAt:      summary.Tenant.CreatedAt,
-				MaxNodes:       summary.MaxNodes,
-				MaxDailyBytes:  summary.MaxDailyBytes,
-				NodeCount:      nodeCounts[summary.Tenant.ID],
+				ID:                summary.Tenant.ID,
+				Name:              summary.Tenant.Name,
+				Plan:              summary.Tenant.Plan,
+				SharingEnabled:    summary.SharingEnabled,
+				MemberCount:       summary.MemberCount,
+				CreatedAt:         summary.Tenant.CreatedAt,
+				MaxUsers:          summary.MaxUsers,
+				MaxDevicesPerUser: summary.MaxDevicesPerUser,
+				MaxDailyBytes:     summary.MaxDailyBytes,
+				NodeCount:         nodeCounts[summary.Tenant.ID],
 			})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"tenants": out})
@@ -147,86 +157,7 @@ func registerAdminRoutes(mux *http.ServeMux, accountsService *accounts.Service, 
 			"updated_at":      policy.UpdatedAt,
 		})
 	})))
-
-	// PUT /admin/tenants/{id}/max-nodes — the tenant's node allowance (design §7,
-	// basic tier).
-	//
-	// Separate from /sharing because the two answer different questions: sharing is
-	// "may my nodes see each other", the allowance is "how many may I have".
-	// Writing only the one field means setting an allowance cannot silently reset
-	// the sharing switch an operator set separately.
-	mux.Handle("PUT /admin/tenants/{id}/max-nodes", requirePlatformAdmin(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !adminAccountsAvailable(w, accountsService) {
-			return
-		}
-		var req struct {
-			// A pointer so an omitted field is distinguishable from an explicit 0:
-			// 0 means "unlimited", so defaulting a malformed request to 0 would
-			// silently lift the limit the operator was trying to enforce.
-			MaxNodes *int `json:"max_nodes"`
-		}
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		if req.MaxNodes == nil {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("max_nodes is required"))
-			return
-		}
-		if *req.MaxNodes < 0 {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("max_nodes must not be negative"))
-			return
-		}
-		policy, err := accountsService.SetTenantMaxNodes(strings.TrimSpace(r.PathValue("id")), *req.MaxNodes)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"tenant_id":  policy.TenantID,
-			"max_nodes":  policy.MaxNodes,
-			"updated_at": policy.UpdatedAt,
-		})
-	})))
-
-	// PUT /admin/tenants/{id}/max-daily-bytes — the tenant's daily forwarded-byte
-	// allowance (design §7, basic tier).
-	//
-	// Its own route for the same reason /max-nodes is one: writing only this field
-	// means setting a traffic allowance cannot silently reset the node allowance or
-	// the sharing switch. A pointer distinguishes an omitted field from an explicit
-	// 0, because 0 means "unlimited" and defaulting a malformed request to 0 would
-	// silently lift the limit the operator was trying to enforce.
-	mux.Handle("PUT /admin/tenants/{id}/max-daily-bytes", requirePlatformAdmin(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !adminAccountsAvailable(w, accountsService) {
-			return
-		}
-		var req struct {
-			MaxDailyBytes *int64 `json:"max_daily_bytes"`
-		}
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		if req.MaxDailyBytes == nil {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("max_daily_bytes is required"))
-			return
-		}
-		if *req.MaxDailyBytes < 0 {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("max_daily_bytes must not be negative"))
-			return
-		}
-		policy, err := accountsService.SetTenantMaxDailyBytes(strings.TrimSpace(r.PathValue("id")), *req.MaxDailyBytes)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"tenant_id":       policy.TenantID,
-			"max_daily_bytes": policy.MaxDailyBytes,
-			"updated_at":      policy.UpdatedAt,
-		})
-	})))
+	registerTenantAllowanceRoutes(mux, accountsService, protected)
 
 	// GET /admin/nodes — every node with its ownership, unfiltered.
 	//
@@ -326,7 +257,7 @@ func registerAdminRoutes(mux *http.ServeMux, accountsService *accounts.Service, 
 		// What a FRESH signup starts with (0 = unlimited). Reported here so the console
 		// can show the operator the actual terms new users get, instead of the client
 		// guessing from a config file it cannot read.
-		freeTierNodes, freeTierDailyBytes := accountsService.FreeTierDefaults()
+		freeTierMaxUsers, freeTierMaxDevices, freeTierDailyBytes := accountsService.FreeTierDefaults()
 		writeJSON(w, http.StatusOK, map[string]any{
 			// Default visibility for a newly claimed node (decision ⑥).
 			"default_visibility": identity.VisibilityPrivate,
@@ -335,8 +266,130 @@ func registerAdminRoutes(mux *http.ServeMux, accountsService *accounts.Service, 
 				identity.RoleTenantAdmin,
 				identity.RoleTenantMember,
 			},
-			"free_tier_max_nodes":       freeTierNodes,
-			"free_tier_max_daily_bytes": freeTierDailyBytes,
+			"free_tier_max_users":            freeTierMaxUsers,
+			"free_tier_max_devices_per_user": freeTierMaxDevices,
+			"free_tier_max_daily_bytes":      freeTierDailyBytes,
+		})
+	})))
+}
+
+// registerTenantAllowanceRoutes wires the per-tenant allowance endpoints.
+//
+// Split out of registerAdminRoutes to stay inside the function-complexity budget
+// (the same reason registerMemberRoutes was split): each of these is a single-field
+// write, and inlining all of them pushed the caller over the limit. They belong
+// together because they are one shape — one column, one pointer field, one 200 — and
+// an operator reads them as a set.
+func registerTenantAllowanceRoutes(mux *http.ServeMux, accountsService *accounts.Service, protected func(http.Handler) http.Handler) {
+	// PUT /admin/tenants/{id}/max-users — how many people may belong to the tenant.
+	//
+	// A route of its own because these two limits are two different products of the
+	// plan ("how many people" vs "how many machines each"), and because writing one
+	// column per endpoint is what stops setting a member limit from silently resetting
+	// a machine limit or the sharing switch an operator set separately.
+	mux.Handle("PUT /admin/tenants/{id}/max-users", requirePlatformAdmin(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !adminAccountsAvailable(w, accountsService) {
+			return
+		}
+		var req struct {
+			// A pointer so an omitted field is distinguishable from an explicit 0:
+			// 0 means "unlimited", so defaulting a malformed request to 0 would
+			// silently lift the limit the operator was trying to enforce.
+			MaxUsers *int `json:"max_users"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if req.MaxUsers == nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("max_users is required"))
+			return
+		}
+		if *req.MaxUsers < 0 {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("max_users must not be negative"))
+			return
+		}
+		policy, err := accountsService.SetTenantMaxUsers(strings.TrimSpace(r.PathValue("id")), *req.MaxUsers)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"tenant_id":  policy.TenantID,
+			"max_users":  policy.MaxUsers,
+			"updated_at": policy.UpdatedAt,
+		})
+	})))
+
+	// PUT /admin/tenants/{id}/max-devices-per-user — how many devices EACH MEMBER may
+	// own (pc / cloud / phone / watch all count against the same number).
+	mux.Handle("PUT /admin/tenants/{id}/max-devices-per-user", requirePlatformAdmin(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !adminAccountsAvailable(w, accountsService) {
+			return
+		}
+		var req struct {
+			MaxDevicesPerUser *int `json:"max_devices_per_user"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if req.MaxDevicesPerUser == nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("max_devices_per_user is required"))
+			return
+		}
+		if *req.MaxDevicesPerUser < 0 {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("max_devices_per_user must not be negative"))
+			return
+		}
+		policy, err := accountsService.SetTenantMaxDevicesPerUser(strings.TrimSpace(r.PathValue("id")), *req.MaxDevicesPerUser)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"tenant_id":            policy.TenantID,
+			"max_devices_per_user": policy.MaxDevicesPerUser,
+			"updated_at":           policy.UpdatedAt,
+		})
+	})))
+
+	// PUT /admin/tenants/{id}/max-daily-bytes — the tenant's daily forwarded-byte
+	// allowance (design §7, basic tier).
+	//
+	// Its own route for the same reason /max-users is one: writing only this field
+	// means setting a traffic allowance cannot silently reset the node allowance or
+	// the sharing switch. A pointer distinguishes an omitted field from an explicit
+	// 0, because 0 means "unlimited" and defaulting a malformed request to 0 would
+	// silently lift the limit the operator was trying to enforce.
+	mux.Handle("PUT /admin/tenants/{id}/max-daily-bytes", requirePlatformAdmin(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !adminAccountsAvailable(w, accountsService) {
+			return
+		}
+		var req struct {
+			MaxDailyBytes *int64 `json:"max_daily_bytes"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if req.MaxDailyBytes == nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("max_daily_bytes is required"))
+			return
+		}
+		if *req.MaxDailyBytes < 0 {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("max_daily_bytes must not be negative"))
+			return
+		}
+		policy, err := accountsService.SetTenantMaxDailyBytes(strings.TrimSpace(r.PathValue("id")), *req.MaxDailyBytes)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"tenant_id":       policy.TenantID,
+			"max_daily_bytes": policy.MaxDailyBytes,
+			"updated_at":      policy.UpdatedAt,
 		})
 	})))
 }

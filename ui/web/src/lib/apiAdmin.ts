@@ -13,10 +13,17 @@ export interface AdminTenant {
   sharing_enabled: boolean;
   member_count: number;
   created_at?: string;
-  /** The tenant's node allowance (design §7). 0 means unlimited. */
-  max_nodes?: number;
-  /** How many nodes the tenant currently owns, so the operator sees "3 of 5"
-   *  without counting /admin/nodes themselves. */
+  /** How many people may be members of this tenant. 0 means unlimited. */
+  max_users?: number;
+  /** How many devices EACH MEMBER may own; pc / cloud / phone / watch all count
+   *  against this same number. 0 means unlimited.
+   *
+   *  Per USER, not per tenant: a tenant-wide device cap cannot express "2 devices
+   *  each" — it would shrink for everyone each time somebody joined. */
+  max_devices_per_user?: number;
+  /** How many devices the tenant owns ACROSS ALL MEMBERS. Reported for the estate at
+   *  a glance; deliberately NOT compared against the per-user limit, because that
+   *  ratio is per member and this row does not model members. */
   node_count?: number;
 }
 
@@ -32,6 +39,11 @@ export interface AdminMember {
 export interface AdminPolicy {
   default_visibility: string;
   roles: string[];
+  /** What a FRESH signup starts with (0 = unlimited for each), from the server so the
+   *  console shows the real terms rather than guessing at config it cannot read. */
+  free_tier_max_users?: number;
+  free_tier_max_devices_per_user?: number;
+  free_tier_max_daily_bytes?: number;
 }
 
 /** listAdminTenants returns every tenant on this instance. Crosses tenant
@@ -65,19 +77,36 @@ export function setTenantSharing(
   );
 }
 
-/** setTenantMaxNodes sets a tenant's node allowance (design §7, basic tier).
+/** setTenantMaxDevicesPerUser sets how many devices EACH MEMBER of a tenant may own.
  *
- *  0 means unlimited, and lowering the number does NOT evict existing nodes: it
- *  only refuses new enrolments, so a policy change never silently orphans
- *  machines that are already running. */
-export function setTenantMaxNodes(
+ *  0 means unlimited, and lowering the number does NOT evict existing devices: it only
+ *  refuses new enrolments, so a policy change never silently orphans machines that are
+ *  already running. */
+export function setTenantMaxDevicesPerUser(
   token: string | null,
   tenantID: string,
-  maxNodes: number,
-): Promise<{ tenant_id: string; max_nodes: number; updated_at: string }> {
-  return request<{ tenant_id: string; max_nodes: number; updated_at: string }>(
-    `/admin/tenants/${encodeURIComponent(tenantID)}/max-nodes`,
-    { method: "PUT", body: JSON.stringify({ max_nodes: maxNodes }) },
+  maxDevicesPerUser: number,
+): Promise<{ tenant_id: string; max_devices_per_user: number; updated_at: string }> {
+  return request<{ tenant_id: string; max_devices_per_user: number; updated_at: string }>(
+    `/admin/tenants/${encodeURIComponent(tenantID)}/max-devices-per-user`,
+    { method: "PUT", body: JSON.stringify({ max_devices_per_user: maxDevicesPerUser }) },
+    token,
+  );
+}
+
+/** setTenantMaxUsers sets how many people may be members of a tenant. 0 = unlimited.
+ *
+ *  Separate from the device allowance because they are two different products of the
+ *  plan (how many people vs how many machines each), and because writing one column per
+ *  endpoint is what stops one limit from silently resetting the other. */
+export function setTenantMaxUsers(
+  token: string | null,
+  tenantID: string,
+  maxUsers: number,
+): Promise<{ tenant_id: string; max_users: number; updated_at: string }> {
+  return request<{ tenant_id: string; max_users: number; updated_at: string }>(
+    `/admin/tenants/${encodeURIComponent(tenantID)}/max-users`,
+    { method: "PUT", body: JSON.stringify({ max_users: maxUsers }) },
     token,
   );
 }

@@ -106,9 +106,12 @@ export function JoinTokensCard({
   // over-allowance issue with 409, and a user who only learns that from an error has
   // already spent the click. Both numbers are advisory — enrolment re-checks
   // atomically — so this only ever produces a better message.
-  const maxNodes = tokensQuery.data?.max_nodes ?? 0;
-  const usedNodes = tokensQuery.data?.used_nodes ?? 0;
-  const atLimit = maxNodes > 0 && usedNodes >= maxNodes;
+  //
+  // Per ACCOUNT, not per tenant: the server counts the code's owner (the caller when
+  // owner is left empty), because that is whose device allowance is consumed.
+  const maxDevices = tokensQuery.data?.max_devices_per_user ?? 0;
+  const usedDevices = tokensQuery.data?.used_devices ?? 0;
+  const atLimit = maxDevices > 0 && usedDevices >= maxDevices;
   const title =
     scope.kind === "tenant"
       ? t("settings.joinTokensTitleTenant")
@@ -132,9 +135,9 @@ export function JoinTokensCard({
         </Typography.Paragraph>
 
         <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
-          {maxNodes > 0
-            ? t("settings.joinTokensAllowanceUsed", { used: String(usedNodes), limit: String(maxNodes) })
-            : t("settings.joinTokensAllowanceUnlimited", { used: String(usedNodes) })}
+          {maxDevices > 0
+            ? t("settings.joinTokensAllowanceUsed", { used: String(usedDevices), limit: String(maxDevices) })
+            : t("settings.joinTokensAllowanceUnlimited", { used: String(usedDevices) })}
         </Typography.Paragraph>
 
         {atLimit ? (
@@ -142,7 +145,7 @@ export function JoinTokensCard({
             type="warning"
             showIcon
             style={{ marginBottom: 16 }}
-            message={t("settings.joinTokensAtLimit", { limit: String(maxNodes) })}
+            message={t("settings.joinTokensAtLimit", { limit: String(maxDevices) })}
           />
         ) : null}
 

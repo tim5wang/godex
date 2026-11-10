@@ -424,13 +424,17 @@ func NodeRefs(views []NodeView) []identity.NodeRef {
 	return refs
 }
 
-// ErrNodeLimitReached is returned when assigning a node to a tenant would push
-// that tenant past its node allowance (design §7, basic tier).
+// ErrDeviceLimitReached is returned when assigning a device to a MEMBER would push
+// that member past their device allowance.
 //
-// A sentinel rather than a bare message so the HTTP seam can map it onto a
-// distinct status: "this tenant is at its limit" is an actionable refusal, not a
+// A sentinel rather than a bare message so the HTTP seam can map it onto a distinct
+// status: "this user is at their device limit" is an actionable refusal, not a
 // malformed request.
-var ErrNodeLimitReached = errors.New("tenant node limit reached")
+//
+// Named for DEVICES rather than nodes because the limit counts one member's devices:
+// a pc, a phone and a watch all consume the same allowance, which is exactly the
+// property a "max nodes per tenant" name would hide.
+var ErrDeviceLimitReached = errors.New("device limit reached for this member")
 
 // ErrNodeAlreadyRegistered is returned by RegisterOwned when the id is taken.
 //
@@ -440,12 +444,34 @@ var ErrNodeLimitReached = errors.New("tenant node limit reached")
 // distinct sentinel lets the seam answer 409 rather than blaming the request.
 var ErrNodeAlreadyRegistered = errors.New("node is already registered")
 
-// countTenantNodesLocked counts the nodes tenantID currently owns. Caller holds
-// r.mu.
+// countDevicesForOwnerLocked counts the devices one MEMBER currently owns inside a
+// tenant. Caller holds r.mu.
 //
-// An empty tenantID counts nothing: unowned nodes are not a tenant's occupancy,
-// so raising an allowance can never be blocked by nodes nobody has claimed.
-func (r *Registry) countTenantNodesLocked(tenantID string) int {
+// Scoped to (tenant, owner) rather than to the tenant, because the allowance is per
+// member: a tenant-wide count would make each member's limit shrink as colleagues
+// joined, so the second person to sign in would find the allowance already spent.
+//
+// An empty tenantID or owner counts nothing: an unowned node is not anybody's
+// occupancy, so raising an allowance can never be blocked by a machine nobody claimed.
+func (r *Registry) countDevicesForOwnerLocked(tenantID, ownerUserID string) int {
+	tenantID = strings.TrimSpace(tenantID)
+	ownerUserID = strings.TrimSpace(ownerUserID)
+	if tenantID == "" || ownerUserID == "" {
+		return 0
+	}
+	count := 0
+	for _, node := range r.nodes {
+		if strings.TrimSpace(node.TenantID) == tenantID && strings.TrimSpace(node.OwnerUserID) == ownerUserID {
+			count++
+		}
+	}
+	return count
+}
+
+// countTenantDevicesLocked counts every device the tenant owns, across all members.
+// Caller holds r.mu. Used for reporting ("3 of 4 members' devices"), never for the
+// allowance: see countDevicesForOwnerLocked for why the limit is per member.
+func (r *Registry) countTenantDevicesLocked(tenantID string) int {
 	tenantID = strings.TrimSpace(tenantID)
 	if tenantID == "" {
 		return 0
@@ -459,23 +485,27 @@ func (r *Registry) countTenantNodesLocked(tenantID string) int {
 	return count
 }
 
-// checkAllowanceLocked refuses an assignment that would ADD an occupant to a
-// tenant already at its allowance. Caller holds r.mu; maxNodes <= 0 means
+// checkDeviceAllowanceLocked refuses an assignment that would ADD a device to a
+// member already at their allowance. Caller holds r.mu; maxDevices <= 0 means
 // unlimited.
 //
-// A node that already belongs to the tenant is not a new occupant, so re-saving
-// one never counts against the limit.
-func (r *Registry) checkAllowanceLocked(id, tenantID string, maxNodes int) error {
+// A device that already belongs to this member is not a new occupant, so re-saving
+// one never counts against the limit. Moving it to a DIFFERENT member of the same
+// tenant does count: the device changes whose allowance it consumes, so the new
+// owner's headroom is the thing to check.
+func (r *Registry) checkDeviceAllowanceLocked(id, tenantID, ownerUserID string, maxDevices int) error {
 	tenantID = strings.TrimSpace(tenantID)
-	if maxNodes <= 0 || tenantID == "" {
+	if maxDevices <= 0 || tenantID == "" {
 		return nil
 	}
-	if existing, ok := r.nodes[strings.TrimSpace(id)]; ok && strings.TrimSpace(existing.TenantID) == tenantID {
+	if existing, ok := r.nodes[strings.TrimSpace(id)]; ok &&
+		strings.TrimSpace(existing.TenantID) == tenantID &&
+		strings.TrimSpace(existing.OwnerUserID) == strings.TrimSpace(ownerUserID) {
 		return nil
 	}
-	if used := r.countTenantNodesLocked(tenantID); used >= maxNodes {
-		return fmt.Errorf("%w: tenant %s already owns %d of %d allowed nodes",
-			ErrNodeLimitReached, tenantID, used, maxNodes)
+	if used := r.countDevicesForOwnerLocked(tenantID, ownerUserID); used >= maxDevices {
+		return fmt.Errorf("%w: member %s already owns %d of %d allowed devices",
+			ErrDeviceLimitReached, ownerUserID, used, maxDevices)
 	}
 	return nil
 }
@@ -496,7 +526,7 @@ func (r *Registry) applyOwnershipLocked(node NodeView, tenantID, ownerUserID, vi
 }
 
 // RegisterOwned registers a node AND assigns its ownership under one lock,
-// checking the tenant's allowance before anything is written.
+// checking the new owner's device allowance before anything is written.
 //
 // This exists because doing it as two calls is not equivalent. Register-then-assign
 // leaves a registered but unowned node behind whenever the assignment is refused —
@@ -508,7 +538,7 @@ func (r *Registry) applyOwnershipLocked(node NodeView, tenantID, ownerUserID, vi
 // the enrolment contract is "a new device joins", and letting it take over an
 // existing node is exactly the tenant-A-claims-tenant-B's-machine hole the join
 // route guards against.
-func (r *Registry) RegisterOwned(ctx context.Context, input NodeInput, tenantID, ownerUserID, visibility string, maxNodes int) (NodeView, error) {
+func (r *Registry) RegisterOwned(ctx context.Context, input NodeInput, tenantID, ownerUserID, visibility string, maxDevicesPerUser int) (NodeView, error) {
 	_ = ctx
 	input.ID = strings.TrimSpace(input.ID)
 	if input.ID == "" {
@@ -519,7 +549,7 @@ func (r *Registry) RegisterOwned(ctx context.Context, input NodeInput, tenantID,
 	if existing, ok := r.nodes[input.ID]; ok && existing.ID != "" {
 		return NodeView{}, fmt.Errorf("%w: %s", ErrNodeAlreadyRegistered, input.ID)
 	}
-	if err := r.checkAllowanceLocked(input.ID, tenantID, maxNodes); err != nil {
+	if err := r.checkDeviceAllowanceLocked(input.ID, tenantID, ownerUserID, maxDevicesPerUser); err != nil {
 		return NodeView{}, err
 	}
 	now := r.now()
@@ -555,11 +585,11 @@ func (r *Registry) SetOwnership(ctx context.Context, id, tenantID, ownerUserID, 
 //
 // Only an assignment that ADDS an occupant is refused:
 //
-//   - re-saving a node that already belongs to the tenant costs nothing;
-//   - lowering an allowance never evicts existing nodes. It only refuses new
+//   - re-saving a node that already belongs to the same member costs nothing;
+//   - lowering an allowance never evicts existing devices. It only refuses new
 //     enrolments, so a policy change cannot silently orphan machines that are
 //     already running — the operator decides what to do with the excess.
-func (r *Registry) SetOwnershipWithin(ctx context.Context, id, tenantID, ownerUserID, visibility string, maxNodes int) (NodeView, error) {
+func (r *Registry) SetOwnershipWithin(ctx context.Context, id, tenantID, ownerUserID, visibility string, maxDevicesPerUser int) (NodeView, error) {
 	_ = ctx
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -572,7 +602,7 @@ func (r *Registry) SetOwnershipWithin(ctx context.Context, id, tenantID, ownerUs
 	if !ok {
 		return NodeView{}, os.ErrNotExist
 	}
-	if err := r.checkAllowanceLocked(id, tenantID, maxNodes); err != nil {
+	if err := r.checkDeviceAllowanceLocked(id, tenantID, ownerUserID, maxDevicesPerUser); err != nil {
 		return NodeView{}, err
 	}
 	node = r.applyOwnershipLocked(node, tenantID, ownerUserID, visibility)

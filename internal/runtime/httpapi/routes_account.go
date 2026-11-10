@@ -603,6 +603,10 @@ func statusForMemberError(err error) int {
 		return http.StatusUnauthorized
 	case errors.Is(err, accounts.ErrOwnershipProtected):
 		return http.StatusConflict
+	case errors.Is(err, accounts.ErrMemberLimitReached):
+		// 409, not 400: the code is valid and the caller did nothing wrong — the tenant
+		// is full, which the inviter or the operator can act on.
+		return http.StatusConflict
 	case errors.Is(err, accounts.ErrMemberNotFound):
 		return http.StatusNotFound
 	case errors.Is(err, accounts.ErrInvalidMemberRole), errors.Is(err, accounts.ErrCannotGrantOwner),

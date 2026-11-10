@@ -36,61 +36,65 @@ type Config struct {
 	WebToken            string
 	WebAllowSelfSignup  bool
 	// Free-tier allowance a FRESH signup starts with; 0 = unlimited, which writes no
-	// policy row and keeps the pre-existing behaviour. Names are kept within the
-	// block's existing width on purpose, so adding them does not force gofmt to
-	// realign every other field (a whitespace-only diff across the whole struct).
-	// Applies to signup only: an existing tenant's stored policy is never rewritten.
-	WebFreeTierNodes     int
-	WebFreeTierDailyMB   int
-	MaxTokens            int
-	APITimeoutSeconds    int
-	HomeDir              string
-	WorkspaceDir         string
-	ProjectDir           string
-	ConfigFile           string
-	HomeConfigFile       string
-	ProjectConfigFile    string
-	StateDir             string
-	PackagesDir          string
-	TeamDir              string
-	TasksDir             string
-	MemoryDir            string
-	RulesDir             string
-	SkillsDir            string
-	TodosDir             string
-	MCPConfigPath        string
-	TempDir              string
-	TranscriptsDir       string
-	SessionsDir          string
-	CompressThreshold    int
-	Compaction           AgentCompactionConfig
-	MaxTurns             int
-	AgentProfile         string
-	AgentDefaultProfiles AgentDefaultProfilesConfig
-	Decision             DecisionConfig
-	LeadName             string
-	TeamName             string
-	DefaultSkills        []string
-	TeammateWorkLimit    int
-	TeammatePollEvery    time.Duration
-	TeammateIdleFor      time.Duration
-	EnvFile              string
-	HomeEnvFile          string
-	ProjectEnvFile       string
-	Logging              LoggingConfig
-	Security             SecurityConfig
-	Cron                 CronConfig
-	Relay                RelayConfig
-	Heartbeat            HeartbeatConfig
-	Control              ControlConfig
-	Runtime              RuntimeConfig
-	Storage              StorageConfig
-	Tools                ToolsConfig
-	Media                MediaConfig
-	ACP                  ACPConfig
-	Feishu               FeishuConfig
-	Weixin               WeixinConfig
-	Memory               MemoryConfig
+	// policy row and keeps the pre-existing behaviour. Applies to signup only: an
+	// existing tenant's stored policy is never rewritten.
+	//
+	// Two device-related knobs, because they answer two different questions: how many
+	// PEOPLE may join, and how many DEVICES each of them may have. Names here are
+	// allowed to widen the block, because an abbreviated one ("WebFreeTierDevCap")
+	// would leave the reader guessing WHOSE devices the cap counts.
+	WebFreeTierMaxUsers          int
+	WebFreeTierMaxDevicesPerUser int
+	WebFreeTierMaxDailyMB        int
+	MaxTokens                    int
+	APITimeoutSeconds            int
+	HomeDir                      string
+	WorkspaceDir                 string
+	ProjectDir                   string
+	ConfigFile                   string
+	HomeConfigFile               string
+	ProjectConfigFile            string
+	StateDir                     string
+	PackagesDir                  string
+	TeamDir                      string
+	TasksDir                     string
+	MemoryDir                    string
+	RulesDir                     string
+	SkillsDir                    string
+	TodosDir                     string
+	MCPConfigPath                string
+	TempDir                      string
+	TranscriptsDir               string
+	SessionsDir                  string
+	CompressThreshold            int
+	Compaction                   AgentCompactionConfig
+	MaxTurns                     int
+	AgentProfile                 string
+	AgentDefaultProfiles         AgentDefaultProfilesConfig
+	Decision                     DecisionConfig
+	LeadName                     string
+	TeamName                     string
+	DefaultSkills                []string
+	TeammateWorkLimit            int
+	TeammatePollEvery            time.Duration
+	TeammateIdleFor              time.Duration
+	EnvFile                      string
+	HomeEnvFile                  string
+	ProjectEnvFile               string
+	Logging                      LoggingConfig
+	Security                     SecurityConfig
+	Cron                         CronConfig
+	Relay                        RelayConfig
+	Heartbeat                    HeartbeatConfig
+	Control                      ControlConfig
+	Runtime                      RuntimeConfig
+	Storage                      StorageConfig
+	Tools                        ToolsConfig
+	Media                        MediaConfig
+	ACP                          ACPConfig
+	Feishu                       FeishuConfig
+	Weixin                       WeixinConfig
+	Memory                       MemoryConfig
 }
 
 type SecurityConfig struct {
@@ -186,7 +190,7 @@ const (
 )
 
 // WebFreeTierDefaults returns the allowance a FRESH self-serve signup starts with,
-// as (maxNodes, maxDailyBytes). Zero means unlimited for either.
+// as (maxUsers, maxDevicesPerUser, maxDailyBytes). Zero means unlimited for each.
 //
 // The MB→bytes conversion lives HERE, in one place, because two call sites need it
 // (cmd/godex's store opener and the httpapi's on-demand store) and a second copy of
@@ -195,11 +199,11 @@ const (
 // Binary MB (1024*1024), not 10^6: an operator's "100M" already means 100 MiB
 // everywhere else in this codebase, and a quota that silently used a different
 // megabyte would be off by 4.9%.
-func (c *Config) WebFreeTierDefaults() (maxNodes int, maxDailyBytes int64) {
+func (c *Config) WebFreeTierDefaults() (maxUsers, maxDevicesPerUser int, maxDailyBytes int64) {
 	if c == nil {
-		return 0, 0
+		return 0, 0, 0
 	}
-	return c.WebFreeTierNodes, int64(c.WebFreeTierDailyMB) * bytesPerMB
+	return c.WebFreeTierMaxUsers, c.WebFreeTierMaxDevicesPerUser, int64(c.WebFreeTierMaxDailyMB) * bytesPerMB
 }
 
 // bytesPerMB is the binary megabyte used to convert a configured allowance into the

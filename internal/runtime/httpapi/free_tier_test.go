@@ -43,13 +43,14 @@ func newFreeTierServer(t *testing.T, values map[string]any) *httptest.Server {
 
 // TestFreshSignupGetsTheConfiguredFreeTier is the end-to-end property: an operator
 // configures the free tier, and a self-serve signup starts under it instead of being
-// unlimited. Before this, "2 nodes / 100 MB a day" existed only in prose — nothing
+// unlimited. Before this, "2 devices / 100 MB a day" existed only in prose — nothing
 // wrote a policy for a new tenant at all.
 func TestFreshSignupGetsTheConfiguredFreeTier(t *testing.T) {
 	server := newFreeTierServer(t, map[string]any{
-		"web.allow_self_signup":      true,
-		"web.free_tier_max_nodes":    2,
-		"web.free_tier_max_daily_mb": 100,
+		"web.allow_self_signup":              true,
+		"web.free_tier_max_users":            3,
+		"web.free_tier_max_devices_per_user": 2,
+		"web.free_tier_max_daily_mb":         100,
 	})
 
 	_, session := postAuth(t, server.URL+"/auth/register", map[string]any{
@@ -70,8 +71,11 @@ func TestFreshSignupGetsTheConfiguredFreeTier(t *testing.T) {
 		t.Fatalf("tenants = %d, want 1", len(tenants))
 	}
 	row, _ := tenants[0].(map[string]any)
-	if row["max_nodes"] != float64(2) {
-		t.Errorf("fresh signup max_nodes = %v, want 2 (the configured free tier)", row["max_nodes"])
+	if row["max_devices_per_user"] != float64(2) {
+		t.Errorf("fresh signup max_devices_per_user = %v, want 2 (the configured free tier)", row["max_devices_per_user"])
+	}
+	if row["max_users"] != float64(3) {
+		t.Errorf("fresh signup max_users = %v, want 3 (the configured free tier)", row["max_users"])
 	}
 	const hundredMB = float64(100 * 1024 * 1024)
 	if row["max_daily_bytes"] != hundredMB {
@@ -95,9 +99,12 @@ func TestFreshSignupUnlimitedWithoutConfiguration(t *testing.T) {
 	_, body := doJSON(t, http.MethodGet, server.URL+"/admin/tenants", "web-secret", nil)
 	tenants, _ := body["tenants"].([]any)
 	row, _ := tenants[0].(map[string]any)
-	if row["max_nodes"] != float64(0) || row["max_daily_bytes"] != float64(0) {
-		t.Fatalf("unconfigured signup got a limit: max_nodes=%v max_daily_bytes=%v, want 0/0 (unlimited)",
-			row["max_nodes"], row["max_daily_bytes"])
+	if row["max_devices_per_user"] != float64(0) || row["max_daily_bytes"] != float64(0) {
+		t.Fatalf("unconfigured signup got a limit: devices=%v bytes=%v, want 0/0 (unlimited)",
+			row["max_devices_per_user"], row["max_daily_bytes"])
+	}
+	if row["max_users"] != float64(0) {
+		t.Fatalf("unconfigured signup got a member limit: %v, want 0 (unlimited)", row["max_users"])
 	}
 }
 
@@ -106,17 +113,21 @@ func TestFreshSignupUnlimitedWithoutConfiguration(t *testing.T) {
 // the browser cannot read.
 func TestAdminPolicyReportsTheFreeTier(t *testing.T) {
 	server := newFreeTierServer(t, map[string]any{
-		"web.allow_self_signup":      true,
-		"web.free_tier_max_nodes":    2,
-		"web.free_tier_max_daily_mb": 100,
+		"web.allow_self_signup":              true,
+		"web.free_tier_max_users":            3,
+		"web.free_tier_max_devices_per_user": 2,
+		"web.free_tier_max_daily_mb":         100,
 	})
 
 	resp, body := doJSON(t, http.MethodGet, server.URL+"/admin/policy", "web-secret", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %v", resp.StatusCode, body)
 	}
-	if body["free_tier_max_nodes"] != float64(2) {
-		t.Errorf("free_tier_max_nodes = %v, want 2", body["free_tier_max_nodes"])
+	if body["free_tier_max_users"] != float64(3) {
+		t.Errorf("free_tier_max_users = %v, want 3", body["free_tier_max_users"])
+	}
+	if body["free_tier_max_devices_per_user"] != float64(2) {
+		t.Errorf("free_tier_max_devices_per_user = %v, want 2", body["free_tier_max_devices_per_user"])
 	}
 	if body["free_tier_max_daily_bytes"] != float64(100*1024*1024) {
 		t.Errorf("free_tier_max_daily_bytes = %v, want %d", body["free_tier_max_daily_bytes"], 100*1024*1024)
@@ -131,8 +142,8 @@ func TestAdminPolicyReportsTheFreeTier(t *testing.T) {
 // harmless and would silently change the terms of every embedded deployment.
 func TestFreshSignupFreeTierDefaultsToUnlimitedWhenAccountsInjected(t *testing.T) {
 	server, accountsService := newAdminServer(t, "web-secret")
-	if got := accountsService.TenantMaxNodes("anything"); got != 0 {
-		t.Fatalf("injected store has a node limit %d, want 0", got)
+	if got := accountsService.TenantMaxDevicesPerUser("anything"); got != 0 {
+		t.Fatalf("injected store has a device limit %d, want 0", got)
 	}
 	// And the injected store's signup path writes no policy row.
 	if _, session := postAuth(t, server.URL+"/auth/register", map[string]any{
@@ -143,8 +154,8 @@ func TestFreshSignupFreeTierDefaultsToUnlimitedWhenAccountsInjected(t *testing.T
 	_, body := doJSON(t, http.MethodGet, server.URL+"/admin/tenants", "web-secret", nil)
 	tenants, _ := body["tenants"].([]any)
 	row, _ := tenants[0].(map[string]any)
-	if row["max_nodes"] != float64(0) || row["max_daily_bytes"] != float64(0) {
+	if row["max_devices_per_user"] != float64(0) || row["max_daily_bytes"] != float64(0) {
 		t.Fatalf("injected store signup got a limit: %v/%v, want 0/0",
-			row["max_nodes"], row["max_daily_bytes"])
+			row["max_devices_per_user"], row["max_daily_bytes"])
 	}
 }

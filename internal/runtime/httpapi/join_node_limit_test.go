@@ -42,9 +42,10 @@ func newLimitJoinServer(t *testing.T) (*httptest.Server, *accounts.Service, *nod
 	return server, accountsService, registry
 }
 
-// TestJoinRouteRefusesEnrolmentPastTenantLimit is the basic-tier quota (design §7)
-// at the seam that tenant enrolment actually uses.
-func TestJoinRouteRefusesEnrolmentPastTenantLimit(t *testing.T) {
+// TestJoinRouteRefusesEnrolmentPastTheDeviceLimit is the basic-tier quota at the seam
+// that tenant enrolment actually uses: a member at their device limit cannot enrol
+// another device.
+func TestJoinRouteRefusesEnrolmentPastTheDeviceLimit(t *testing.T) {
 	server, service, registry := newLimitJoinServer(t)
 	ctx := context.Background()
 
@@ -53,8 +54,8 @@ func TestJoinRouteRefusesEnrolmentPastTenantLimit(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 	tenantID := result.Tenant.ID
-	if _, err := service.SetTenantMaxNodes(tenantID, 1); err != nil {
-		t.Fatalf("SetTenantMaxNodes: %v", err)
+	if _, err := service.SetTenantMaxDevicesPerUser(tenantID, 1); err != nil {
+		t.Fatalf("SetTenantMaxDevicesPerUser: %v", err)
 	}
 
 	join := func(nodeID string) (*http.Response, map[string]any) {
@@ -90,13 +91,69 @@ func TestJoinRouteRefusesEnrolmentPastTenantLimit(t *testing.T) {
 		t.Error("a refused enrolment left a registered node behind")
 	}
 
-	// Raising the allowance lets the SAME tenant proceed, so the refusal was about
-	// the limit rather than about the node id or the token.
-	if _, err := service.SetTenantMaxNodes(tenantID, 2); err != nil {
-		t.Fatalf("SetTenantMaxNodes (raise): %v", err)
+	// Raising the allowance lets the SAME member proceed, so the refusal was about
+	// the limit rather than about the device id or the token.
+	if _, err := service.SetTenantMaxDevicesPerUser(tenantID, 2); err != nil {
+		t.Fatalf("SetTenantMaxDevicesPerUser (raise): %v", err)
 	}
 	if resp, body := join("node-2"); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("enrolment after raising the allowance = %d, want 201: %v", resp.StatusCode, body)
+	}
+}
+
+// TestJoinRouteAllowanceIsPerMemberNotPerTenant is the property that makes the
+// allowance usable at all: with a tenant-wide device count, the second person to join
+// would find the allowance already spent by the first, so "2 devices each" could not
+// be honoured. Here the owner is at their limit and their colleague still enrols.
+func TestJoinRouteAllowanceIsPerMemberNotPerTenant(t *testing.T) {
+	server, service, _ := newLimitJoinServer(t)
+
+	owner, err := service.Register(accounts.RegisterInput{Email: "owner@example.com", Password: "correct-horse"})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	tenantID := owner.Tenant.ID
+	if _, err := service.SetTenantMaxDevicesPerUser(tenantID, 1); err != nil {
+		t.Fatalf("SetTenantMaxDevicesPerUser: %v", err)
+	}
+
+	// A second member of the SAME tenant, added the way a real invite works.
+	invite, code, err := service.CreateUserInvite(accounts.CreateUserInviteInput{
+		TenantID: tenantID, Role: "member", InvitedBy: owner.User.ID,
+	})
+	if err != nil {
+		t.Fatalf("CreateUserInvite: %v", err)
+	}
+	_ = invite
+	member, err := service.AcceptUserInvite(code, "member@example.com", "correct-horse")
+	if err != nil {
+		t.Fatalf("AcceptUserInvite: %v", err)
+	}
+
+	enrol := func(nodeID, ownerUserID string) (*http.Response, map[string]any) {
+		t.Helper()
+		_, token, err := service.CreateJoinToken(accounts.CreateJoinTokenInput{
+			TenantID: tenantID, OwnerUserID: ownerUserID, CreatedBy: owner.User.ID,
+		})
+		if err != nil {
+			t.Fatalf("CreateJoinToken: %v", err)
+		}
+		return doJSON(t, http.MethodPost, server.URL+"/control/join", "", map[string]any{
+			"token": token, "node_id": nodeID,
+		})
+	}
+
+	// The owner fills their own allowance of 1.
+	if resp, body := enrol("owner-device", owner.User.ID); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("owner's first device = %d, want 201: %v", resp.StatusCode, body)
+	}
+	// The owner's SECOND device is refused...
+	if resp, body := enrol("owner-device-2", owner.User.ID); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("owner's second device = %d, want 409: %v", resp.StatusCode, body)
+	}
+	// ...while the colleague's FIRST device is accepted against the same limit of 1.
+	if resp, body := enrol("member-device", member.User.ID); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("member's first device = %d, want 201 (the owner's devices must not consume it): %v", resp.StatusCode, body)
 	}
 }
 
@@ -137,8 +194,8 @@ func TestAdminClaimIgnoresTheAllowance(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 	tenantID := result.Tenant.ID
-	if _, err := service.SetTenantMaxNodes(tenantID, 1); err != nil {
-		t.Fatalf("SetTenantMaxNodes: %v", err)
+	if _, err := service.SetTenantMaxDevicesPerUser(tenantID, 1); err != nil {
+		t.Fatalf("SetTenantMaxDevicesPerUser: %v", err)
 	}
 	// One node fills the allowance.
 	if _, err := registry.Register(ctx, noderegistry.NodeInput{ID: "node-1"}); err != nil {

@@ -37,7 +37,7 @@ import { AdminCreateTenantCard } from "./AdminCreateTenantCard";
 import { JoinTokensCard } from "./JoinTokensCard";
 import { AdminRelayUsageCard } from "../usage/relay/RelayUsage";
 import { OperatorGrantsCard } from "./OperatorGrantsCard";
-import { TenantNodeLimitCell } from "./TenantNodeLimitCell";
+import { TenantLimitCell } from "./TenantLimitCell";
 
 /** AdminSettingsPanel is the superadmin's tenant management surface (design §3.6).
  *
@@ -295,14 +295,31 @@ export function AdminSettingsPanel({ token }: { token: string | null }) {
               ),
             },
             {
-              title: t("settings.adminNodesLimitCol"),
-              dataIndex: "max_nodes",
+              // Two columns, because these are two different products of the plan:
+              // how many PEOPLE may join, and how many DEVICES each of them may have.
+              // One "nodes allowed" number could not express "2 devices each" — it
+              // would shrink for every member each time somebody joined.
+              title: t("settings.adminDevicesPerUserCol"),
+              dataIndex: "max_devices_per_user",
               render: (_value: number | undefined, tenant) => (
-                <TenantNodeLimitCell
+                <TenantLimitCell
                   token={token}
                   tenantID={tenant.id}
-                  maxNodes={tenant.max_nodes ?? 0}
-                  nodeCount={tenant.node_count ?? 0}
+                  kind="devices_per_user"
+                  limit={tenant.max_devices_per_user ?? 0}
+                />
+              ),
+            },
+            {
+              title: t("settings.adminUsersLimitCol"),
+              dataIndex: "max_users",
+              render: (_value: number | undefined, tenant) => (
+                <TenantLimitCell
+                  token={token}
+                  tenantID={tenant.id}
+                  kind="users"
+                  limit={tenant.max_users ?? 0}
+                  used={tenant.member_count ?? 0}
                 />
               ),
             },

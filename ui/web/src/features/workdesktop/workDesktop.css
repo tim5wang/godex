@@ -316,40 +316,78 @@
 }
 
 /* --- cross-stream attention inbox --- */
-/* Compact by design: this is a triage list, not a workspace. One line per item
-   so the whole set stays scannable. */
+/* A triage list, not a workspace: each row must stay scannable at a glance.
+
+   Three stacked tiers, in reading order — what the row IS (kind / how many / what it
+   blocks / when due), then the one thing you read (title + its stream), then what you
+   can do. It used to be a single flex line of tag + title + five peer buttons; once the
+   row wrapped, every piece landed on the same visual plane and the eye had no entry
+   point.
+
+   The title is CLAMPED because these titles are frequently whole checkpoint paragraphs
+   (blockers / open questions are free text). With only `overflow-wrap` one such row grew
+   taller than the viewport and pushed every other item off the list — measured on a real
+   screenshot: a single "计划受阱" row occupied 861px of a 1018px-wide panel, ~700px of it
+   prose. The full text stays one hover (title) or one click (opens the resolving tab)
+   away, and the clamped line still shows its beginning, which is what identifies it. */
 .wd-attention { margin-bottom: 12px; }
 .wd-attention-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .wd-attention-item {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 2px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  padding: 6px 2px;
   border-top: 1px solid var(--godex-border);
 }
 .wd-attention-item:first-child { border-top: 0; }
 /* A high-priority (blocking) item gets a left accent so it is findable without
    reading the tag text. */
 .wd-attention-high { box-shadow: inset 3px 0 0 var(--godex-danger, #cf1322); padding-left: 8px; }
+/* Tier 1: the row's identity. Quiet and compact — it is metadata, not the message. */
+.wd-attention-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.wd-attention-meta .ant-tag { margin-inline-end: 0; }
 .wd-attention-main {
-  flex: 1;
-  min-width: 0;
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  min-width: 0;
   font: inherit;
   color: inherit;
   text-align: left;
   cursor: pointer;
   background: none;
   border: 0;
-  padding: 2px 0;
+  padding: 0;
 }
-.wd-attention-main strong { overflow-wrap: anywhere; }
+.wd-attention-main strong {
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* Tier 3 is secondary: it follows the text rather than being pinned to the row's right
+   edge, so the actions stay adjacent to the item they act on. */
+.wd-attention-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* One primary affordance per row: opening the item is what you do with it in the common
+   case, so the verbs stay visually subordinate instead of five equal-weight buttons. */
+.wd-attention-primary { padding: 0; height: auto; font-weight: 600; }
+/* The also-list is the same free text as the title, so it gets one line rather than
+   reflowing the whole group of sibling titles. */
+.wd-attention-also,
+.wd-attention-context {
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .wd-attention-due { white-space: nowrap; }
-/* Verbs are secondary affordances: they sit after the row's primary "open" action and
-   never wrap into the title, so the triage list keeps its one-line-per-item shape. */
-.wd-attention-verbs { flex-shrink: 0; }
+/* Verbs are secondary affordances and never wrap into the title. */
+.wd-attention-verbs { flex-wrap: wrap; }
 .wd-attention-verbs .ant-btn-link { padding: 0; height: auto; }
 .wd-attention-claimed { flex-shrink: 0; }
 /* A deferred row is deliberately quieter than an actionable one: it records a
@@ -358,20 +396,13 @@
 .wd-attention-deferred-row { opacity: 0.75; }
 .wd-attention-deferred-text { display: flex; align-items: baseline; gap: 8px; }
 .wd-attention-item .wd-muted { font-size: 12px; }
-/* In the right column the inbox is narrow, so rows wrap instead of squeezing the
-   title flat. The parent is `.wd-dock` (the panel that the chat's right dock mounts);
-   the earlier `.wd-sidebar` rules never matched anything, because that class belongs
-   to the retired standalone desktop page — so at dock width the row kept its
-   single-line layout and the title was squeezed to nothing. */
+/* The dock is the narrow host, and now that the row is a COLUMN the old wrapping
+   workarounds are unnecessary: the tiers already stack. What the dock still needs is
+   the tighter spacing and the free-standing verb buttons. (The earlier `.wd-sidebar`
+   rules never matched anything — that class belonged to the retired standalone page.) */
 .wd-dock .wd-attention { margin-bottom: 0; }
-.wd-dock .wd-attention-item { flex-wrap: wrap; row-gap: 2px; }
+.wd-dock .wd-attention-item { gap: 2px; }
 .wd-dock .wd-attention-item .ant-btn-link { padding: 0; height: auto; }
-/* The title takes the full first line when the row wraps: `flex: 1` alone lets a long
-   tag row push it down to a sliver, which is how the triage line became unreadable. */
-.wd-dock .wd-attention-main { flex: 1 1 100%; }
-/* Verbs follow the text instead of being pinned to the row's right edge, so they stay
-   adjacent to the item they act on once the row has wrapped. */
-.wd-dock .wd-attention-verbs { margin-left: auto; }
 
 /* --- Fill the viewport (desktop) -------------------------------------------
    Must stay after the base rules above: `.wd-layout { align-items: start }` and the
@@ -524,16 +555,45 @@
 .wd-rail-item-selected { background: var(--godex-panel-muted); box-shadow: inset 3px 0 0 var(--godex-accent); }
 .wd-rail-item-top { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
 .wd-rail-item-top strong { min-width: 0; overflow-wrap: anywhere; }
-.wd-rail-item-summary {
+/* The card's second line: counts of outstanding work instead of clamped prose. Chips wrap
+   rather than truncate, because a half-shown count is the same failure the prose had. */
+.wd-rail-item-aggs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.wd-rail-agg {
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--godex-panel-muted);
   color: var(--godex-muted);
   font-size: 12px;
-  line-height: 1.5;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  line-height: 18px;
+  white-space: nowrap;
 }
-.wd-rail-item-meta { display: flex; gap: 6px; align-items: center; }
+/* What needs the user is the one chip that should catch the eye; the forward-looking plan
+   stays quiet. Only these two keys exist — the checkpoint's blockers/open questions are NOT
+   separate chips because the inbox already counts them (see railAggregates). */
+.wd-rail-agg-attention { background: color-mix(in srgb, var(--godex-accent) 16%, transparent); color: var(--godex-accent); }
+/* The calm state is deliberately quieter than a count: an unadorned stream is not news. */
+.wd-rail-agg-none { background: transparent; font-style: italic; opacity: 0.75; }
+.wd-rail-item-meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+/* What this stream's conversations are doing. Kept visually apart from the stream's own
+   status tag: one describes the stream, the other describes work inside it. */
+.wd-rail-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border: 1px solid var(--godex-border);
+  border-radius: 9px;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.wd-rail-state-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--godex-muted); }
+.wd-rail-state-running { border-color: var(--godex-accent); color: var(--godex-accent); }
+.wd-rail-state-running .wd-rail-state-dot { background: var(--godex-accent); }
+.wd-rail-state-finished { border-color: var(--godex-success, #389e0d); color: var(--godex-success, #389e0d); }
+.wd-rail-state-finished .wd-rail-state-dot { background: var(--godex-success, #389e0d); }
+.wd-rail-state-error { border-color: var(--godex-danger, #cf1322); color: var(--godex-danger, #cf1322); }
+.wd-rail-state-error .wd-rail-state-dot { background: var(--godex-danger, #cf1322); }
 .wd-rail-linked {
   display: flex;
   flex-direction: column;

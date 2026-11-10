@@ -19,6 +19,7 @@ import {
   getWorkAttention,
   getWorkContext,
   getWorkContextBrief,
+  getWorkContextSessionIndex,
   getWorkFocus,
   linkWorkSession,
   listWorkContexts,
@@ -140,6 +141,27 @@ export function useWorkDesktopData() {
     queryKey: workContextQueryKey(token, nodeID, "attention"),
     queryFn: () => getWorkAttention(token || null),
     refetchInterval: 60_000,
+  });
+  // Every stream's linked conversations in one call, so a rail card can say which
+  // streams have a conversation running and which one just finished.
+  const sessionIndexQuery = useQuery({
+    queryKey: workContextQueryKey(token, nodeID, "session-index"),
+    queryFn: () => getWorkContextSessionIndex(token || null),
+    refetchInterval: 60_000,
+  });
+  // The conversation list is deliberately the SAME query key the chat page uses: one
+  // cache entry and one in-flight request, so naming a stream's most recently used
+  // conversation costs no second copy of the heaviest list on this page. It is polled
+  // because "running" is a LIVE fact read off this list, and a backgrounded conversation
+  // starting would otherwise stay invisible until something else happened to refetch.
+  // staleTime matches the chat page's, so the two observers share one warm copy instead
+  // of each forcing its own fetch on mount.
+  const chatSessionsQuery = useQuery({
+    queryKey: ["sessions", token, nodeID],
+    queryFn: () => listSessions(token || null),
+    refetchInterval: 60_000,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 30 * 60 * 1000,
   });
   const projectsQuery = useQuery({
     queryKey: workContextQueryKey(token, nodeID, "projects"),
@@ -395,7 +417,32 @@ export function useWorkDesktopData() {
   const focusChanges = focusQuery.data?.changes ?? [];
   const lastSeenAt = focusQuery.data?.last_seen_at ?? "";
   const attentionItems = attentionQuery.data?.items ?? [];
+  // Per-stream counts of what needs the user, as one card can show them. Derived from the
+  // SAME inbox response the board renders, so the card and the board can never disagree
+  // about how much is waiting. A grouped row stands for `count` entries, so it contributes
+  // its count rather than 1 — otherwise a collapsed row of five would read as one item.
+  const attentionByContext = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const item of attentionItems) out[item.context_id] = (out[item.context_id] ?? 0) + (item.count ?? 1);
+    return out;
+  }, [attentionItems]);
   const unreadByContext = attentionQuery.data?.unread ?? {};
+  const sessionsByContext = sessionIndexQuery.data?.sessions ?? {};
+  const lastTurnByContext = sessionIndexQuery.data?.last_turn ?? {};
+  const seenByContext = sessionIndexQuery.data?.seen ?? {};
+  // Which conversations are executing RIGHT NOW. Read off the shared session list rather
+  // than guessed from a timestamp: "running" is a live fact the server owns.
+  const runningSessionIds = useMemo(
+    () => new Set((chatSessionsQuery.data ?? []).filter((item) => item.running).map((item) => item.session_id)),
+    [chatSessionsQuery.data],
+  );
+  // Per-session last activity, so "the conversation I used last" is decided by the
+  // session's own activity and not by when the link was attached.
+  const activityBySessionId = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const item of chatSessionsQuery.data ?? []) out[item.session_id] = item.last_activity_at || item.updated_at || "";
+    return out;
+  }, [chatSessionsQuery.data]);
   // Streams whose unread work has gone stale. Their count is still real, but the UI
   // demotes it from an alert to a muted summary: a marker nobody clears stops being
   // a request and becomes background debt.
@@ -425,8 +472,9 @@ export function useWorkDesktopData() {
     contexts, selected, contextId, readOnly, invalidContext, filteredContexts,
     detail, facts, relations, sessions, delegations, events, todos, focusChanges, lastSeenAt,
     attentionItems, unreadByContext, agedByContext, attentionMetrics, deferredAttention, scopedAttention, scopedDeferred, pendingReview, contextResources, filesRoot,
+    sessionsByContext, lastTurnByContext, seenByContext, runningSessionIds, activityBySessionId, attentionByContext,
     // query state (for loading/error surfaces)
-    contextsQuery, detailQuery, attentionQuery, recallResult, briefQuery, focusQuery, projectsQuery, templatesQuery,
+    contextsQuery, detailQuery, attentionQuery, recallResult, briefQuery, focusQuery, projectsQuery, templatesQuery, sessionIndexQuery,
     // mutations
     createMutation, patchContextMutation, checkpointMutation, topicMutation,
     resourceMutation, removeResourceMutation, resourceUpdateMutation,

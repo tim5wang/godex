@@ -41,6 +41,10 @@ type Store = {
   contexts: Ctx[]; resources: Res[]; relations: Rel[]; facts: Fact[]; sessions: Record<string, Link[]>;
   delegations: StoredDelegation[]; cards: Record<string, Card>; events: Record<string, Event[]>;
   todos: Todo[]; seen: Record<string, string>;
+  // Sessions the server reports as executing right now. The rail's "conversation running"
+  // state is read from the SESSION list, not guessed from a timestamp — the server owns
+  // that fact — so the mock has to be able to state it.
+  runningSessions: string[];
   queuedTurns: Queued[];
   // The conversation's own message list. Store-driven (rather than the shared constant) so a
   // test can hand the feed an exact sequence — the turn-collapse bug only shows up in a
@@ -100,7 +104,7 @@ function baseContext(overrides: Partial<Ctx> & { id: string; title: string }): C
 }
 
 function newStore(seed: Partial<Store> = {}): Store {
-  return { contexts: [], resources: [], relations: [], facts: [], sessions: {}, delegations: [], cards: {}, events: {}, todos: [], seen: {}, queuedTurns: [], chatMessages: CHAT_MESSAGES, coldStart: false, resident: [], aged: [], nudgesToday: 0, attentionActions: {}, checkpointHistory: {}, writes: [], failNextPatch: false, ...seed };
+  return { contexts: [], resources: [], relations: [], facts: [], sessions: {}, delegations: [], cards: {}, events: {}, todos: [], seen: {}, runningSessions: [], queuedTurns: [], chatMessages: CHAT_MESSAGES, coldStart: false, resident: [], aged: [], nudgesToday: 0, attentionActions: {}, checkpointHistory: {}, writes: [], failNextPatch: false, ...seed };
 }
 
 function checkpoint(body: Record<string, unknown>, revision: number) {
@@ -163,8 +167,8 @@ function handleWorkContext(store: Store) {
     // picker has something to offer.
     if (path === "/sessions" && method === "GET") {
       return json([
-        { session_id: "wc-session-1", locator: { channel: "web", key: "wc-topic-1", metadata: { project_dir: "/srv/app" } }, title: "Topic", created_at: NOW, updated_at: NOW, last_activity_at: NOW },
-        { session_id: "wc-session-9", locator: { channel: "web", key: "wc-topic-9", metadata: { project_dir: "/srv/app" } }, title: "历史排查对话", created_at: NOW, updated_at: NOW, last_activity_at: NOW },
+        { session_id: "wc-session-1", locator: { channel: "web", key: "wc-topic-1", metadata: { project_dir: "/srv/app" } }, title: "Topic", created_at: NOW, updated_at: NOW, last_activity_at: NOW, ...(store.runningSessions.includes("wc-session-1") ? { running: true } : {}) },
+        { session_id: "wc-session-9", locator: { channel: "web", key: "wc-topic-9", metadata: { project_dir: "/srv/app" } }, title: "历史排查对话", created_at: NOW, updated_at: NOW, last_activity_at: NOW, ...(store.runningSessions.includes("wc-session-9") ? { running: true } : {}) },
       ]);
     }
     // Opening a session. The real server derives the session id FROM the locator, so
@@ -246,6 +250,24 @@ function handleWorkContext(store: Store) {
     }
 
     if (path === "/v1/work-context-resources" && method === "GET") return json(store.resources);
+    // Every stream's linked conversations in one call: the links, the newest turn event
+    // per stream (so a rail card can say WHAT moved) and the seen watermark (so it can
+    // tell a NEW finish from one already read). Mirrors the server projection; without
+    // it the rail's status has no data and the whole desktop view 404s.
+    if (path === "/v1/work-context-sessions" && method === "GET") {
+      const lastTurn: Record<string, unknown> = {};
+      const seen: Record<string, string> = {};
+      for (const context of store.contexts) {
+        seen[context.id] = store.seen[context.id] ?? "";
+        // Newest first: the first turn event seen for a stream wins, exactly as the
+        // server's ORDER BY ... DESC with first-row-kept does.
+        const turns = (store.events[context.id] ?? [])
+          .filter((event) => event.kind === "session_turn")
+          .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)));
+        if (turns.length) lastTurn[context.id] = turns[0];
+      }
+      return json({ sessions: store.sessions, last_turn: lastTurn, seen });
+    }
     // Cross-stream attention inbox: decisions (cards awaiting acceptance) plus
     // overdue/soon plan items, each pointing at the tab that resolves it.
     if (path === "/v1/work-attention" && method === "GET") {
@@ -840,6 +862,89 @@ test("an empty store is a real first-run state, and creating a desktop writes th
   await expect(rail(page).getByText("新服务维护主线", { exact: true })).toBeVisible();
   expect(store.writes).toContain("POST /v1/work-contexts");
   expect(store.contexts.map((item) => item.title)).toContain("新服务维护主线");
+});
+
+test("a backgrounded conversation finishing shows on its rail card", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  const seed = seededStore();
+  // ctx-1's linked conversation finished a turn that nobody has looked at yet. Before
+  // this the rail showed only the stream's own state, so a desktop left in the
+  // background could not announce that work in it had finished.
+  seed.events = {
+    "ctx-1": [{ id: "ev-turn", context_id: "ctx-1", kind: "session_turn", title: "Topic · completed", source: "session://wc-session-1", created_at: "2026-11-09T00:00:00Z" }],
+  };
+  await install(page, seed);
+  await openDesktopRail(page);
+
+  const card = (title: string) => rail(page).locator(".wd-rail-item", { hasText: title });
+  await expect(card("语音服务 · 长期维护").locator('[data-testid="wd-rail-state-finished"]')).toBeVisible();
+  // ctx-2 has no linked conversation at all. A stream with no conversation cannot have a
+  // finished one, so it must claim NOTHING — the honest-claim rule the helper enforces.
+  await expect(card("模型效果 · 对齐与更新").locator(".wd-rail-state")).toHaveCount(0);
+});
+
+test("a running conversation outranks a finished one on the rail card", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  const seed = seededStore();
+  seed.runningSessions = ["wc-session-1"];
+  // Both states are true at once: the stream has an unseen finished turn AND its session
+  // is executing right now. "Running" must win, because work happening this second is the
+  // fact the user cannot afford to miss.
+  seed.events = {
+    "ctx-1": [{ id: "ev-turn", context_id: "ctx-1", kind: "session_turn", title: "Topic · completed", source: "session://wc-session-1", created_at: "2026-11-09T00:00:00Z" }],
+  };
+  await install(page, seed);
+  await openDesktopRail(page);
+
+  const card = rail(page).locator(".wd-rail-item", { hasText: "语音服务 · 长期维护" });
+  await expect(card.locator('[data-testid="wd-rail-state-running"]')).toBeVisible();
+  await expect(card.locator('[data-testid="wd-rail-state-finished"]')).toHaveCount(0);
+});
+
+test("the rail card shows counts of outstanding work instead of clamped prose", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  await install(page, seededStore());
+  await openDesktopRail(page);
+
+  // The card's second line used to be `checkpoint.summary` clamped to two lines, so what
+  // actually reached the eye was an arbitrary PREFIX of a long paragraph. Assert both halves
+  // of the fix: the prose is not that line any more, and counts are.
+  await expect(rail(page).locator(".wd-rail-item-summary")).toHaveCount(0);
+
+  // ctx-1 has an in-review delegation + a candidate fact (2 actionable from the inbox) and one
+  // next action in its checkpoint. The checkpoint's open question is NOT a separate chip: the
+  // inbox already counts it, so a "待确认 1" chip would count the same entry twice.
+  const card = rail(page).locator(".wd-rail-item", { hasText: "语音服务 · 长期维护" });
+  await expect(card.locator(".wd-rail-agg-attention")).toHaveText("待处理 3");
+  await expect(card.locator(".wd-rail-agg-next")).toHaveText("下一步 1");
+  await expect(card.locator(".wd-rail-agg-blocked")).toHaveCount(0);
+  await expect(card.locator(".wd-rail-agg-questions")).toHaveCount(0);
+
+  // ctx-2 has no actionable items and an empty checkpoint: it must say so plainly rather
+  // than showing a row of zeroes or an empty gap where the counts would be.
+  const quiet = rail(page).locator(".wd-rail-item", { hasText: "模型效果 · 对齐与更新" });
+  await expect(quiet.locator(".wd-rail-agg-none")).toHaveText("无待处理项");
+  await expect(quiet.locator(".wd-rail-agg-attention")).toHaveCount(0);
+});
+
+test("selecting a desktop takes the centre column to its most recent conversation", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  await install(page, seededStore());
+  // Start on the UNLINKED conversation, so the assertion below cannot pass by accident
+  // (landing on ctx-1's conversation already would prove nothing).
+  await openDesktopRail(page, "/chat/web/wc-topic-9");
+  await expect(page).toHaveURL(/\/chat\/web\/wc-topic-9/);
+
+  await selectDesktop(page, "语音服务 · 长期维护");
+  // Selecting a desktop is also "take me to where the work is": the centre column follows
+  // to that stream's conversation, carrying the full locator.
+  await expect(page).toHaveURL(/\/chat\/web\/wc-topic-1/);
+  await expect(page).toHaveURL(/workspace_dir=%2Fsrv%2Fapp/);
+
+  // A stream with NO linked conversation must leave the centre column alone: a blank
+  // chat would look like the open work was lost rather than simply not existing.
+  await selectDesktop(page, "模型效果 · 对齐与更新");
+  await expect(page).toHaveURL(/\/chat\/web\/wc-topic-1/);
 });
 
 test("opens a linked conversation in the centre chat column", async ({ page }) => {
@@ -1703,12 +1808,13 @@ test("scrolls a long conversation and keeps the composer in view", async ({ page
 });
 
 // The dock is much narrower than the retired standalone desktop page, so the attention
-// rows have to WRAP there. The rules that did this targeted `.wd-sidebar`, a class no
-// component has rendered since the desktop was fused into the chat — so at dock width the
-// row kept its single-line layout and squeezed the title into a sliver. These assertions
-// pin the geometry rather than the class name, so renaming the container cannot quietly
-// drop them again.
-test("the dock's attention list wraps its rows instead of squeezing the title", async ({ page }) => {
+// rows have to STACK there instead of squeezing the title into a sliver. The rules that
+// did this once targeted `.wd-sidebar`, a class no component has rendered since the
+// desktop was fused into the chat, so at dock width the row kept its single-line layout
+// and the title was squeezed flat. These assertions pin the GEOMETRY rather than the
+// mechanism, so swapping "wrap the flex line" for "stack the tiers as a column" cannot
+// quietly drop the guarantee the test exists for.
+test("the dock's attention list stacks its rows instead of squeezing the title", async ({ page }) => {
   test.skip((page.viewportSize()?.width ?? 0) < 1024);
   const store = await install(page, seededStore());
   store.todos.push({
@@ -1724,13 +1830,15 @@ test("the dock's attention list wraps its rows instead of squeezing the title", 
     const rowBox = el.getBoundingClientRect();
     const mainBox = main?.getBoundingClientRect();
     return {
-      wrap: getComputedStyle(el).flexWrap,
+      // Either wrapping the flex line or stacking as a column satisfies "the title is not
+      // squeezed onto the remainder of a line shared with tags and buttons".
+      stacks: getComputedStyle(el).flexWrap === "wrap" || getComputedStyle(el).flexDirection === "column",
       rowWidth: rowBox.width,
       mainWidth: mainBox?.width ?? -1,
       rowHeight: rowBox.height,
     };
   });
-  expect(shape.wrap).toBe("wrap");
+  expect(shape.stacks).toBe(true);
   // The title owns a full line: a bare `flex: 1` would let the tag row push it down to
   // whatever is left, which is exactly how the row became unreadable in the dock.
   expect(shape.mainWidth).toBeGreaterThanOrEqual(shape.rowWidth * 0.9);

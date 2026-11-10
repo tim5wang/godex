@@ -250,6 +250,28 @@ export function listWorkContexts(token: string | null) {
   return request<WorkContext[]>("/v1/work-contexts", { method: "GET" }, token);
 }
 
+/**
+ * WorkSessionIndex is every stream's linked conversations in ONE call, plus two things
+ * the desktop list needs per stream but cannot get from the unread count: the newest
+ * conversation turn (so a card can say WHAT moved) and the seen watermark (so it can tell
+ * a NEW finished conversation from one already read).
+ */
+export interface WorkSessionIndex {
+  sessions: Record<string, WorkSessionLink[]>;
+  last_turn: Record<string, WorkEvent>;
+  seen: Record<string, string>;
+}
+
+/**
+ * getWorkContextSessionIndex answers, for every stream at once: which conversations are
+ * linked, did one just finish, and has the owner seen it. One request instead of an
+ * events read per stream, which is what makes "is one of my streams' conversations
+ * running/finished?" answerable while the desktop sits in the background.
+ */
+export function getWorkContextSessionIndex(token: string | null) {
+  return request<WorkSessionIndex>("/v1/work-context-sessions", { method: "GET" }, token);
+}
+
 export function createWorkContext(token: string | null, input: WorkContextInput) {
   return request<WorkContext>(
     "/v1/work-contexts",

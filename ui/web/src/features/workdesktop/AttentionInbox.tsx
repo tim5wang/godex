@@ -193,42 +193,60 @@ export function AttentionInbox(props: {
         <ul className="wd-attention-list">
           {items.map((item, index) => (
             <li key={`${item.kind}-${item.context_id}-${index}`} className={`wd-attention-item wd-attention-${item.priority}`}>
-              <Tag color={color(item)}>{label(item)}</Tag>
-              {/* A grouped row must SAY it stands for several entries, otherwise the
-                  collapsed line silently hides work. */}
-              {item.count && item.count > 1 ? <Tag>{tr("attentionGrouped", { count: item.count })}</Tag> : null}
-              {/* Leverage: other streams waiting on this one. It is why this row sorts
-                  above an equally urgent row nobody depends on. */}
-              {item.blocked_count ? <Tag color="geekblue">{tr("attentionLeverage", { count: item.blocked_count })}</Tag> : null}
-              <button type="button" className="wd-attention-main" onClick={() => onOpen(item.context_id, item.tab)}>
+              {/* Three tiers, in reading order: what this row IS (kind, how many, what it
+                  blocks, when due), then the one thing you read (title + its stream), then
+                  what you can do. The title is CLAMPED: these titles are frequently whole
+                  checkpoint paragraphs, and one un-truncated row used to grow taller than
+                  the viewport and push every other item off the screen. The full text stays
+                  one hover (title attr) or one click (opens the resolving tab) away. */}
+              <div className="wd-attention-meta">
+                <Tag color={color(item)}>{label(item)}</Tag>
+                {/* A grouped row must SAY it stands for several entries, otherwise the
+                    collapsed line silently hides work. */}
+                {item.count && item.count > 1 ? <Tag>{tr("attentionGrouped", { count: item.count })}</Tag> : null}
+                {/* Leverage: other streams waiting on this one. It is why this row sorts
+                    above an equally urgent row nobody depends on. */}
+                {item.blocked_count ? <Tag color="geekblue">{tr("attentionLeverage", { count: item.blocked_count })}</Tag> : null}
+                {item.due_at ? <span className="wd-muted wd-attention-due">{formatTimestamp(item.due_at)}</span> : null}
+              </div>
+              <button
+                type="button"
+                className="wd-attention-main"
+                title={item.title}
+                onClick={() => onOpen(item.context_id, item.tab)}
+              >
                 <strong>{item.title}</strong>
-                <span className="wd-muted">{item.context_title}</span>
+                <span className="wd-muted wd-attention-context">{item.context_title}</span>
                 {/* The collapsed titles stay readable without opening the stream. */}
-                {item.also?.length ? <span className="wd-muted wd-wrap">{item.also.join(" · ")}</span> : null}
+                {item.also?.length ? (
+                  <span className="wd-muted wd-attention-also" title={item.also.join(" · ")}>{item.also.join(" · ")}</span>
+                ) : null}
               </button>
-              {item.due_at ? <span className="wd-muted wd-attention-due">{formatTimestamp(item.due_at)}</span> : null}
-              <Button size="small" type="link" onClick={() => onOpen(item.context_id, item.tab)}>
-                {tr("attentionOpen")}
-              </Button>
-              {/* The verbs. Each one is a recorded decision, so the row must say which
-                  one a single click applies — no verb silently defaults. They only
-                  appear when a handler is wired, so the board degrades to the old
-                  read-only list instead of offering buttons that do nothing. */}
-              {onAction ? renderVerbs(item.context_id, item.item_key, item.action) : null}
-              {/* Delegating is NOT one of the recorded verbs: it does not rule on the row, it
-                  creates work in the existing delegate flow (which the human still has to
-                  give acceptance criteria for). Offered at ROW level only — the entry list is
-                  already opt-in and would become a wall of buttons with a fourth per entry. */}
-              {onDelegate ? (
-                <Button
-                  size="small"
-                  type="link"
-                  title={tr("attentionDelegateHint")}
-                  onClick={() => onDelegate(item.context_id, item.title)}
-                >
-                  {tr("attentionDelegate")}
+              <div className="wd-attention-actions">
+                <Button size="small" type="link" className="wd-attention-primary" onClick={() => onOpen(item.context_id, item.tab)}>
+                  {tr("attentionOpen")}
                 </Button>
-              ) : null}
+                {/* The verbs. Each one is a recorded decision, so the row must say which
+                    one a single click applies — no verb silently defaults. They only
+                    appear when a handler is wired, so the board degrades to the old
+                    read-only list instead of offering buttons that do nothing. */}
+                {onAction ? renderVerbs(item.context_id, item.item_key, item.action) : null}
+                {/* Delegating is NOT one of the recorded verbs: it does not rule on the row,
+                    it creates work in the existing delegate flow (which the human still has
+                    to give acceptance criteria for). Offered at ROW level only — the entry
+                    list is already opt-in and would become a wall of buttons with a fourth
+                    per entry. */}
+                {onDelegate ? (
+                  <Button
+                    size="small"
+                    type="link"
+                    title={tr("attentionDelegateHint")}
+                    onClick={() => onDelegate(item.context_id, item.title)}
+                  >
+                    {tr("attentionDelegate")}
+                  </Button>
+                ) : null}
+              </div>
               {/* Per-entry verbs are opt-in: most rows are ruled on as a whole, so the
                   entry list starts collapsed rather than stacking three buttons per
                   entry into a triage list. */}

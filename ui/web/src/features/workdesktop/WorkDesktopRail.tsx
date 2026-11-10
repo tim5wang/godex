@@ -5,6 +5,7 @@ import { useWorkDesktopStore } from "./workDesktopStore";
 import { useConversationLayoutStore } from "../chat/layout/layoutStore";
 import { WorkDesktopEditorModal } from "./WorkDesktopEditorModal";
 import { useOpenWorkConversation, useWorkDesktopData } from "./useWorkDesktopData";
+import { mostRecentlyUsedConversation, railAggregates, railStatus } from "./workDesktopView";
 import { ensurePushSubscriptionSilent } from "../../lib/push";
 import { useSettingsStore } from "../../store/settings";
 import "./workDesktop.css";
@@ -12,6 +13,27 @@ import "./workDesktop.css";
 // Fixed palette per status: a status never borrows another status's colour, so the
 // rail, the header and the delegation rows cannot disagree about what "in_review" looks like.
 const statusColor: Record<string, string> = { active: "processing", paused: "orange", archived: "default" };
+
+// The label and tooltip for each conversation state a card can report. A map rather
+// than a template-built key: the two halves must stay in step with railStatus, and a
+// typo would otherwise surface as a raw "workDesktop.railXxx" string in the UI.
+const railStateCopy: Record<"running" | "finished" | "error", { label: string; hint: string }> = {
+  running: { label: "railRunning", hint: "railRunningHint" },
+  finished: { label: "railFinished", hint: "railFinishedHint" },
+  error: { label: "railError", hint: "railErrorHint" },
+};
+
+// Aggregate chips: the label and the tooltip that explains what is counted. Built from maps
+// for the same reason as above — a mismatch would render a raw key, and the tooltip is the
+// only place that says WHICH work the number stands for.
+const AGG_LABEL_KEYS: Record<"attention" | "next", string> = {
+  attention: "railAggAttention",
+  next: "railAggNext",
+};
+const AGG_HINT_KEYS: Record<"attention" | "next", string> = {
+  attention: "railAggAttentionHint",
+  next: "railAggNextHint",
+};
 
 /**
  * The work desktop list, shown in the chat LEFT RAIL when the rail is switched to
@@ -46,7 +68,20 @@ export function WorkDesktopRail(props: { collapsed: boolean; viewSwitcher: React
   const {
     tr, trLabel, filteredContexts, contextId, readOnly, invalidContext,
     unreadByContext, agedByContext, sessions, contextsQuery, unlinkSessionMutation,
+    sessionsByContext, lastTurnByContext, seenByContext, runningSessionIds, activityBySessionId, attentionByContext,
   } = data;
+
+  // Selecting a desktop is also "take me to where the work is": the centre column
+  // follows to that stream's most recently used conversation. Only a click does this —
+  // an effect on the selection would yank the open conversation away on first paint and
+  // while merely peeking at the desktop list. A stream with no linked conversation
+  // leaves the centre column alone rather than emptying it, because there is nothing to
+  // show and a blank chat would look like work was lost.
+  const selectDesktop = (id: string) => {
+    setContextId(id);
+    const target = mostRecentlyUsedConversation(sessionsByContext[id] ?? [], activityBySessionId);
+    if (target) void openConversation(target.session_id);
+  };
 
   // The editor modal is owned by the rail: the rail is mounted whenever the desktop
   // view is shown, while the dock pane is not (its tab can be switched away or the
@@ -135,9 +170,29 @@ export function WorkDesktopRail(props: { collapsed: boolean; viewSwitcher: React
               // on the server (see unreadAgingAfter), so the two views cannot
               // disagree about which streams are stale.
               const aged = agedByContext[item.id] === true;
+              // What this stream's CONVERSATIONS are doing, which is the part of a
+              // stream's state that used to be invisible from the list: running,
+              // finished-since-last-look, or failed. Derived only from server facts.
+              const liveness = railStatus({
+                status: item.status,
+                sessions: sessionsByContext[item.id] ?? [],
+                lastTurn: lastTurnByContext[item.id],
+                seenAt: seenByContext[item.id],
+                runningSessionIds,
+              });
               // Only the ACTIVE desktop shows its linked conversations inline; showing
               // every desktop's conversations at once would turn the list into a wall.
               const linked = active ? sessions : [];
+              // What is outstanding on this stream, as counts. Zeros are dropped by the
+              // helper, so a calm stream shows one quiet line instead of a row of zeroes.
+              const aggregates = railAggregates({
+                checkpoint: item.checkpoint,
+                attentionCount: attentionByContext[item.id] ?? 0,
+              });
+              // The prose is no longer the card's second line, but it is still the most
+              // human-readable statement of where the stream stands, so it stays on the
+              // tooltip rather than being thrown away.
+              const summaryText = item.checkpoint.summary || item.goal || item.background;
               return (
                 <div key={item.id} className="wd-rail-item-wrap">
                   {/* The unread badge sits OUTSIDE the card's own button: a button
@@ -167,7 +222,7 @@ export function WorkDesktopRail(props: { collapsed: boolean; viewSwitcher: React
                     type="button"
                     className={`wd-rail-item ${active ? "wd-rail-item-selected" : ""}`}
                     aria-current={active ? "true" : undefined}
-                    onClick={() => setContextId(item.id)}
+                    onClick={() => selectDesktop(item.id)}
                   >
                     <span className="wd-rail-item-top">
                       <strong>{item.title}</strong>
@@ -175,9 +230,39 @@ export function WorkDesktopRail(props: { collapsed: boolean; viewSwitcher: React
                         <span className={`wd-status-dot wd-status-${item.status}`} />
                       </Space>
                     </span>
-                    <span className="wd-rail-item-summary">{item.checkpoint.summary || item.goal || item.background}</span>
+                    {/* Counts instead of the checkpoint's prose. The prose is clamped to two
+                        lines, so what reached the eye was an arbitrary PREFIX of a long
+                        paragraph — a dozen characters that answered nothing. Counts answer the
+                        list's actual question (which stream is waiting on me, and for what) at
+                        a width that cannot degrade as someone writes a longer summary. The prose
+                        is not lost: it stays reachable on the tooltip and in full on Overview. */}
+                    <span className="wd-rail-item-aggs">
+                      {aggregates.length ? aggregates.map((agg) => (
+                        <Tooltip key={agg.key} title={tr(AGG_HINT_KEYS[agg.key], { count: agg.count })}>
+                          <span className={`wd-rail-agg wd-rail-agg-${agg.key}`}>
+                            {tr(AGG_LABEL_KEYS[agg.key], { count: agg.count })}
+                          </span>
+                        </Tooltip>
+                      )) : (
+                        <Tooltip title={summaryText}>
+                          <span className="wd-rail-agg wd-rail-agg-none">{tr("railAggNone")}</span>
+                        </Tooltip>
+                      )}
+                    </span>
                     <span className="wd-rail-item-meta">
                       <Tag color={statusColor[item.status] ?? "default"}>{trLabel("", item.status)}</Tag>
+                      {/* The live conversation state REPLACES the bare checkpoint revision
+                          in the prominent slot: "checkpoint r7" says when the document was
+                          written, while "conversation finished" says what is waiting for
+                          the user — and the revision is still there right after it. */}
+                      {liveness.kind !== "idle" ? (
+                        <Tooltip title={tr(railStateCopy[liveness.kind].hint)}>
+                          <span className={`wd-rail-state wd-rail-state-${liveness.kind}`} data-testid={`wd-rail-state-${liveness.kind}`}>
+                            <span className="wd-rail-state-dot" />
+                            {tr(railStateCopy[liveness.kind].label)}
+                          </span>
+                        </Tooltip>
+                      ) : null}
                       <span className="wd-muted">{tr("revision", { revision: item.checkpoint.revision })}</span>
                     </span>
                   </button>

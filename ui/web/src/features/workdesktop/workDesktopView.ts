@@ -1,4 +1,4 @@
-import type { WorkDelegation, WorkRelation } from "../../lib/apiWorkContext";
+import type { WorkCheckpoint, WorkDelegation, WorkEvent, WorkRelation, WorkSessionLink } from "../../lib/apiWorkContext";
 
 // Pure helpers for the Work Desktop page. Kept separate from the components so the
 // rules the design calls out (read-only when archived, http(s)-only external links,
@@ -42,6 +42,175 @@ export function filterContexts<T extends { title: string; background: string; go
   const needle = search.trim().toLocaleLowerCase();
   if (!needle) return contexts;
   return contexts.filter((item) => `${item.title} ${item.background} ${item.goal}`.toLocaleLowerCase().includes(needle));
+}
+
+// ---------------------------------------------------------------------------
+// Rail status
+//
+// A rail card used to show only the stream's own state (active/paused/archived) plus a
+// bare revision, so all the work happening in a stream's CONVERSATIONS was invisible
+// unless you opened it. These helpers derive what a card can honestly say about that
+// work from server facts already fetched — no new model, no guessing. The rule
+// throughout: a claim is only made when the data proves it.
+// ---------------------------------------------------------------------------
+
+/** The server's own turn outcome, read off the recorded event title ("<title> · <status>"). */
+export type RailTurnStatus = "completed" | "error" | "canceled" | "interrupted" | "unknown";
+
+export type RailStatusKind = "running" | "finished" | "error" | "idle";
+
+export interface RailStatus {
+  kind: RailStatusKind;
+  /** The linked conversation the status is about, when there is one. */
+  sessionId: string;
+  /** When it last moved (RFC3339 as stored), for the tooltip. */
+  at: string;
+}
+
+/**
+ * turnStatusFromTitle splits the status back out of a recorded turn event's title.
+ *
+ * The turn event's title is "<conversation> · <status>"; the status suffix is the only
+ * place the outcome is recorded, and an unrecognised suffix must degrade to "unknown"
+ * rather than being reported as a success — a card that shows a tick for a turn that
+ * actually failed is worse than one that shows nothing.
+ */
+export function turnStatusFromTitle(title: string | undefined): RailTurnStatus {
+  const text = (title ?? "").trim();
+  const at = text.lastIndexOf(" · ");
+  if (at < 0) return "unknown";
+  const suffix = text.slice(at + 3).trim();
+  switch (suffix) {
+    case "completed":
+      return "completed";
+    case "error":
+      return "error";
+    case "canceled":
+      return "canceled";
+    case "interrupted":
+      return "interrupted";
+    default:
+      return "unknown";
+  }
+}
+
+/**
+ * railStatus decides one word for a stream's conversation work, in priority order:
+ * running > error > finished > idle.
+ *
+ * Running wins because a stream that is working right now is the one fact the user must
+ * not miss. Error outranks a clean finish because it needs the same slot and is the more
+ * urgent of the two. "Finished" requires BOTH a completed turn newer than the seen
+ * watermark AND a linked conversation — without the watermark check a stream would claim
+ * "finished" forever after its first turn, and without a link the event would be
+ * attributable to no conversation. An archived stream reports nothing: it is read-only,
+ * so "running" cannot be true of it.
+ */
+export function railStatus(input: {
+  status: string | undefined;
+  sessions: WorkSessionLink[];
+  lastTurn: WorkEvent | undefined;
+  seenAt: string | undefined;
+  runningSessionIds: ReadonlySet<string>;
+}): RailStatus {
+  const { status, sessions, lastTurn, seenAt, runningSessionIds } = input;
+  const links = sessions ?? [];
+  if (isReadOnly(status) || links.length === 0) {
+    return { kind: "idle", sessionId: "", at: "" };
+  }
+  const running = links.find((link) => runningSessionIds.has(link.session_id));
+  if (running) {
+    return { kind: "running", sessionId: running.session_id, at: "" };
+  }
+  if (!lastTurn) {
+    return { kind: "idle", sessionId: "", at: "" };
+  }
+  // The event is owned by the stream, but the card must name the conversation it is
+  // about, so it is matched by session id; an event for an unlinked session is ignored
+  // rather than mis-attributed to a link that happens to exist.
+  const owner = lastTurn.source.startsWith("session://") ? lastTurn.source.slice("session://".length) : "";
+  const link = links.find((item) => item.session_id === owner);
+  if (!link) {
+    return { kind: "idle", sessionId: "", at: "" };
+  }
+  const outcome = turnStatusFromTitle(lastTurn.title);
+  if (outcome === "error") {
+    return { kind: "error", sessionId: link.session_id, at: lastTurn.created_at };
+  }
+  if (outcome !== "completed") {
+    return { kind: "idle", sessionId: "", at: "" };
+  }
+  // ISO-8601 UTC strings compare correctly as text, which is exactly how the server
+  // compares them; an empty watermark means "everything is new" (never marked seen).
+  if ((seenAt ?? "") >= lastTurn.created_at) {
+    return { kind: "idle", sessionId: "", at: lastTurn.created_at };
+  }
+  return { kind: "finished", sessionId: link.session_id, at: lastTurn.created_at };
+}
+
+// ---------------------------------------------------------------------------
+// Rail card aggregates
+//
+// The card's second line used to be `checkpoint.summary`, i.e. free prose. The card clamps
+// it to two lines, so what actually reached the eye was an arbitrary PREFIX of a long
+// paragraph ("下一步建议…") — a dozen characters that answered no question. Counts answer
+// the question the list exists to answer — which stream is waiting on me, and for what —
+// at a fixed width that cannot degrade with the length of someone's prose.
+// ---------------------------------------------------------------------------
+
+/** What a card counts. Two DISJOINT populations, which is the whole point: see below. */
+export type RailAggregateKey = "attention" | "next";
+
+export interface RailAggregate {
+  key: RailAggregateKey;
+  count: number;
+}
+
+/**
+ * railAggregates turns a stream's outstanding work into counts for its rail card.
+ *
+ * Two chips only, and they are deliberately DISJOINT populations:
+ *
+ *   attention — what needs the user, from the cross-stream inbox response.
+ *   next      — the checkpoint's forward-looking next actions.
+ *
+ * The checkpoint's blockers and open questions are NOT separate chips even though they are
+ * easy counts to add. The inbox ALREADY includes them (kinds `checkpoint_blocker` and
+ * `checkpoint_question`), so rendering "待处理 3 · 阻塞 1 · 待确认 1" would count the same
+ * entry twice and leave the reader adding the row up wrong — the exact unreadability this
+ * line replaced prose to avoid. The disjointness is what makes the row trustworthy.
+ *
+ * Zero counts are DROPPED rather than rendered as 0: a row of zeroes would make every calm
+ * stream look like it has a dashboard, and the card only has room for what is real.
+ *
+ * `attentionCount` is passed in because it comes from the inbox rather than the checkpoint:
+ * the inbox counts ACTIONABLE items and must stay deterministic, so this function never
+ * derives one from the other.
+ */
+export function railAggregates(input: {
+  checkpoint: Pick<WorkCheckpoint, "next_actions"> | undefined;
+  attentionCount?: number;
+}): RailAggregate[] {
+  const candidates: RailAggregate[] = [
+    { key: "attention", count: input.attentionCount ?? 0 },
+    { key: "next", count: input.checkpoint?.next_actions?.length ?? 0 },
+  ];
+  return candidates.filter((item) => item.count > 0);
+}
+
+/** The conversation a stream should open when it is selected in the rail. */
+export function mostRecentlyUsedConversation(
+  sessions: WorkSessionLink[],
+  activityBySessionId: Record<string, string>,
+): WorkSessionLink | undefined {
+  if (!sessions?.length) return undefined;
+  return [...sessions].sort((left, right) => {
+    const leftAt = activityBySessionId[left.session_id] ?? "";
+    const rightAt = activityBySessionId[right.session_id] ?? "";
+    if (leftAt !== rightAt) return rightAt.localeCompare(leftAt);
+    // Deterministic tiebreak so the choice cannot flicker between renders.
+    return left.id.localeCompare(right.id);
+  })[0];
 }
 
 /** delegationsNeedingReview counts cards sitting in review, for the header hint. It

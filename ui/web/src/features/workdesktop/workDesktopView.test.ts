@@ -8,10 +8,14 @@ import {
   isExternalLink,
   isReadOnly,
   joinLines,
+  mostRecentlyUsedConversation,
   otherSide,
+  railAggregates,
+  railStatus,
   splitLines,
+  turnStatusFromTitle,
 } from "./workDesktopView";
-import type { WorkDelegation, WorkRelation } from "../../lib/apiWorkContext";
+import type { WorkDelegation, WorkEvent, WorkRelation, WorkSessionLink } from "../../lib/apiWorkContext";
 
 function relation(from: string, to: string): WorkRelation {
   return { id: `${from}-${to}`, from_id: from, to_id: to, kind: "related_to", condition: "", created_at: "" };
@@ -146,5 +150,113 @@ describe("acceptance package", () => {
       merge_report: { conflicts: [{ path: "p1", other_card: "card-2" }, { path: "p2", other_path: "p3" }] },
     });
     expect(pkg.conflicts).toEqual([{ path: "p1", other: "card-2" }, { path: "p2", other: "p3" }]);
+  });
+});
+
+describe("rail status", () => {
+  const link = (sessionId: string, id = sessionId): WorkSessionLink => ({ id, session_id: sessionId, topic: "", created_at: "2026-11-01T00:00:00Z" });
+  const turn = (sessionId: string, status: string, at: string): WorkEvent => ({
+    id: "ev-turn", context_id: "ctx-1", kind: "session_turn",
+    title: `短句回归排查 · ${status}`, source: `session://${sessionId}`, created_at: at,
+  });
+  const none = new Set<string>();
+
+  it("reads the outcome back out of the recorded title", () => {
+    expect(turnStatusFromTitle("对话 · completed")).toBe("completed");
+    expect(turnStatusFromTitle("对话 · error")).toBe("error");
+    expect(turnStatusFromTitle("对话 · canceled")).toBe("canceled");
+    // A title with no status suffix, or one this build does not know, is "unknown" —
+    // never a silent success, because a false tick is worse than no tick.
+    expect(turnStatusFromTitle("短句回归排查")).toBe("unknown");
+    expect(turnStatusFromTitle("对话 · renamed_in_a_newer_build")).toBe("unknown");
+    expect(turnStatusFromTitle(undefined)).toBe("unknown");
+  });
+
+  it("reports running ahead of everything else, from the live session list", () => {
+    const got = railStatus({
+      status: "active", sessions: [link("s1")],
+      lastTurn: turn("s1", "error", "2026-11-09T00:00:00Z"),
+      seenAt: "", runningSessionIds: new Set(["s1"]),
+    });
+    expect(got.kind).toBe("running");
+    expect(got.sessionId).toBe("s1");
+  });
+
+  it("says finished only for a completed turn newer than the seen watermark", () => {
+    const base = { status: "active", sessions: [link("s1")], runningSessionIds: none };
+    expect(railStatus({ ...base, lastTurn: turn("s1", "completed", "2026-11-09T10:00:00Z"), seenAt: "2026-11-09T09:00:00Z" }).kind).toBe("finished");
+    // Already seen: the same turn is no longer news, or the card would say "finished" forever.
+    expect(railStatus({ ...base, lastTurn: turn("s1", "completed", "2026-11-09T09:00:00Z"), seenAt: "2026-11-09T10:00:00Z" }).kind).toBe("idle");
+    // Never marked seen (empty watermark) counts as new.
+    expect(railStatus({ ...base, lastTurn: turn("s1", "completed", "2026-11-09T09:00:00Z"), seenAt: "" }).kind).toBe("finished");
+    // A failed turn is NOT reported as finished — it takes the error slot instead.
+    expect(railStatus({ ...base, lastTurn: turn("s1", "error", "2026-11-09T10:00:00Z"), seenAt: "" }).kind).toBe("error");
+  });
+
+  it("claims nothing it cannot attribute: no links, archived stream, or a turn for an unlinked session", () => {
+    expect(railStatus({ status: "active", sessions: [], lastTurn: turn("s1", "completed", "2026-11-09T10:00:00Z"), seenAt: "", runningSessionIds: none }).kind).toBe("idle");
+    // Archived is read-only, so "running" cannot be true of it either.
+    expect(railStatus({ status: "archived", sessions: [link("s1")], lastTurn: undefined, seenAt: "", runningSessionIds: new Set(["s1"]) }).kind).toBe("idle");
+    expect(railStatus({ status: "active", sessions: [link("s1")], lastTurn: turn("s9", "completed", "2026-11-09T10:00:00Z"), seenAt: "", runningSessionIds: none }).kind).toBe("idle");
+  });
+});
+
+describe("rail aggregates", () => {
+  it("counts the two disjoint populations, need-me first", () => {
+    const got = railAggregates({
+      checkpoint: { next_actions: ["a", "b", "c"] },
+      attentionCount: 2,
+    });
+    expect(got).toEqual([
+      { key: "attention", count: 2 },
+      { key: "next", count: 3 },
+    ]);
+  });
+
+  it("never double-counts the checkpoint entries the inbox already includes", () => {
+    // The inbox already surfaces checkpoint blockers and open questions (kinds
+    // checkpoint_blocker / checkpoint_question). If those were ALSO rendered as their own
+    // chips, the row would add up wrong — e.g. "need me 3 · blocked 1 · open 1" for one
+    // blocker and one question. The disjointness is the property under test, so this
+    // asserts the exact key set a card can ever produce.
+    const got = railAggregates({
+      checkpoint: { next_actions: [] },
+      attentionCount: 1,
+    });
+    expect(got.map((item) => item.key)).toEqual(["attention"]);
+  });
+
+  it("drops zero counts instead of rendering a row of zeroes", () => {
+    // A calm stream must not look like a dashboard, so only real counts are shown. This is
+    // the assertion that fails if the filter is ever "helpfully" removed.
+    const got = railAggregates({ checkpoint: { next_actions: ["only this"] } });
+    expect(got).toEqual([{ key: "next", count: 1 }]);
+  });
+
+  it("treats an empty or missing checkpoint as zero rather than throwing", () => {
+    // A brand-new desktop has an empty checkpoint, and the rail renders it before anything
+    // else exists — so the derivation must survive the empty case.
+    expect(railAggregates({ checkpoint: { next_actions: [] } })).toEqual([]);
+    expect(railAggregates({ checkpoint: undefined })).toEqual([]);
+  });
+});
+
+describe("most recently used conversation", () => {
+  const link = (sessionId: string): WorkSessionLink => ({ id: sessionId, session_id: sessionId, topic: sessionId, created_at: "" });
+
+  it("picks by the session's own activity, not by link order", () => {
+    const sessions = [link("s1"), link("s2")];
+    const got = mostRecentlyUsedConversation(sessions, { s1: "2026-11-01T00:00:00Z", s2: "2026-11-08T00:00:00Z" });
+    expect(got?.session_id).toBe("s2");
+  });
+
+  it("is deterministic when activity is unknown or tied", () => {
+    // A tie or a missing timestamp must not depend on array order, or the centre column
+    // could change conversation between two renders of the same data.
+    const tied = mostRecentlyUsedConversation([link("s2"), link("s1")], {});
+    const tiedAgain = mostRecentlyUsedConversation([link("s1"), link("s2")], {});
+    expect(tied?.session_id).toBe("s1");
+    expect(tiedAgain?.session_id).toBe("s1");
+    expect(mostRecentlyUsedConversation([], {})).toBeUndefined();
   });
 });

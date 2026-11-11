@@ -529,9 +529,30 @@ func newID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// nowRFC3339 returns the current time as UTC RFC3339.
+// stampLayout is the canonical layout for every timestamp this package stores and compares.
+//
+// The fraction is fixed-width on purpose. These columns are TEXT and the queries compare them
+// with plain `>`/`>=`, which SQLite evaluates bytewise, so lexical order only equals
+// chronological order while the fraction keeps a constant width. RFC3339Nano trims trailing
+// zeros, so "...:03.9Z" and "...:03.95Z" compare with the SHORTER string winning on its literal
+// 'Z' (0x5A sorts above every digit) — making a chronologically EARLIER event look later than
+// the watermark that marked it seen. That surfaced as a stream reporting unread items
+// immediately after being marked seen, intermittently (only when both stamps land in the same
+// second with that prefix relationship). Zero-padding removes the ambiguity.
+const stampLayout = "2006-01-02T15:04:05.000000000Z07:00"
+
+// formatStamp renders a time in the canonical, lexically-sortable stored form.
+//
+// Every writer AND every comparison parameter goes through it, so the ordering invariant holds
+// on both sides of a comparison. A variable-width stamp left in older rows would only
+// mis-sort within its own second, and only against a watermark in that same second.
+func formatStamp(t time.Time) string {
+	return t.UTC().Format(stampLayout)
+}
+
+// nowRFC3339 returns the current time in the canonical stored form.
 func nowRFC3339() string {
-	return time.Now().UTC().Format(time.RFC3339Nano)
+	return formatStamp(time.Now())
 }
 
 // --- scope isolation ---

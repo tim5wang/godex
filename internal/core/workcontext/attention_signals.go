@@ -206,7 +206,7 @@ func (s *Store) RecentEventStamps(ctx context.Context, scope Scope, lookback tim
 		WHERE c.tenant_id = ? AND c.owner_id = ? AND c.status <> 'archived'
 			AND e.created_at >= ?
 		ORDER BY e.created_at DESC
-		LIMIT ?`, tenantID, ownerID, time.Now().Add(-lookback).UTC().Format(time.RFC3339Nano), limit)
+		LIMIT ?`, tenantID, ownerID, formatStamp(time.Now().Add(-lookback)), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -242,6 +242,6 @@ func (s *Store) CountEventsByKindSinceForContext(ctx context.Context, scope Scop
 		WHERE e.tenant_id = ? AND c.owner_id = ? AND e.context_id = ?
 		  AND e.kind = ? AND e.created_at >= ?`,
 		tenantID, ownerID, strings.TrimSpace(contextID), strings.TrimSpace(kind),
-		since.UTC().Format(time.RFC3339Nano)).Scan(&count)
+		formatStamp(since)).Scan(&count)
 	return count, err
 }

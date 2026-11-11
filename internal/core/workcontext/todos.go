@@ -280,7 +280,7 @@ func (s *Store) CountTodosCompletedSince(ctx context.Context, scope Scope, since
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM wc_todos
 		WHERE tenant_id=? AND owner_id=? AND status='done' AND completed_at >= ?`,
-		tenantID, ownerID, since.UTC().Format(time.RFC3339Nano)).Scan(&count)
+		tenantID, ownerID, formatStamp(since)).Scan(&count)
 	return count, err
 }
 

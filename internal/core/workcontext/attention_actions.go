@@ -198,7 +198,7 @@ func (s *Store) UpsertAttentionAction(ctx context.Context, scope Scope, contextI
 	if _, err := requireEditableContextTx(ctx, tx, tenantID, ownerID, contextID); err != nil {
 		return AttentionAction{}, err
 	}
-	stamp := now.UTC().Format(time.RFC3339Nano)
+	stamp := formatStamp(now)
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO wc_attention_actions(tenant_id, context_id, owner_id, item_key, verb, until_at, reason, actor_id, created_at, updated_at)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -296,6 +296,6 @@ func (s *Store) CountAttentionActionsSince(ctx context.Context, scope Scope, sin
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM wc_attention_actions
 		WHERE tenant_id=? AND owner_id=? AND updated_at >= ?`,
-		tenantID, ownerID, since.UTC().Format(time.RFC3339Nano)).Scan(&count)
+		tenantID, ownerID, formatStamp(since)).Scan(&count)
 	return count, err
 }

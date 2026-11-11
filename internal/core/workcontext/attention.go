@@ -101,7 +101,7 @@ func (s *Store) CountEventsByKindSince(ctx context.Context, scope Scope, kind st
 		SELECT COUNT(*) FROM wc_events e
 		JOIN wc_contexts c ON c.tenant_id = e.tenant_id AND c.id = e.context_id
 		WHERE e.tenant_id = ? AND c.owner_id = ? AND e.kind = ? AND e.created_at >= ?`,
-		tenantID, ownerID, strings.TrimSpace(kind), since.UTC().Format(time.RFC3339Nano)).Scan(&count)
+		tenantID, ownerID, strings.TrimSpace(kind), formatStamp(since)).Scan(&count)
 	return count, err
 }
 

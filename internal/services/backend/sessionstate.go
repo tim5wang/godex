@@ -18,17 +18,26 @@ func (s *sessionState) acquire(ctx context.Context) (func(), error) {
 	case <-s.gate:
 	}
 	s.mu.Lock()
+	if s.stopping {
+		s.mu.Unlock()
+		s.gate <- struct{}{}
+		return nil, ErrRuntimeStopping
+	}
 	s.running = true
 	s.mu.Unlock()
 
 	return func() {
 		s.mu.Lock()
 		s.running = false
+		s.notifyIdleLocked()
 		s.mu.Unlock()
 		s.gate <- struct{}{}
 	}, nil
 }
 
+// tryAcquire also refuses while draining. The queued-turn hand-off reaches here from a
+// finishing turn's goroutine, so without this a drain would chase a moving target: every
+// turn it waited for would start the next one on its way out.
 func (s *sessionState) tryAcquire() (func(), bool) {
 	select {
 	case <-s.gate:
@@ -36,15 +45,52 @@ func (s *sessionState) tryAcquire() (func(), bool) {
 		return nil, false
 	}
 	s.mu.Lock()
+	if s.stopping {
+		s.mu.Unlock()
+		s.gate <- struct{}{}
+		return nil, false
+	}
 	s.running = true
 	s.mu.Unlock()
 
 	return func() {
 		s.mu.Lock()
 		s.running = false
+		s.notifyIdleLocked()
 		s.mu.Unlock()
 		s.gate <- struct{}{}
 	}, true
+}
+
+// notifyIdleLocked wakes drainers. Callers must hold s.mu.
+func (s *sessionState) notifyIdleLocked() {
+	if s.idle != nil {
+		s.idle.Broadcast()
+	}
+}
+
+// trackBackground registers a detached writer that is not a turn, so a drain waits for it.
+// The title generator is the one that matters: it runs on its own 15s timer outside the
+// turn's lifetime and rewrites the session manifest.
+func (s *sessionState) trackBackground() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.bgCount++
+	s.mu.Unlock()
+}
+
+func (s *sessionState) untrackBackground() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.bgCount > 0 {
+		s.bgCount--
+	}
+	s.notifyIdleLocked()
+	s.mu.Unlock()
 }
 
 func (s *sessionState) setActiveTurn(turnID string, cancel context.CancelCauseFunc, startedAt time.Time) {
@@ -78,6 +124,8 @@ func (s *sessionState) clearActiveTurn(turnID string) {
 		return
 	}
 	s.active = nil
+	// The turn has actually exited now, which is the only moment a drain can trust.
+	s.notifyIdleLocked()
 }
 
 func (s *sessionState) cancelActiveTurn(turnID string) (string, bool) {

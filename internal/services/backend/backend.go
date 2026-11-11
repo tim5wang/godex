@@ -429,6 +429,20 @@ type sessionState struct {
 	timeline *events.Recorder
 	journal  *sessionEventBatcher
 	active   *activeTurn
+	// stopping refuses new work while the runtime drains (see drain.go).
+	stopping bool
+	// bgCount counts detached writers that are not turns (the title generator).
+	// Drain has to wait for these too, because they write files after the turn ends.
+	bgCount int
+	// bgCtx is the parent of detached writers' contexts. A drain cancels it so such a
+	// writer returns promptly instead of spending its own (longer) timeout first.
+	// Dropped after a drain so a stopped-then-started service works.
+	bgCtx    context.Context
+	bgCancel context.CancelCauseFunc
+	// idle is a lazily created condition for "this session has gone quiet". Lazily,
+	// because it must cover every session constructor without threading a change
+	// through the struct literals in load.go and session.go.
+	idle *sync.Cond
 
 	timelineMu sync.Mutex
 	turnsMu    sync.RWMutex

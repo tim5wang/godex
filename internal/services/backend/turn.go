@@ -92,6 +92,12 @@ func (s *Service) enqueueTurn(session *sessionState, envelope message.Envelope, 
 	if session == nil {
 		return nil, ErrSessionNotFound
 	}
+	// The single funnel for queued work. Every entry point that cannot start a turn
+	// immediately lands here (a busy session, and any submit during a drain), and this writes
+	// session files — so refusing here is what keeps a drain ahead of new writes.
+	if session.isStopping() {
+		return nil, ErrRuntimeStopping
+	}
 	now := s.now()
 	if envelope.Timestamp.IsZero() {
 		envelope.Timestamp = now

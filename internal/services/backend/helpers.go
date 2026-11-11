@@ -207,9 +207,15 @@ func (s *Service) maybeGenerateTitleAsync(session *sessionState, envelope messag
 	if firstMessage == "" {
 		return
 	}
+	// Registered before the goroutine starts so a drain that begins in between still sees it
+	// and waits, instead of returning while this writer is about to run. The context derives
+	// from the session's background context so a drain can cancel it: this call's own 15s
+	// timeout is longer than a shutdown budget, so waiting it out would blow the deadline.
+	session.trackBackground()
 	go func() {
+		defer session.untrackBackground()
 		defer func() { recover() }()
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(session.backgroundContext(), 15*time.Second)
 		defer cancel()
 		// Additional recover because client.Call may panic in test stubs
 		var title string

@@ -79,6 +79,9 @@ type Agent struct {
 	// (roadmap 6.1 content-level security screener).
 	screener    security.Screener
 	screenAudit screenAuditFn
+	// bgWork tracks detached writers (see background_work.go): the shadow screener records
+	// its audit asynchronously, so a drain has to wait for it before the workspace goes away.
+	bgWork backgroundWork
 	// decisionCaller runs low-cost structured decision nodes (Jev/Laya-class
 	// System-1 models); nil means decision nodes fail_closed (F0 flow runtime).
 	decisionCaller      decision.Caller

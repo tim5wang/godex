@@ -2307,14 +2307,23 @@ func newTestAgent(t *testing.T, compressThreshold int) *Agent {
 			running := a.compactionRunning
 			a.compactionMu.Unlock()
 			if !running {
-				return
+				break
 			}
 			if time.Now().After(deadline) {
 				t.Error("timed out waiting for background compaction")
-				return
+				break
 			}
 			time.Sleep(time.Millisecond)
 		}
+		// Then wait for detached writers. Durable subagent jobs finish asynchronously (their
+		// status flips inside the job, while the goroutine still releases the lease and may
+		// start follow-ups), and the shadow security screener records its audit off-thread.
+		// Both write inside the temp workspace, so without this wait they race TempDir's
+		// RemoveAll and fail it with "directory not empty" — a flake in whichever test
+		// happened to finish first, not a defect in that test.
+		waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = a.WaitBackground(waitCtx)
 	})
 	return a
 }

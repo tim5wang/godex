@@ -74,7 +74,9 @@ func (s *Service) Stop(ctx context.Context) error {
 	sessionScheduler := s.flowSessionScheduler
 	if cancel == nil && sessionScheduler == nil {
 		s.flowReconcilerMu.Unlock()
-		return nil
+		// Still drain: a service that never had Start called on it can still hold turns
+		// whose detached goroutines are writing session files.
+		return s.WaitIdleSessions(ctx)
 	}
 	s.flowReconcilerCancel = nil
 	s.flowReconcilerDone = nil
@@ -113,7 +115,10 @@ func (s *Service) Stop(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
-	return s.finishFlowSessionStop(stateLock)
+	// Drain in-flight turns last: the background services above could still start work, and a
+	// turn's writes come from detached goroutines that outlive Submit. This is the step that
+	// makes shutdown (and a test's TempDir cleanup) stop racing those writes.
+	return errors.Join(s.finishFlowSessionStop(stateLock), s.WaitIdleSessions(ctx))
 }
 
 func (s *Service) finishFlowSessionStop(stateLock *processlock.Lock) error {

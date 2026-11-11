@@ -417,11 +417,18 @@ func (a *Agent) runSubagentJobAsync(id string, target subagentEventTarget) {
 		}
 	}
 
+	// Tracked so a drain (or a test's cleanup) can wait for the job's writes to land: the job is
+	// marked finished inside runSubagentJob, but this goroutine's deferred release and any
+	// follow-up job it starts happen afterwards.
+	a.bgWork.start()
 	go func() {
 		defer func() {
 			leaseRelease()
 			a.subagentJobs.ClearActive(id)
+			// Starting follow-ups before releasing the count keeps a nested job from being
+			// missed: its own start() lands first, so the count never dips to zero early.
 			a.startPendingSubagents(target.sink)
+			a.bgWork.done()
 		}()
 		a.runSubagentJob(runCtx, id, target)
 	}()

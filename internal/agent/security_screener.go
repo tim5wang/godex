@@ -71,7 +71,11 @@ func (a *Agent) SetScreenAudit(fn screenAuditFn) {
 func (a *Agent) ScreenUserInput(ctx context.Context, text string, metadata map[string]string) security.ScreenVerdict {
 	s := a.activeScreener()
 	if s.Shadow() {
+		// Tracked so a session drain can wait for the audit write below: it happens after this
+		// call returns, and after the turn that triggered it may already have finished.
+		a.bgWork.start()
 		go func() {
+			defer a.bgWork.done()
 			child, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			verdict := s.Classify(child, text, security.ScreenHookUserInput, metadata)
@@ -90,7 +94,10 @@ func (a *Agent) ScreenUserInput(ctx context.Context, text string, metadata map[s
 func (a *Agent) screenToolResult(ctx context.Context, tool conversation.ExecutedTool) security.ScreenVerdict {
 	s := a.activeScreener()
 	if s.Shadow() {
+		// Tracked for the same reason as ScreenUserInput above.
+		a.bgWork.start()
 		go func() {
+			defer a.bgWork.done()
 			child, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			verdict := s.Classify(child, tool.Output, security.ScreenHookToolResponse, map[string]string{

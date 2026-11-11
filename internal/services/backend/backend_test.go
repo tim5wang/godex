@@ -1294,9 +1294,9 @@ func TestClearCommandResetsPromptStateAndQueuedTurns(t *testing.T) {
 		a.ClearMessages()
 		return commands.Result{Name: "clear", Output: "cleared", RefreshSnapshot: true}, nil
 	})
-	service := NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &stubCaller{
+	service := trackTestService(cfg, NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &stubCaller{
 		responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("done")}}},
-	}), commandService)
+	}), commandService))
 
 	opened, err := service.OpenSession(context.Background(), SessionLocator{Channel: "weixin", Key: "default:user-1", UserID: "user-1"})
 	if err != nil {
@@ -3280,7 +3280,29 @@ func apiMessagesText(messages []protocol.APIMessage) string {
 
 func newTestService(cfg *config.Config, caller *stubCaller) *Service {
 	shared := agent.NewSharedDependenciesWithCaller(cfg, caller)
-	return NewService(cfg, shared, commands.NewService(cfg))
+	return trackTestService(cfg, NewService(cfg, shared, commands.NewService(cfg)))
+}
+
+// testDrainTargets records the services built for a test's config so newTestConfig's cleanup
+// can drain them. A test that ends while a detached turn goroutine is still writing fails in
+// t.TempDir()'s RemoveAll with "directory not empty", which is why the drain must happen
+// BEFORE the temp dir is removed. Cleanups run last-registered-first, and newTestConfig runs
+// before any service is built, so its cleanup runs after the service's would-be one.
+var (
+	testDrainMu      sync.Mutex
+	testDrainTargets = map[*config.Config][]*Service{}
+)
+
+// trackTestService registers a service for its config's drain cleanup and returns it
+// unchanged, so call sites read as a plain constructor.
+func trackTestService(cfg *config.Config, service *Service) *Service {
+	if cfg == nil || service == nil {
+		return service
+	}
+	testDrainMu.Lock()
+	testDrainTargets[cfg] = append(testDrainTargets[cfg], service)
+	testDrainMu.Unlock()
+	return service
 }
 
 func containsBackgroundText(messages []protocol.Message, needle string) bool {
@@ -3548,6 +3570,24 @@ func newTestConfig(t *testing.T) *config.Config {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
 	}
+	// Drain before TempDir's own cleanup removes the workspace. Assertions have already run by
+	// now (t.Cleanup is after the test body), so cancelling in-flight turns here cannot hide a
+	// failure — it only stops background writers from racing RemoveAll.
+	//
+	// Closing the work-context store matters too, and is easy to miss because it looks like a
+	// resource leak rather than a test flake: it is opened lazily on the first turn
+	// (refreshWorkContextFeedback) and left open, so SQLite's -wal/-shm files sit inside the
+	// directory RemoveAll is walking. Closing releases them before the directory is removed.
+	t.Cleanup(func() {
+		testDrainMu.Lock()
+		services := testDrainTargets[cfg]
+		delete(testDrainTargets, cfg)
+		testDrainMu.Unlock()
+		for _, service := range services {
+			_ = service.CancelIdleSessions(context.Background())
+			_ = service.CloseWorkContexts()
+		}
+	})
 	return cfg
 }
 

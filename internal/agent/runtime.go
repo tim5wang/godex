@@ -803,6 +803,11 @@ func restorePermissionState(manager *tools.PermissionManager, sessionID string, 
 
 // RunWithOptions runs the agent loop without assuming any specific frontend.
 func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
+	// A resumed or repeated user request must seed recall even when its text
+	// equals the preceding turn. Only iterations within this run are throttled.
+	a.mu.Lock()
+	a.memoryRecallInjectCount = 0
+	a.mu.Unlock()
 	// Background MCP discovery only updates the shared cache. Install its
 	// latest declarations here, before the turn snapshots its tool catalog.
 	a.registerMCPServerTools(a.toolHandler)
@@ -968,6 +973,7 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 			}
 			req := conversation.NewRequestFromAPIMessages(a.cfg.Model, a.cfg.MaxTokens, a.cfg.ReasoningEffort, build.System, apiMessages, build.ToolSchemas)
 			req.RuntimeTail = build.RuntimeTail
+			req.ContextSources = build.ContextSources
 			if strings.TrimSpace(opts.SessionID) != "" {
 				req.PromptCacheKey = clampCacheKey(opts.SessionID)
 				req.PromptCacheRetention = protocol.CacheRetentionLong

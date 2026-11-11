@@ -356,8 +356,11 @@ func TestProjectLedgerUpdatesAfterCompletedTurn(t *testing.T) {
 	if ledger.Goal != "build a small app" {
 		t.Fatalf("expected user goal in ledger, got %+v", ledger)
 	}
-	if !strings.Contains(ledger.Compact, "implemented first slice") {
-		t.Fatalf("expected assistant handoff in compact ledger, got %q", ledger.Compact)
+	if strings.Contains(ledger.Compact, "implemented first slice") || len(ledger.Decisions) != 0 {
+		t.Fatalf("assistant summary must not become a decision, got %+v", ledger)
+	}
+	if len(ledger.RecentTurns) != 1 || !strings.Contains(ledger.RecentTurns[0].Summary, "implemented first slice") {
+		t.Fatalf("expected summary retained in turn history, got %+v", ledger.RecentTurns)
 	}
 	result, err := service.ExecuteCommand(context.Background(), opened.SessionID, commands.Command{Name: "ledger"})
 	if err != nil {

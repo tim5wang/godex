@@ -150,6 +150,8 @@ type Agent struct {
 	// recall / todos / ledger text is not re-sent on every runner iteration.
 	memoryRecallQuery       string
 	memoryRecallInjectCount int
+	memoryRecallLayers      memory.ContextLayers
+	memoryRecallManager     *memory.Manager
 	lastTodoTailInjected    string
 	lastLedgerTailInjected  string
 	// cacheStatsMu guards cacheStats, the in-memory per-session aggregation
@@ -191,8 +193,9 @@ type Agent struct {
 	// workspace index rendered BEFORE history so the provider prefix cache
 	// survives per-turn churn; file edits are reported via a change note after
 	// history instead of regenerating the snapshot (repo_map.go).
-	repoMapMu sync.Mutex
-	repoMap   repoMapCache
+	repoMapMu            sync.Mutex
+	repoMap              repoMapCache
+	memoryRecallRevision string
 }
 
 type dependencies struct {

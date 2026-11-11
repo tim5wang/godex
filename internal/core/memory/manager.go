@@ -17,8 +17,6 @@ import (
 const (
 	EntrypointName   = "MEMORY.md"
 	IndexFileName    = "index.json"
-	maxPromptLines   = 200
-	maxPromptBytes   = 25000
 	maxRetrievedBody = 500
 )
 
@@ -67,27 +65,36 @@ type Entry struct {
 	// LastReferencedAt records the last time this memory was selected into
 	// prompt context (recall or injection). Zero means it has never been used.
 	LastReferencedAt time.Time `json:"last_referenced_at,omitempty"`
+	// ExpiresAt and SupersededBy describe validity, independently of recency.
+	ExpiresAt    time.Time `json:"expires_at,omitempty"`
+	SupersededBy string    `json:"superseded_by,omitempty"`
+	RecallPolicy string    `json:"recall_policy,omitempty"` // auto (default) or manual
 }
 
 // SaveInput describes one memory to save.
 type SaveInput struct {
-	Title   string
-	Summary string
-	Content string
-	Type    Type
-	Source  string
-	Tags    []string
+	Title        string
+	Summary      string
+	Content      string
+	Type         Type
+	Source       string
+	Tags         []string
+	ExpiresAt    time.Time
+	RecallPolicy string
 }
 
 // UpdateInput updates one durable memory entry identified by title or file.
 type UpdateInput struct {
-	Match   ForgetInput
-	Title   string
-	Summary string
-	Content string
-	Type    Type
-	Source  string
-	Tags    []string
+	Match        ForgetInput
+	Title        string
+	Summary      string
+	Content      string
+	Type         Type
+	Source       string
+	Tags         []string
+	ExpiresAt    *time.Time
+	SupersededBy *string
+	RecallPolicy *string
 }
 
 // ForgetInput identifies one durable memory entry to delete.
@@ -105,8 +112,9 @@ type SearchOptions struct {
 	// Status filters by lifecycle state. Empty means active-only (the default
 	// recall behavior); StatusArchived lists only archived; StatusAll includes
 	// both. Archived memories are excluded from default recall.
-	Status Status
-	Limit  int
+	Status    Status
+	Limit     int
+	Automatic bool // exclude manual-only records from automatic context recall
 }
 
 // RelevantMemory is a retrieved memory entry plus its content.
@@ -145,6 +153,15 @@ type memoryFileCacheEntry struct {
 type indexEnvelope struct {
 	Version int     `json:"version"`
 	Entries []Entry `json:"entries"`
+}
+
+// ContextRevision cheaply invalidates per-session recall after a store write.
+func (m *Manager) ContextRevision() string {
+	info, err := m.statFile(filepath.Join(m.dir, IndexFileName))
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%d:%d", info.ModTime().UnixNano(), info.Size())
 }
 
 // NewManager creates a new memory manager rooted at dir (unspecified scope).
@@ -228,24 +245,13 @@ func (m *Manager) BuildPromptSection() (string, error) {
 		return "", err
 	}
 
-	indexPath := filepath.Join(m.dir, EntrypointName)
-	data, err := os.ReadFile(indexPath)
-	if err != nil {
-		return "", err
-	}
-
-	indexContent := truncateForPrompt(strings.TrimSpace(string(data)))
-	if indexContent == "" {
-		indexContent = "(empty)"
-	}
-
 	lines := []string{
 		"# Memory",
 		"This is durable project memory shared across future sessions. Use it only for facts, preferences, workflows, or warnings that will matter beyond the current conversation.",
 		fmt.Sprintf("- Memory directory: %s", m.dir),
-		"- Use memory tool (action=remember/list/search/get/forget/candidates/accept/dismiss) to manage durable cross-session memory. Do not use memory tools for short-lived task progress.",
-		fmt.Sprintf("Current memory index (%s):", EntrypointName),
-		indexContent,
+		"- Use memory tool (action=remember/update/list/search/get/forget/candidates/accept/dismiss) for durable cross-session memory. Search or get details only when needed; the full index is not injected.",
+		"- Keep task progress and delivery snapshots in session history or the task board. Memory is historical evidence: current user instructions and verified observations take precedence.",
+		"- Correct an existing fact with update instead of appending a contradictory remember. Mark replaced entries with superseded_by and time-limited facts with expires_at.",
 	}
 	return strings.Join(lines, "\n"), nil
 }
@@ -267,13 +273,15 @@ func (m *Manager) Remember(input SaveInput) (*Entry, error) {
 	now := time.Now().UTC()
 	titleKey := strings.ToLower(strings.TrimSpace(input.Title))
 	entry := Entry{
-		Title:       strings.TrimSpace(input.Title),
-		Summary:     strings.TrimSpace(input.Summary),
-		Type:        input.Type,
-		Source:      strings.TrimSpace(input.Source),
-		UpdatedAt:   now,
-		Tags:        normalizeTags(input.Tags),
-		Fingerprint: computeMemoryFingerprint(input.Type, strings.TrimSpace(input.Title), strings.TrimSpace(input.Summary), strings.TrimSpace(input.Content)),
+		Title:        strings.TrimSpace(input.Title),
+		Summary:      strings.TrimSpace(input.Summary),
+		Type:         input.Type,
+		Source:       strings.TrimSpace(input.Source),
+		UpdatedAt:    now,
+		Tags:         normalizeTags(input.Tags),
+		Fingerprint:  computeMemoryFingerprint(input.Type, strings.TrimSpace(input.Title), strings.TrimSpace(input.Summary), strings.TrimSpace(input.Content)),
+		ExpiresAt:    input.ExpiresAt,
+		RecallPolicy: input.RecallPolicy,
 	}
 
 	existingIndex := -1
@@ -287,6 +295,15 @@ func (m *Manager) Remember(input SaveInput) (*Entry, error) {
 			entry.ID = existing.ID
 			entry.File = existing.File
 			entry.CreatedAt = existing.CreatedAt
+			entry.Status = existing.Status
+			entry.LastReferencedAt = existing.LastReferencedAt
+			entry.SupersededBy = existing.SupersededBy
+			if entry.RecallPolicy == "" {
+				entry.RecallPolicy = existing.RecallPolicy
+			}
+			if entry.ExpiresAt.IsZero() {
+				entry.ExpiresAt = existing.ExpiresAt
+			}
 			if entry.Source == "" {
 				entry.Source = existing.Source
 			}
@@ -304,6 +321,9 @@ func (m *Manager) Remember(input SaveInput) (*Entry, error) {
 	}
 	if entry.CreatedAt.IsZero() {
 		entry.CreatedAt = now
+	}
+	if entry.RecallPolicy == "" && entry.Type == TypeProject && isMilestoneTitle(entry.Title) && !hasTag(entry.Tags, "core") {
+		entry.RecallPolicy = "manual"
 	}
 
 	content := strings.TrimSpace(input.Content)
@@ -398,16 +418,43 @@ func (m *Manager) Update(input UpdateInput) (*Entry, error) {
 	}
 	now := time.Now().UTC()
 	entry := Entry{
-		ID:          existing.ID,
-		Title:       strings.TrimSpace(input.Title),
-		File:        existing.File,
-		Summary:     strings.TrimSpace(input.Summary),
-		Type:        input.Type,
-		Source:      strings.TrimSpace(input.Source),
-		CreatedAt:   existing.CreatedAt,
-		UpdatedAt:   now,
-		Tags:        normalizeTags(input.Tags),
-		Fingerprint: computeMemoryFingerprint(input.Type, strings.TrimSpace(input.Title), strings.TrimSpace(input.Summary), strings.TrimSpace(input.Content)),
+		ID:               existing.ID,
+		Title:            strings.TrimSpace(input.Title),
+		File:             existing.File,
+		Summary:          strings.TrimSpace(input.Summary),
+		Type:             input.Type,
+		Source:           strings.TrimSpace(input.Source),
+		CreatedAt:        existing.CreatedAt,
+		UpdatedAt:        now,
+		Tags:             normalizeTags(input.Tags),
+		Fingerprint:      computeMemoryFingerprint(input.Type, strings.TrimSpace(input.Title), strings.TrimSpace(input.Summary), strings.TrimSpace(input.Content)),
+		Status:           existing.Status,
+		LastReferencedAt: existing.LastReferencedAt,
+		ExpiresAt:        existing.ExpiresAt,
+		SupersededBy:     existing.SupersededBy,
+		RecallPolicy:     existing.RecallPolicy,
+	}
+	if input.ExpiresAt != nil {
+		entry.ExpiresAt = input.ExpiresAt.UTC()
+	}
+	if input.RecallPolicy != nil {
+		if *input.RecallPolicy != "auto" && *input.RecallPolicy != "manual" {
+			return nil, fmt.Errorf("recall_policy must be auto or manual")
+		}
+		entry.RecallPolicy = *input.RecallPolicy
+	}
+	if input.SupersededBy != nil {
+		entry.SupersededBy = strings.TrimSpace(*input.SupersededBy)
+		if entry.SupersededBy != "" {
+			replacement, err := m.Get(entry.SupersededBy)
+			if err != nil {
+				return nil, fmt.Errorf("replacement memory: %w", err)
+			}
+			if replacement.ID == entry.ID || !entryRecallEligible(replacement.Entry, now) {
+				return nil, fmt.Errorf("replacement must be a different, currently valid memory")
+			}
+			entry.SupersededBy = replacement.ID
+		}
 	}
 
 	path := filepath.Join(m.dir, entry.File)
@@ -564,6 +611,9 @@ func (m *Manager) searchLinear(opts SearchOptions) ([]StoredMemory, error) {
 		if !entryStatusMatches(entry, opts.Status) {
 			continue
 		}
+		if opts.Automatic && !entryAutoRecallEligible(entry, time.Now()) {
+			continue
+		}
 		if tagFilter != "" && !entryHasTag(entry, tagFilter) {
 			continue
 		}
@@ -625,7 +675,7 @@ func (m *Manager) FindRelevant(query string, limit int) ([]RelevantMemory, error
 		return nil, nil
 	}
 
-	results, err := m.Search(SearchOptions{Query: query, Limit: limit})
+	results, err := m.Search(SearchOptions{Query: query, Limit: limit, Automatic: true})
 	if err != nil {
 		return nil, err
 	}
@@ -692,6 +742,15 @@ func mergeEntryMetadata(indexEntry Entry, fileEntry Entry) Entry {
 	}
 	if merged.LastReferencedAt.IsZero() {
 		merged.LastReferencedAt = fileEntry.LastReferencedAt
+	}
+	if merged.ExpiresAt.IsZero() {
+		merged.ExpiresAt = fileEntry.ExpiresAt
+	}
+	if merged.SupersededBy == "" {
+		merged.SupersededBy = fileEntry.SupersededBy
+	}
+	if merged.RecallPolicy == "" {
+		merged.RecallPolicy = fileEntry.RecallPolicy
 	}
 	return merged
 }

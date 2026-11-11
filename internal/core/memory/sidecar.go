@@ -64,15 +64,28 @@ func (m *Manager) searchWithSidecar(opts SearchOptions) ([]StoredMemory, error) 
 		score  int
 	}
 	scored := make([]scoredMemory, 0, len(entries))
+	// Validity metadata lives in the authoritative index/markdown, not FTS.
+	metadata := make(map[string]Entry, len(entries))
+	for _, entry := range entries {
+		metadata[entry.ID] = entry
+	}
 	for rows.Next() {
 		record, err := scanStoredMemory(rows)
 		if err != nil {
 			return nil, err
 		}
+		if entry, ok := metadata[record.ID]; ok {
+			record.ExpiresAt = entry.ExpiresAt
+			record.SupersededBy = entry.SupersededBy
+			record.RecallPolicy = entry.RecallPolicy
+		}
 		if opts.Type != "" && record.Type != opts.Type {
 			continue
 		}
 		if !entryStatusMatches(record.Entry, opts.Status) {
+			continue
+		}
+		if opts.Automatic && !entryAutoRecallEligible(record.Entry, time.Now()) {
 			continue
 		}
 		if tagFilter != "" && !entryHasTag(record.Entry, tagFilter) {

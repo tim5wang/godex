@@ -71,7 +71,7 @@ func TestStaleProjectLedgerNotInjected(t *testing.T) {
 		if msg.Metadata == nil || msg.Metadata.Kind != protocol.KindBackground {
 			continue
 		}
-		if strings.Contains(protocol.MessageText(msg), "Long-task project ledger") {
+		if strings.Contains(protocol.MessageText(msg), "Session ledger") {
 			t.Fatalf("stale project ledger must not be injected, got %q", protocol.MessageText(msg))
 		}
 	}
@@ -91,7 +91,7 @@ func TestFreshProjectLedgerInjected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build context: %v", err)
 	}
-	if !strings.Contains(build.RuntimeTail, "Long-task project ledger") {
+	if !strings.Contains(build.RuntimeTail, "Session ledger") {
 		t.Fatalf("expected fresh project ledger to be injected, got %q", build.RuntimeTail)
 	}
 }

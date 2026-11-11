@@ -388,6 +388,7 @@ func TestUsageGatewayChatCompletionsStreamsToolCallsSSE(t *testing.T) {
 			`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"stub-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":""}}]}}]}`,
 			`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"stub-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\":\"/tmp/hi\"}"}}]}}]}`,
 			`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"stub-model","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+			`data: [DONE]`,
 		}
 		for _, e := range events {
 			_, _ = io.WriteString(w, e+"\n\n")

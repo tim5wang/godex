@@ -98,12 +98,14 @@ func registerMemoryRoutes(mux *http.ServeMux, service *backend.Service, protecte
 			return
 		}
 		entry, err := service.RememberMemory(r.Context(), memory.SaveInput{
-			Title:   req.Title,
-			Summary: req.Summary,
-			Content: req.Content,
-			Type:    memory.Type(req.MemoryType),
-			Source:  req.Source,
-			Tags:    append([]string{}, req.Tags...),
+			Title:        req.Title,
+			Summary:      req.Summary,
+			Content:      req.Content,
+			Type:         memory.Type(req.MemoryType),
+			Source:       req.Source,
+			Tags:         append([]string{}, req.Tags...),
+			ExpiresAt:    req.ExpiresAt,
+			RecallPolicy: req.RecallPolicy,
 		})
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -122,12 +124,15 @@ func registerMemoryRoutes(mux *http.ServeMux, service *backend.Service, protecte
 				Title: strings.TrimSpace(req.MatchTitle),
 				File:  strings.TrimSpace(req.MatchFile),
 			},
-			Title:   req.Title,
-			Summary: req.Summary,
-			Content: req.Content,
-			Type:    memory.Type(req.MemoryType),
-			Source:  req.Source,
-			Tags:    append([]string{}, req.Tags...),
+			Title:        req.Title,
+			Summary:      req.Summary,
+			Content:      req.Content,
+			Type:         memory.Type(req.MemoryType),
+			Source:       req.Source,
+			Tags:         append([]string{}, req.Tags...),
+			ExpiresAt:    req.ExpiresAt,
+			SupersededBy: req.SupersededBy,
+			RecallPolicy: req.RecallPolicy,
 		})
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)

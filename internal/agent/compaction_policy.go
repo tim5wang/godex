@@ -8,6 +8,7 @@ import (
 	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/compress"
 	"github.com/tim5wang/godex/internal/core/config"
+	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/tools"
 )
 
@@ -537,7 +538,7 @@ func (a *Agent) maybeStartBackgroundCompaction(ctx context.Context) {
 		if err != nil {
 			return
 		}
-		memoryMessages, _, err := a.collectMemoryMessages(history)
+		memoryMessages, memoryLayers, err := a.collectMemoryMessagesReadOnly(history)
 		if err != nil {
 			return
 		}
@@ -550,6 +551,9 @@ func (a *Agent) maybeStartBackgroundCompaction(ctx context.Context) {
 		memoryIndexTokens := 0
 		if _, tokens, memErr := a.buildMemoryIndexPromptMessage(); memErr == nil {
 			memoryIndexTokens = tokens
+		}
+		for _, msg := range memoryLayerMessages(memory.ContextLayers{Identity: memoryLayers.Identity, Core: memoryLayers.Core}) {
+			memoryIndexTokens += compress.CountTokens(protocol.MessageText(msg))
 		}
 		estimate := estimateContextBudget(system, history, memoryMessages, promptStateMessages, runtimeMessages, memoryIndexTokens, a.toolHandler.ActiveSchemas(), a.compactionTriggerTokens())
 		if !a.backgroundCompactionPressure(estimate) {

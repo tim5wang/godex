@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/tim5wang/godex/internal/platform/fsutil"
 )
@@ -139,6 +140,9 @@ func sortEntries(entries []Entry) {
 }
 
 func validateSaveInput(input SaveInput) error {
+	if input.RecallPolicy != "" && input.RecallPolicy != "auto" && input.RecallPolicy != "manual" {
+		return fmt.Errorf("recall_policy must be auto or manual")
+	}
 	switch input.Type {
 	case TypeIdentity, TypeUser, TypeWorkflow, TypeProject, TypeWarning,
 		TypeWorkMethod, TypeWorkFact:
@@ -188,6 +192,15 @@ func renderMemoryFile(entry Entry, content string) string {
 	}
 	if !entry.LastReferencedAt.IsZero() {
 		lines = append(lines, "LastReferenced: "+entry.LastReferencedAt.Format(time.RFC3339))
+	}
+	if !entry.ExpiresAt.IsZero() {
+		lines = append(lines, "ExpiresAt: "+entry.ExpiresAt.Format(time.RFC3339Nano))
+	}
+	if entry.SupersededBy != "" {
+		lines = append(lines, "SupersededBy: "+entry.SupersededBy)
+	}
+	if entry.RecallPolicy != "" {
+		lines = append(lines, "RecallPolicy: "+entry.RecallPolicy)
 	}
 	lines = append(lines, "", strings.TrimSpace(content))
 	return strings.TrimSpace(strings.Join(lines, "\n")) + "\n"
@@ -255,6 +268,14 @@ func parseMemoryRecord(filename string, data []byte, fallbackModTime time.Time) 
 			if ts, err := time.Parse(time.RFC3339, value); err == nil {
 				record.LastReferencedAt = ts
 			}
+		case "expiresat", "expires_at":
+			if ts, err := time.Parse(time.RFC3339Nano, value); err == nil {
+				record.ExpiresAt = ts
+			}
+		case "supersededby", "superseded_by":
+			record.SupersededBy = value
+		case "recallpolicy", "recall_policy":
+			record.RecallPolicy = value
 		default:
 			goto content
 		}
@@ -354,8 +375,17 @@ func entryStatusMatches(entry Entry, filter Status) bool {
 	case StatusArchived:
 		return normalizeStatus(entry.Status) == StatusArchived
 	default: // "" or StatusActive
-		return normalizeStatus(entry.Status) != StatusArchived
+		return entryRecallEligible(entry, time.Now())
 	}
+}
+
+func entryRecallEligible(entry Entry, now time.Time) bool {
+	return normalizeStatus(entry.Status) == StatusActive && entry.SupersededBy == "" &&
+		(entry.ExpiresAt.IsZero() || now.Before(entry.ExpiresAt))
+}
+
+func entryAutoRecallEligible(entry Entry, now time.Time) bool {
+	return entryRecallEligible(entry, now) && entry.RecallPolicy != "manual"
 }
 
 func normalizeTags(tags []string) []string {
@@ -407,34 +437,16 @@ func slugify(title string) string {
 	return strings.Trim(builder.String(), "_")
 }
 
-func truncateForPrompt(content string) string {
-	if content == "" {
-		return ""
-	}
-	lines := strings.Split(content, "\n")
-	lineTruncated := false
-	if len(lines) > maxPromptLines {
-		lines = lines[:maxPromptLines]
-		lineTruncated = true
-	}
-	truncated := strings.Join(lines, "\n")
-	byteTruncated := false
-	if len(truncated) > maxPromptBytes {
-		truncated = truncated[:maxPromptBytes]
-		byteTruncated = true
-	}
-	if lineTruncated || byteTruncated {
-		truncated += "\n\n[Memory index truncated]"
-	}
-	return truncated
-}
-
 func truncateBody(content string) string {
 	content = strings.TrimSpace(content)
 	if len(content) <= maxRetrievedBody {
 		return content
 	}
-	return strings.TrimSpace(content[:maxRetrievedBody]) + "..."
+	end := maxRetrievedBody
+	for end > 0 && !utf8.RuneStart(content[end]) {
+		end--
+	}
+	return strings.TrimSpace(content[:end]) + "..."
 }
 
 func scoreRelevantMemory(queryLower string, terms []string, entry Entry, content string) int {
@@ -484,6 +496,9 @@ func scoreRelevantMemory(queryLower string, terms []string, entry Entry, content
 	}
 	// Type bonus: work_method and work_fact are process/contextual knowledge
 	// that should rank higher when they match the query.
+	if score == 0 {
+		return 0
+	}
 	switch entry.Type {
 	case TypeWorkMethod:
 		score += 3

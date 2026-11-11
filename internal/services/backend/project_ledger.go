@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,19 +19,22 @@ import (
 const projectLedgerFileName = "project_ledger.json"
 
 type ProjectLedger struct {
-	SessionID    string                 `json:"session_id"`
-	Goal         string                 `json:"goal,omitempty"`
-	CurrentPhase string                 `json:"current_phase,omitempty"`
-	ChangedFiles []string               `json:"changed_files,omitempty"`
-	Commands     []ProjectLedgerCommand `json:"commands,omitempty"`
-	Validation   []string               `json:"validation,omitempty"`
-	Decisions    []string               `json:"decisions,omitempty"`
-	Risks        []string               `json:"risks,omitempty"`
-	Blockers     []string               `json:"blockers,omitempty"`
-	NextSteps    []string               `json:"next_steps,omitempty"`
-	RecentTurns  []ProjectLedgerTurn    `json:"recent_turns,omitempty"`
-	UpdatedAt    time.Time              `json:"updated_at"`
-	Compact      string                 `json:"compact,omitempty"`
+	SessionID          string                 `json:"session_id"`
+	Goal               string                 `json:"goal,omitempty"`
+	CurrentRequest     string                 `json:"current_request,omitempty"`
+	DecisionsExplicit  bool                   `json:"decisions_explicit,omitempty"`
+	ChangedFilesSource string                 `json:"changed_files_source,omitempty"`
+	CurrentPhase       string                 `json:"current_phase,omitempty"`
+	ChangedFiles       []string               `json:"changed_files,omitempty"`
+	Commands           []ProjectLedgerCommand `json:"commands,omitempty"`
+	Validation         []string               `json:"validation,omitempty"`
+	Decisions          []string               `json:"decisions,omitempty"`
+	Risks              []string               `json:"risks,omitempty"`
+	Blockers           []string               `json:"blockers,omitempty"`
+	NextSteps          []string               `json:"next_steps,omitempty"`
+	RecentTurns        []ProjectLedgerTurn    `json:"recent_turns,omitempty"`
+	UpdatedAt          time.Time              `json:"updated_at"`
+	Compact            string                 `json:"compact,omitempty"`
 }
 
 type ProjectLedgerCommand struct {
@@ -83,12 +87,14 @@ func (s *Service) UpdateProjectLedger(sessionID string, patch ProjectLedgerPatch
 	}
 	if patch.ChangedFiles != nil {
 		ledger.ChangedFiles = normalizeLedgerStrings(patch.ChangedFiles, 80)
+		ledger.ChangedFilesSource = "reported"
 	}
 	if patch.Validation != nil {
 		ledger.Validation = normalizeLedgerStrings(patch.Validation, 40)
 	}
 	if patch.Decisions != nil {
 		ledger.Decisions = normalizeLedgerStrings(patch.Decisions, 40)
+		ledger.DecisionsExplicit = true
 	}
 	if patch.Risks != nil {
 		ledger.Risks = normalizeLedgerStrings(patch.Risks, 40)
@@ -107,6 +113,41 @@ func (s *Service) UpdateProjectLedger(sessionID string, patch ProjectLedgerPatch
 	return ledger, nil
 }
 
+// Record the accepted request before constructing model context, rather than
+// giving the next turn the session's opening question as its current goal.
+func (s *Service) prepareProjectLedgerForTurn(sessionID string, text string, at time.Time) error {
+	ledger, err := s.readProjectLedger(sessionID)
+	if err != nil {
+		return err
+	}
+	if ledger.CurrentRequest == "" {
+		// Legacy ledgers pinned Goal to the opening request. Recover the most
+		// recent substantive request from their existing turn history.
+		for _, turn := range ledger.RecentTurns {
+			updateLedgerRequest(&ledger, turn.User)
+		}
+	}
+	updateLedgerRequest(&ledger, text)
+	ledger.UpdatedAt = at
+	return s.writeProjectLedger(sessionID, ledger)
+}
+
+func updateLedgerRequest(ledger *ProjectLedger, text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	ledger.CurrentRequest = truncateLedgerText(text, 400)
+	continuation := strings.Trim(strings.ToLower(text), " \t\n.!?。！？,，")
+	switch continuation {
+	case "继续", "继续吧", "请继续", "好", "好的", "ok", "okay", "yes", "continue", "go on", "status", "进展如何", "目前进展", "用中文", "用中文回复", "用中文回复我", "请用中文回复":
+		if ledger.Goal != "" {
+			return
+		}
+	}
+	ledger.Goal = truncateLedgerText(text, 240)
+}
+
 // projectLedgerForRuntimeContext returns the compact ledger text plus its
 // last-updated timestamp for injection into a session runtime context. The
 // agent uses the timestamp to skip stale ledgers (safety valve against
@@ -119,7 +160,7 @@ func (s *Service) projectLedgerForRuntimeContext(sessionID string) (string, time
 	return ledger.Compact, ledger.UpdatedAt
 }
 
-func (s *Service) updateProjectLedgerFromTurn(session *sessionState, turnID string, envelope message.Envelope, status string, runErr error, priorMessageCount int, at time.Time) error {
+func (s *Service) updateProjectLedgerFromTurn(session *sessionState, turnID string, envelope message.Envelope, status string, runErr error, priorMessageCount int, at time.Time, changedFiles []string, changesKnown bool) error {
 	if session == nil {
 		return nil
 	}
@@ -129,8 +170,15 @@ func (s *Service) updateProjectLedgerFromTurn(session *sessionState, turnID stri
 	}
 	ledger.SessionID = session.id
 	userText := strings.TrimSpace(envelope.BodyText())
-	if ledger.Goal == "" && userText != "" {
-		ledger.Goal = truncateLedgerText(userText, 240)
+	if ledger.CurrentRequest == "" {
+		updateLedgerRequest(&ledger, userText)
+	}
+	if changesKnown {
+		if ledger.ChangedFilesSource != "workspace_diff" {
+			ledger.ChangedFiles = nil
+		}
+		ledger.ChangedFilesSource = "workspace_diff"
+		ledger.ChangedFiles = append(ledger.ChangedFiles, changedFiles...)
 	}
 	if status == "error" || runErr != nil {
 		ledger.CurrentPhase = "blocked"
@@ -147,7 +195,6 @@ func (s *Service) updateProjectLedgerFromTurn(session *sessionState, turnID stri
 		switch event.Type {
 		case events.EventToolCallFinished:
 			payload := decodeToolCallPayload(event.Payload)
-			ledger.ChangedFiles = append(ledger.ChangedFiles, ledgerPathsFromTool(payload)...)
 			if cmd := ledgerCommandFromTool(payload); cmd.Command != "" {
 				cmd.At = event.Timestamp
 				ledger.Commands = append(ledger.Commands, cmd)
@@ -158,18 +205,13 @@ func (s *Service) updateProjectLedgerFromTurn(session *sessionState, turnID stri
 			if strings.TrimSpace(payload.Error) != "" {
 				ledger.Risks = append(ledger.Risks, fmt.Sprintf("%s failed: %s", payload.Name, truncateLedgerText(payload.Error, 180)))
 			}
-			decisions, blockers := ledgerWorkflowSummariesFromTool(payload)
-			ledger.Decisions = append(ledger.Decisions, decisions...)
+			_, blockers := ledgerWorkflowSummariesFromTool(payload)
 			ledger.Blockers = append(ledger.Blockers, blockers...)
 		case events.EventSubagentJobUpdated:
 			payload := decodeSubagentPayload(event.Payload)
-			if strings.TrimSpace(payload.Result) != "" {
-				ledger.Decisions = append(ledger.Decisions, fmt.Sprintf("subagent %s: %s", payload.JobID, truncateLedgerText(payload.Result, 220)))
-			}
 			if strings.TrimSpace(payload.Error) != "" {
 				ledger.Blockers = append(ledger.Blockers, fmt.Sprintf("subagent %s failed: %s", payload.JobID, truncateLedgerText(payload.Error, 180)))
 			}
-			ledger.ChangedFiles = append(ledger.ChangedFiles, payload.WriteScope...)
 		}
 	}
 
@@ -185,9 +227,6 @@ func (s *Service) updateProjectLedgerFromTurn(session *sessionState, turnID stri
 		if text != "" {
 			turn.Summary = text
 		}
-	}
-	if turn.Summary != "" {
-		ledger.Decisions = append(ledger.Decisions, turn.Summary)
 	}
 	if runErr != nil {
 		ledger.Blockers = append(ledger.Blockers, truncateLedgerText(runErr.Error(), 240))
@@ -222,7 +261,7 @@ func (s *Service) writeProjectLedger(sessionID string, ledger ProjectLedger) err
 }
 
 func normalizeProjectLedger(ledger *ProjectLedger, at time.Time) {
-	ledger.ChangedFiles = normalizeLedgerStrings(ledger.ChangedFiles, 80)
+	ledger.ChangedFiles = normalizeLedgerPaths(ledger.ChangedFiles)
 	sort.Strings(ledger.ChangedFiles)
 	ledger.Validation = normalizeLedgerStrings(ledger.Validation, 40)
 	ledger.Decisions = normalizeLedgerStrings(ledger.Decisions, 40)
@@ -286,16 +325,46 @@ func trimLedgerTurns(items []ProjectLedgerTurn, limit int) []ProjectLedgerTurn {
 
 func renderProjectLedgerCompact(ledger ProjectLedger) string {
 	var builder strings.Builder
+	writeLedgerLine(&builder, "Current request", ledger.CurrentRequest)
 	writeLedgerLine(&builder, "Goal", ledger.Goal)
 	writeLedgerLine(&builder, "Current phase", ledger.CurrentPhase)
-	writeLedgerList(&builder, "Changed files", ledger.ChangedFiles, 12)
+	if ledger.ChangedFilesSource == "workspace_diff" {
+		paths := normalizeLedgerPaths(ledger.ChangedFiles)
+		if len(paths) > 0 {
+			builder.WriteString("Observed file changes in this session:\n")
+			for i, path := range paths {
+				if i == 12 {
+					fmt.Fprintf(&builder, "- … %d more; open the full ledger for all entries\n", len(paths)-i)
+					break
+				}
+				fmt.Fprintf(&builder, "- %s\n", strconv.Quote(path))
+			}
+		}
+	} else if ledger.ChangedFilesSource == "reported" {
+		writeLedgerList(&builder, "Reported file changes (unverified)", ledger.ChangedFiles, 12)
+	}
 	writeLedgerList(&builder, "Validation", ledger.Validation, 8)
-	writeLedgerList(&builder, "Decisions", ledger.Decisions, 8)
+	if ledger.DecisionsExplicit {
+		writeLedgerList(&builder, "Recorded decisions", ledger.Decisions, 8)
+	}
 	writeLedgerList(&builder, "Risks", ledger.Risks, 6)
 	writeLedgerList(&builder, "Blockers", ledger.Blockers, 6)
 	writeLedgerList(&builder, "Next steps", ledger.NextSteps, 8)
 	text := strings.TrimSpace(builder.String())
 	return truncateLedgerText(text, 4000)
+}
+
+func normalizeLedgerPaths(paths []string) []string {
+	var result []string
+	seen := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		path = filepath.ToSlash(path)
+		if path != "" && !seen[path] {
+			seen[path] = true
+			result = append(result, path)
+		}
+	}
+	return result
 }
 
 func writeLedgerLine(builder *strings.Builder, label, value string) {
@@ -310,6 +379,7 @@ func writeLedgerLine(builder *strings.Builder, label, value string) {
 }
 
 func writeLedgerList(builder *strings.Builder, label string, values []string, limit int) {
+	total := len(normalizeLedgerStrings(values, 0))
 	values = normalizeLedgerStrings(values, limit)
 	if len(values) == 0 {
 		return
@@ -320,6 +390,9 @@ func writeLedgerList(builder *strings.Builder, label string, values []string, li
 		builder.WriteString("- ")
 		builder.WriteString(value)
 		builder.WriteString("\n")
+	}
+	if total > len(values) {
+		fmt.Fprintf(builder, "- … %d more; open the full ledger for all entries\n", total-len(values))
 	}
 }
 
@@ -341,21 +414,6 @@ func decodeSubagentPayload(value any) events.SubagentJobPayload {
 	var payload events.SubagentJobPayload
 	_ = json.Unmarshal(data, &payload)
 	return payload
-}
-
-func ledgerPathsFromTool(payload events.ToolCallPayload) []string {
-	var paths []string
-	for _, key := range []string{"path", "file_path", "target", "filename"} {
-		if value, ok := payload.Input[key].(string); ok && strings.TrimSpace(value) != "" {
-			paths = append(paths, filepath.ToSlash(strings.TrimSpace(value)))
-		}
-	}
-	for _, path := range payload.ArtifactPaths {
-		if strings.TrimSpace(path) != "" {
-			paths = append(paths, filepath.ToSlash(strings.TrimSpace(path)))
-		}
-	}
-	return paths
 }
 
 func ledgerCommandFromTool(payload events.ToolCallPayload) ProjectLedgerCommand {

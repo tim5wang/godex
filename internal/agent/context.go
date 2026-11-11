@@ -25,7 +25,7 @@ import (
 type BuildContextResult struct {
 	System   string
 	Messages []protocol.Message
-	// RuntimeTail is the volatile runtime tail (memory recall, project ledger,
+	// RuntimeTail is the volatile runtime tail (relevant recall, project ledger,
 	// todos, date) rendered as one string. Wire serializers place it at the
 	// prompt tail without adding it to persisted conversation history.
 	RuntimeTail             string
@@ -44,6 +44,7 @@ type BuildContextResult struct {
 	LargestContextSources   []tools.ContextSourcePressure
 	AckRuntime              func()
 	HistoryRecall           *tools.HistoryRecallEvaluation
+	ContextSources          []protocol.ContextSource
 }
 
 func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
@@ -61,9 +62,19 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	memoryManager := a.memoryMgr
+	stableMemory := memory.ContextLayers{Identity: memoryLayers.Identity, Core: memoryLayers.Core}
+	stableMemoryMessages := memoryLayerMessages(stableMemory)
+	injectedMemory := stableMemory
+	if len(memoryMessages) > 0 {
+		injectedMemory.Relevant = memoryLayers.Relevant
+	}
 	memoryIndexMessage, memoryIndexTokens, err := a.buildMemoryIndexPromptMessage()
 	if err != nil {
 		return nil, err
+	}
+	for _, msg := range stableMemoryMessages {
+		memoryIndexTokens += compress.CountTokens(protocol.MessageText(msg))
 	}
 	promptStateSections, err := a.buildDynamicRuntimePromptSections(agentProfile)
 	if err != nil {
@@ -73,7 +84,7 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 	runtimeMessages, ackRuntime := a.collectRuntimeMessages(true)
 
 	// Split runtime content by stability for KV prefix caching:
-	//   quasiStableMessages = memory index + runtime prompt sections. They
+	//   quasiStableMessages = memory guidance + identity/core + runtime sections. They
 	//     change only on memory writes, bundle/skill activation, or daily
 	//     rollover, so they sit BEFORE history and let the history prefix
 	//     cache survive per-turn churn.
@@ -87,6 +98,7 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 		quasiStableMessages = append(quasiStableMessages, memoryIndexMessage)
 	}
 	quasiStableMessages = append(quasiStableMessages, promptStateMessages...)
+	quasiStableMessages = append(quasiStableMessages, stableMemoryMessages...)
 	// Volatile runtime context: memory recall, project ledger (fresh + changed),
 	// notifications/inbox/todos (todos only when they change), and the
 	// date/weekday line. Repository structure is discovered on demand rather
@@ -143,8 +155,23 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 		CompactionLatencyMS:     compactionDiag.LatencyMS,
 		CompactionTranscriptRef: compactionDiag.TranscriptRef,
 		LargestContextSources:   largestContextSources(estimate.Breakdown),
-		AckRuntime:              ackRuntime,
-		HistoryRecall:           historyRecall,
+		AckRuntime: func() {
+			if ackRuntime != nil {
+				ackRuntime()
+			}
+			if len(injectedMemory.Identity)+len(injectedMemory.Core)+len(injectedMemory.Relevant) == 0 {
+				return
+			}
+			before := memoryManager.ContextRevision()
+			memoryManager.RecordInjection(injectedMemory)
+			a.mu.Lock()
+			if a.memoryRecallManager == memoryManager && a.memoryRecallRevision == before {
+				a.memoryRecallRevision = memoryManager.ContextRevision()
+			}
+			a.mu.Unlock()
+		},
+		HistoryRecall:  historyRecall,
+		ContextSources: append(buildContextSources(system, compactedHistory, memoryIndexMessage, promptStateMessages, volatileMessages, injectedMemory, memoryLayers.Excluded), protocol.ContextSource{Name: "tool_schemas", EstimatedTokens: estimate.Breakdown.ToolSchemas}),
 	}, nil
 }
 
@@ -371,6 +398,7 @@ func (a *Agent) buildRuntimeSystemPrompt(agentProfile ...string) (string, error)
 	return strings.Join(filterNonEmpty(
 		a.buildSystemPrompt(),
 		conciseDefaultResponsePrompt,
+		"For capability-availability checks, inspect status and run a minimal direct probe. Report verified failures promptly. Retry only to test a concrete recoverable cause; implementation repair belongs to a user-requested repair task.",
 		dynamic,
 	), "\n\n"), nil
 }
@@ -434,27 +462,49 @@ func (a *Agent) gateTodoStatus(rendered string) string {
 	return rendered
 }
 
-// collectMemoryMessagesThrottled wraps collectMemoryMessages with recall
-// downsampling: recall is always injected when the driving user query changes,
-// and at most once every memoryRecallInjectEvery identical-query iterations
-// afterwards. The context layers are still computed every call so downstream
-// history-recall evaluation keeps its signal.
+// collectMemoryMessagesThrottled refreshes recall on query/store changes and
+// every memoryRecallInjectEvery iterations. Other iterations reuse layers for
+// stable identity/core and history-recall evaluation without rerunning search.
 func (a *Agent) collectMemoryMessagesThrottled(history []protocol.Message) ([]protocol.Message, memory.ContextLayers, error) {
+	if a.memoryMode() == templates.MemoryNone {
+		return nil, memory.ContextLayers{}, nil
+	}
 	query := protocol.LatestPersistentUserText(history)
+	revision := a.memoryMgr.ContextRevision()
 	a.mu.Lock()
-	if query != a.memoryRecallQuery {
+	if query != a.memoryRecallQuery || a.memoryRecallManager != a.memoryMgr || a.memoryRecallRevision != revision {
 		a.memoryRecallQuery = query
 		a.memoryRecallInjectCount = 0
+		a.memoryRecallManager = a.memoryMgr
+		a.memoryRecallLayers = memory.ContextLayers{}
 	}
 	inject := a.memoryRecallInjectCount%memoryRecallInjectEvery == 0
 	a.memoryRecallInjectCount++
+	cached := a.memoryRecallLayers
 	a.mu.Unlock()
-
-	messages, layers, err := a.collectMemoryMessages(history)
-	if err != nil || !inject {
+	if !inject {
+		return nil, cached.Current(time.Now()), nil
+	}
+	messages, layers, err := a.collectMemoryMessagesReadOnly(history)
+	a.mu.Lock()
+	if err == nil {
+		a.memoryRecallLayers = layers
+		a.memoryRecallRevision = a.memoryMgr.ContextRevision()
+	} else {
+		a.memoryRecallInjectCount = 0
+	}
+	a.mu.Unlock()
+	if err != nil {
 		return nil, layers, err
 	}
 	return messages, layers, nil
+}
+
+func memoryLayerMessages(layers memory.ContextLayers) []protocol.Message {
+	if len(layers.Identity)+len(layers.Core)+len(layers.Relevant) == 0 {
+		return nil
+	}
+	return []protocol.Message{protocol.NewEphemeralTextMessage(protocol.KindMemory, formatMemoryLayers(layers))}
 }
 
 // memoryRecallInjectEvery bounds how many identical-query runner iterations may
@@ -538,18 +588,10 @@ func projectLedgerInjectionAllowed(sc automation.SessionContext) bool {
 }
 
 func formatProjectLedgerRuntimeMessage(ledger string) string {
-	return "Long-task project ledger (ephemeral session state; prefer this over guessing older project status):\n" + strings.TrimSpace(ledger)
-}
-
-func (a *Agent) collectMemoryMessages(history []protocol.Message) ([]protocol.Message, memory.ContextLayers, error) {
-	return a.collectMemoryMessagesWithReferenceTracking(history, true)
+	return "Session ledger (historical observations; the latest user request, current todos, and fresh tool evidence take precedence. File changes are observed session changes, not a complete task diff):\n" + strings.TrimSpace(ledger)
 }
 
 func (a *Agent) collectMemoryMessagesReadOnly(history []protocol.Message) ([]protocol.Message, memory.ContextLayers, error) {
-	return a.collectMemoryMessagesWithReferenceTracking(history, false)
-}
-
-func (a *Agent) collectMemoryMessagesWithReferenceTracking(history []protocol.Message, trackReferences bool) ([]protocol.Message, memory.ContextLayers, error) {
 	// A template with memory: none injects no live memory recall at all — the
 	// session must not read durable memory either (same semantic as
 	// buildMemoryIndexPromptMessage). Skipping here prevents BuildContextLayers
@@ -558,13 +600,7 @@ func (a *Agent) collectMemoryMessagesWithReferenceTracking(history []protocol.Me
 		return nil, memory.ContextLayers{}, nil
 	}
 	query := protocol.LatestPersistentUserText(history)
-	var layers memory.ContextLayers
-	var err error
-	if trackReferences {
-		layers, err = a.memoryMgr.BuildContextLayers(query)
-	} else {
-		layers, err = a.memoryMgr.PreviewContextLayers(query)
-	}
+	layers, err := a.memoryMgr.PreviewContextLayers(query)
 	if err != nil {
 		return nil, memory.ContextLayers{}, err
 	}
@@ -572,7 +608,10 @@ func (a *Agent) collectMemoryMessagesWithReferenceTracking(history []protocol.Me
 		return nil, layers, nil
 	}
 
-	formatted := formatMemoryLayers(layers)
+	formatted := ""
+	if len(layers.Relevant) > 0 {
+		formatted = formatMemoryLayers(memory.ContextLayers{Relevant: layers.Relevant})
+	}
 
 	// Append relevant note references if notes manager is available.
 	if a.notesMgr != nil && strings.TrimSpace(query) != "" {
@@ -597,6 +636,9 @@ func (a *Agent) collectMemoryMessagesWithReferenceTracking(history []protocol.Me
 		}
 	}
 
+	if strings.TrimSpace(formatted) == "" {
+		return nil, layers, nil
+	}
 	return []protocol.Message{
 		protocol.NewEphemeralTextMessage(protocol.KindMemory, formatted),
 	}, layers, nil

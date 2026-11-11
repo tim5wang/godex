@@ -1071,10 +1071,10 @@ func TestBuildContextIncludesProjectLedger(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build context: %v", err)
 	}
-	if strings.Contains(build.System, "Long-task project ledger") || strings.Contains(build.System, "Goal: ship the long task") {
+	if strings.Contains(build.System, "Session ledger") || strings.Contains(build.System, "Goal: ship the long task") {
 		t.Fatalf("did not expect volatile project ledger in system prompt, got %q", build.System)
 	}
-	if !strings.Contains(build.RuntimeTail, "Long-task project ledger") || !strings.Contains(build.RuntimeTail, "Goal: ship the long task") {
+	if !strings.Contains(build.RuntimeTail, "Session ledger") || !strings.Contains(build.RuntimeTail, "Goal: ship the long task") {
 		t.Fatalf("expected project ledger in the volatile runtime tail, got %q", build.RuntimeTail)
 	}
 }
@@ -1739,6 +1739,10 @@ func TestBuildContextInjectsStableCoreMemoryWithoutQueryMatch(t *testing.T) {
 		t.Fatalf("build context: %v", err)
 	}
 
+	prefix := ""
+	for _, msg := range build.Messages {
+		prefix += protocol.MessageText(msg) + "\n"
+	}
 	for _, want := range []string{
 		"Memory context:",
 		"L0 identity:",
@@ -1747,14 +1751,14 @@ func TestBuildContextInjectsStableCoreMemoryWithoutQueryMatch(t *testing.T) {
 		"Chinese Preference [user]",
 		"Reply in concise Chinese.",
 	} {
-		if !strings.Contains(build.RuntimeTail, want) {
-			t.Fatalf("expected memory runtime tail to contain %q, got %q", want, build.RuntimeTail)
+		if !strings.Contains(prefix, want) {
+			t.Fatalf("expected stable memory prefix to contain %q, got %q", want, prefix)
 		}
 	}
 	if strings.Contains(build.RuntimeTail, "Relevant recall for the current request:") {
 		t.Fatalf("did not expect relevant recall section for unmatched query, got %q", build.RuntimeTail)
 	}
-	if strings.Contains(build.RuntimeTail, "Treat GoDex as a shared backend workspace coordinating Web, TUI, and IM channels.") {
+	if strings.Contains(prefix, "Treat GoDex as a shared backend workspace coordinating Web, TUI, and IM channels.") {
 		t.Fatalf("did not expect identity memory full content in context, got %q", build.RuntimeTail)
 	}
 }
@@ -2545,7 +2549,7 @@ func TestBuildContextGatesUnchangedProjectLedger(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build context: %v", err)
 	}
-	if !strings.Contains(first.RuntimeTail, "Long-task project ledger") {
+	if !strings.Contains(first.RuntimeTail, "Session ledger") {
 		t.Fatalf("expected project ledger on the first request, got %q", first.RuntimeTail)
 	}
 
@@ -2553,7 +2557,7 @@ func TestBuildContextGatesUnchangedProjectLedger(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build context unchanged: %v", err)
 	}
-	if strings.Contains(unchanged.RuntimeTail, "Long-task project ledger") {
+	if strings.Contains(unchanged.RuntimeTail, "Session ledger") {
 		t.Fatalf("did not expect unchanged ledger to be re-injected, got %q", unchanged.RuntimeTail)
 	}
 
@@ -2561,7 +2565,7 @@ func TestBuildContextGatesUnchangedProjectLedger(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build context changed: %v", err)
 	}
-	if !strings.Contains(changed.RuntimeTail, "Long-task project ledger") || !strings.Contains(changed.RuntimeTail, "flaky test") {
+	if !strings.Contains(changed.RuntimeTail, "Session ledger") || !strings.Contains(changed.RuntimeTail, "flaky test") {
 		t.Fatalf("expected changed ledger to be re-injected, got %q", changed.RuntimeTail)
 	}
 }

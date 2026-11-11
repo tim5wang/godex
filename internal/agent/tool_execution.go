@@ -67,6 +67,14 @@ func (a *Agent) prepareToolExecution(ctx context.Context, name string, input map
 				state.consumeAutomaticExposure()
 			}
 		}
+		if name == "memory" {
+			switch input["action"] {
+			case "remember", "update", "forget", "accept":
+				a.mu.Lock()
+				a.memoryRecallInjectCount = 0
+				a.mu.Unlock()
+			}
+		}
 		output, err := result.OutputString()
 		if err != nil {
 			return conversation.ToolExecutionResult{}, err

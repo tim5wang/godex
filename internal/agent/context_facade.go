@@ -50,6 +50,9 @@ func (a *Agent) InspectContextDetails(ctx context.Context, sessionID string) (Co
 	if _, tokens, err := a.buildMemoryIndexPromptMessage(); err == nil {
 		memoryIndexTokens = tokens
 	}
+	for _, msg := range memoryLayerMessages(memory.ContextLayers{Identity: memoryLayers.Identity, Core: memoryLayers.Core}) {
+		memoryIndexTokens += compress.CountTokens(protocol.MessageText(msg))
+	}
 	promptStateSections, err := a.buildDynamicRuntimePromptSections(agentProfile)
 	if err != nil {
 		return ContextInspectionDetails{}, err

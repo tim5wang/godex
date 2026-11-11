@@ -3,6 +3,7 @@ package memory
 import (
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/tim5wang/godex/internal/core/compress"
 )
@@ -29,6 +30,24 @@ type ContextLayers struct {
 	Identity []RelevantMemory `json:"identity"`
 	Core     []RelevantMemory `json:"core"`
 	Relevant []RelevantMemory `json:"relevant"`
+	Excluded map[string]int   `json:"excluded,omitempty"`
+}
+
+// Current removes entries that expired while a cached recall was being reused.
+func (layers ContextLayers) Current(now time.Time) ContextLayers {
+	filter := func(entries []RelevantMemory) []RelevantMemory {
+		var kept []RelevantMemory
+		for _, entry := range entries {
+			if entryAutoRecallEligible(entry.Entry, now) {
+				kept = append(kept, entry)
+			}
+		}
+		return kept
+	}
+	layers.Identity = filter(layers.Identity)
+	layers.Core = filter(layers.Core)
+	layers.Relevant = filter(layers.Relevant)
+	return layers
 }
 
 // BuildContextLayers returns bounded memory sections for prompt injection.
@@ -52,9 +71,23 @@ func (m *Manager) buildContextLayers(query string, trackReferences bool) (Contex
 	if err != nil {
 		return ContextLayers{}, err
 	}
+	excluded := make(map[string]int)
+	now := time.Now()
+	for _, entry := range entries {
+		switch {
+		case normalizeStatus(entry.Status) == StatusArchived:
+			excluded["archived"]++
+		case entry.SupersededBy != "":
+			excluded["superseded"]++
+		case !entry.ExpiresAt.IsZero() && !now.Before(entry.ExpiresAt):
+			excluded["expired"]++
+		case entry.RecallPolicy == "manual":
+			excluded["manual_only"]++
+		}
+	}
 	entries = activeEntries(entries)
 	if len(entries) == 0 {
-		return ContextLayers{}, nil
+		return ContextLayers{Excluded: excluded}, nil
 	}
 
 	identity, err := m.selectIdentityMemories(entries, maxIdentityContextMemories)
@@ -108,14 +141,18 @@ func (m *Manager) buildContextLayers(query string, trackReferences bool) (Contex
 	relevant = trimMemoriesToTokenBudget(relevant, maxRelevantContextTokens)
 
 	if len(identity) == 0 && len(core) == 0 && len(relevant) == 0 {
-		return ContextLayers{}, nil
+		excluded["not_selected_by_relevance_scope_or_budget"] = len(entries)
+		return ContextLayers{Excluded: excluded}, nil
 	}
 	if trackReferences {
 		// Best-effort: record which memories actually reached the prompt so the
-		// UI can surface stale, never-referenced entries. Never blocks the turn.
+		// UI can surface stale, never-referenced entries. Failures are best effort.
 		m.markReferenced(referencedIDs(identity, core, relevant))
 	}
-	return ContextLayers{Identity: identity, Core: core, Relevant: relevant}, nil
+	if count := len(entries) - len(identity) - len(core) - len(relevant); count > 0 {
+		excluded["not_selected_by_relevance_scope_or_budget"] = count
+	}
+	return ContextLayers{Identity: identity, Core: core, Relevant: relevant, Excluded: excluded}, nil
 }
 
 // referencedIDs collects the IDs of memories that were selected into any
@@ -257,12 +294,8 @@ func corePriority(entry Entry) int {
 		return 0
 	}
 	switch entry.Type {
-	case TypeUser, TypeWorkMethod:
+	case TypeUser:
 		return 1
-	case TypeProject:
-		return 2
-	case TypeWorkFact:
-		return 3
 	default:
 		return -1
 	}
@@ -308,20 +341,15 @@ func prioritizeRelevantByScope(memories []RelevantMemory, scopes []string, limit
 	}
 
 	matched := make([]scopedRelevant, 0, len(memories))
-	unmatched := make([]RelevantMemory, 0, len(memories))
 	for idx, mem := range memories {
 		affinity := scopeAffinityScore(mem, scopes)
 		if affinity > 0 {
 			matched = append(matched, scopedRelevant{memory: mem, affinity: affinity, index: idx})
 			continue
 		}
-		unmatched = append(unmatched, mem)
 	}
 	if len(matched) == 0 {
-		if len(memories) > limit {
-			return memories[:limit]
-		}
-		return memories
+		return nil
 	}
 
 	sort.SliceStable(matched, func(i, j int) bool {
@@ -337,12 +365,6 @@ func prioritizeRelevantByScope(memories []RelevantMemory, scopes []string, limit
 			break
 		}
 		prioritized = append(prioritized, item.memory)
-	}
-	for _, mem := range unmatched {
-		if len(prioritized) >= limit {
-			break
-		}
-		prioritized = append(prioritized, mem)
 	}
 	return prioritized
 }
@@ -425,7 +447,7 @@ func activeEntries(entries []Entry) []Entry {
 	}
 	kept := entries[:0]
 	for _, entry := range entries {
-		if normalizeStatus(entry.Status) == StatusArchived {
+		if !entryAutoRecallEligible(entry, time.Now()) {
 			continue
 		}
 		kept = append(kept, entry)

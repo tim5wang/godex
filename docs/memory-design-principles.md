@@ -1,7 +1,7 @@
 # Memory Design Principles
 
 > 状态：Active（当前 memory 模块权威设计）
-> 修订日志：2026-08-10 新增 work_method/work_fact 类型、笔记↔记忆联动；2026-08-11 foldCapture 去重 + capTail 截断（roadmap 3.2）
+> 修订日志：2026-08-10 新增 work_method/work_fact 类型、笔记↔记忆联动；2026-08-11 foldCapture 去重 + capTail 截断（roadmap 3.2）；2026-11-11 收紧注入资格，支持过期/替代与显式纠错
 
 这份文档描述 GoDex 当前 `memory` 模块的目标、边界、组成和约束。它不是“把所有历史都记住”的系统，而是一套 `可治理的长期项目记忆系统`。
 
@@ -157,9 +157,30 @@ Identity 和 Core 都有独立预算，不应该无限增长。
 - `Relevant`
 
 其中：
+- `Identity` 与 `Core` 放在历史之前的稳定前缀，每次请求可见；仅相关召回进入动态尾部。
 - `Identity` 单独预算，优先级最高
-- `Core` 用于稳定长期记忆
-- `Relevant` 会先按 scope 优先召回，再用全局高分项补齐
+- `Core` 默认仅包含 `user` 长期偏好；其他类型必须显式标记 `core` 才能常驻。`project`、`work_fact`、`work_method` 不因类型自动常驻。
+- `Relevant` 必须先有查询匹配，类型加分不能制造命中；推断出 scope 时仅保留匹配项，不用全局结果补齐，允许零召回。
+- `MEMORY.md` 保留为可浏览、可恢复的目录，不再整份注入 prompt。静态 Memory 段仅解释用途与按需查询方式。
+- 归档、过期、已被替代的记忆在默认检索和所有注入层统一排除；仍可按 ID 或 `status=all` 查看。
+
+### 召回开销与观测
+
+- 相同请求的工具循环复用召回分层；每8轮重选一次。索引版本变化、记忆工具写入、新一轮运行或查询变化立即刷新。缓存中的截止时间仍逐请求检查。
+- 构造上下文和 Inspector 预览不更新引用时间；只有成功请求中实际包含的条目在 runner 确认后更新 `last_referenced_at`。引用仍不代表事实正确或对任务有用。
+- 捕获格式 `godex_context_v2` 在 request 中保存完整 `runtime_tail`、`context_sources` 和 reasoning 回传标志；provider 请求序列化继续排除这些诊断字段。该格式记录完整 harness 上下文，不冒充最终 HTTP 请求体。
+- 注入来源提供构造上下文时的估算 token、实际注入的记忆 ID 及选择原因；runner 追加的指导可在最终 runtime_tail 中查看，分项不是最终 HTTP 请求的精确 token 账单。排除计数区分归档、失效、替代、仅手动，以及相关性/scope/预算未入选项，不用入选证明有用。
+
+### 有效性与纠错
+
+- `recall_policy` 与内容类型独立：`auto` 为按规则自动召回，`manual` 只供显式检索。新建的已完成项目里程碑默认 `manual`；显式 core 或 auto 选择可保留常驻/自动行为。
+- 归档和替代保留原始文件与 audit；历史查询用 `memory action=search status=all` 或按 ID 获取。
+- `expires_at` 是明确的有效截止时间，未设置代表没有声明截止时间，不代表内容经过验证。
+- `superseded_by` 指向替代该条记录的有效记忆 ID。设置时验证目标存在、有效且不构成循环；旧条目保留供回查。
+- 以上元数据保存在 markdown 和 `index.json`，FTS 查询使用索引中的有效性元数据；重开和索引重建保留这些条件。
+- 修改旧事实用 `memory action=update`：正文替换，不追加旧事实。仅更改有效性可提供 `id_or_title` 与 `expires_at` / `superseded_by`；空字符串清除对应条件。
+- `remember` 同名写入仍是增量补充，不用于纠错；普通更新和重复 remember 均保留归档、有效期与替代关系，不会自动恢复无效记录。
+- 当前指令和本轮验证优先于历史记忆。旧版本的语义冲突仍需明确纠正或标记替代，不按更新时间猜测真伪。
 
 ### 检索
 
@@ -274,7 +295,7 @@ agent 模板板块（`docs/agent-role-and-bundle-design.md`）为每个会话预
 当前还没有：
 - embedding-native semantic search
 - KG / diary / richer long-term graph
-- 完整的事实失效时间模型（已有 `status` 归档 + `last_referenced_at` 时效信号 + 里程碑一键归档，但尚无按类型的自动过期策略）
+- 自动的事实验证和按类型过期策略（已有 `status`、明确 `expires_at` / `superseded_by` 与里程碑归档；引用时间不代表有效性）
 - 自动把历史回查结果沉淀成长期记忆
 - 大规模项目代码级 mining
 

@@ -170,6 +170,8 @@ type Request struct {
 	// persisted conversation history and minimizing disruption to prefix
 	// caching.
 	RuntimeTail string `json:"-"`
+	// ContextSources is capture-only attribution; provider serializers omit it.
+	ContextSources []ContextSource `json:"-"`
 	// IncludeReasoningContent requests that assistant messages echo their
 	// previous reasoning_content back to OpenAI-compatible providers. The
 	// default (false) matches common harness request shapes: models do not
@@ -180,6 +182,14 @@ type Request struct {
 	// When true, marshalAnthropicBody may use content-block array format with
 	// cache_control on the system prompt (which some compatible providers reject).
 	AnthropicNative bool `json:"-"`
+}
+
+type ContextSource struct {
+	Name            string         `json:"name"`
+	EstimatedTokens int            `json:"estimated_tokens"`
+	MemoryIDs       []string       `json:"memory_ids,omitempty"`
+	Excluded        map[string]int `json:"excluded,omitempty"`
+	Note            string         `json:"note,omitempty"`
 }
 
 type Response struct {

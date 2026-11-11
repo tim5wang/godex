@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"time"
 
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/domain/message"
@@ -426,23 +427,28 @@ type acceptMemoryCandidateRequest struct {
 }
 
 type rememberMemoryRequest struct {
-	Title      string   `json:"title"`
-	Summary    string   `json:"summary"`
-	Content    string   `json:"content"`
-	MemoryType string   `json:"memory_type"`
-	Source     string   `json:"source,omitempty"`
-	Tags       []string `json:"tags,omitempty"`
+	Title        string    `json:"title"`
+	Summary      string    `json:"summary"`
+	Content      string    `json:"content"`
+	MemoryType   string    `json:"memory_type"`
+	Source       string    `json:"source,omitempty"`
+	Tags         []string  `json:"tags,omitempty"`
+	ExpiresAt    time.Time `json:"expires_at,omitempty"`
+	RecallPolicy string    `json:"recall_policy,omitempty"`
 }
 
 type updateMemoryRequest struct {
-	Title      string   `json:"title"`
-	Summary    string   `json:"summary"`
-	Content    string   `json:"content"`
-	MemoryType string   `json:"memory_type"`
-	Source     string   `json:"source,omitempty"`
-	Tags       []string `json:"tags,omitempty"`
-	MatchTitle string   `json:"match_title,omitempty"`
-	MatchFile  string   `json:"match_file,omitempty"`
+	Title        string     `json:"title"`
+	Summary      string     `json:"summary"`
+	Content      string     `json:"content"`
+	MemoryType   string     `json:"memory_type"`
+	Source       string     `json:"source,omitempty"`
+	Tags         []string   `json:"tags,omitempty"`
+	MatchTitle   string     `json:"match_title,omitempty"`
+	MatchFile    string     `json:"match_file,omitempty"`
+	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	SupersededBy *string    `json:"superseded_by,omitempty"`
+	RecallPolicy *string    `json:"recall_policy,omitempty"`
 }
 
 type forgetMemoryRequest struct {

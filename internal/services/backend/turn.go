@@ -494,6 +494,9 @@ func (s *Service) ResumeTurnAsync(ctx context.Context, sessionID, turnID string)
 		return nil, err
 	}
 	envelope := record.Envelope.Normalized()
+	if err := s.prepareProjectLedgerForTurn(sessionID, envelope.BodyText(), s.now()); err != nil {
+		return nil, err
+	}
 	runtimeCtx := s.buildRuntimeContext(sessionID, session.locator, envelope)
 	runtimeCtx.ProjectLedger, runtimeCtx.ProjectLedgerUpdatedAt = s.projectLedgerForRuntimeContext(sessionID)
 	now := s.now()
@@ -574,6 +577,9 @@ func (s *Service) startUserTurnLocked(session *sessionState, envelope message.En
 	var canvasFeedback string
 	envelope, canvasFeedback, err := takeFlowCanvasSnapshot(session, envelope)
 	if err != nil {
+		return preparedUserTurn{}, nil, err
+	}
+	if err := s.prepareProjectLedgerForTurn(sessionID, envelope.BodyText(), now); err != nil {
 		return preparedUserTurn{}, nil, err
 	}
 	runtimeCtx := s.buildRuntimeContext(sessionID, session.locator, envelope)
@@ -678,6 +684,7 @@ func (s *Service) startUserTurnLocked(session *sessionState, envelope message.En
 
 func (s *Service) finishAgentTurnLocked(ctx context.Context, session *sessionState, turnID string, envelope message.Envelope, runtimeCtx automation.SessionContext, priorMessageCount int) (*SubmitResult, error) {
 	sessionID := session.id
+	workspaceBefore := captureLedgerWorkspace(session.agent.SandboxBinding())
 	artifactEvents := &artifactCollector{}
 	unsubscribeArtifacts := session.events.Attach(artifactEvents)
 	defer unsubscribeArtifacts()
@@ -850,7 +857,8 @@ func (s *Service) finishAgentTurnLocked(ctx context.Context, session *sessionSta
 	} else if status == "canceled" || status == "interrupted" {
 		session.updateTurnPhase(turnID, conversation.PhaseInterrupted, "", "", updatedAt)
 	}
-	ledgerErr := s.updateProjectLedgerFromTurn(session, turnID, envelope, status, runErr, priorMessageCount, updatedAt)
+	changedFiles, changesKnown := ledgerWorkspaceChanges(workspaceBefore)
+	ledgerErr := s.updateProjectLedgerFromTurn(session, turnID, envelope, status, runErr, priorMessageCount, updatedAt, changedFiles, changesKnown)
 	turnWriteErr := s.writeSessionTurns(session)
 	persistErr := s.persistSession(session, updatedAt)
 	for _, err := range []error{ledgerErr, turnWriteErr, persistErr} {

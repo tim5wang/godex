@@ -444,7 +444,7 @@ func TestApplyTemplateMemoryNoneSkipsInjectionAndCapture(t *testing.T) {
 	// Live recall side: BuildContextLayers-driven memory messages must also be
 	// suppressed (the injected memory index gate alone used to leave this path
 	// leaking durable memory into the prompt for memory:none templates).
-	msgs, layers, err := a.collectMemoryMessages(nil)
+	msgs, layers, err := a.collectMemoryMessagesReadOnly(nil)
 	if err != nil {
 		t.Fatalf("collectMemoryMessages: %v", err)
 	}

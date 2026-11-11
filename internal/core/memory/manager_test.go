@@ -314,14 +314,21 @@ func TestBuildContextLayersIncludesStableCoreAndRelevantRecall(t *testing.T) {
 	if len(layers.Identity) != 1 || layers.Identity[0].ID != identityEntry.ID {
 		t.Fatalf("expected identity memory in identity layer, got %+v", layers.Identity)
 	}
-	if len(layers.Core) != 2 {
-		t.Fatalf("expected two core memories, got %+v", layers.Core)
+	if len(layers.Core) != 1 {
+		t.Fatalf("expected only the user preference in core, got %+v", layers.Core)
 	}
-	if layers.Core[0].ID != userEntry.ID || layers.Core[1].ID != projectEntry.ID {
-		t.Fatalf("expected user/project memories in core layer, got %+v", layers.Core)
+	if layers.Core[0].ID != userEntry.ID {
+		t.Fatalf("expected user preference in core layer, got %+v", layers.Core)
 	}
-	if len(layers.Relevant) != 1 || layers.Relevant[0].ID != workflowEntry.ID {
-		t.Fatalf("expected workflow memory in relevant layer, got %+v", layers.Relevant)
+	if len(layers.Relevant) != 2 {
+		t.Fatalf("expected matching project and workflow in relevant layer, got %+v", layers.Relevant)
+	}
+	ids := map[string]bool{}
+	for _, mem := range layers.Relevant {
+		ids[mem.ID] = true
+	}
+	if !ids[projectEntry.ID] || !ids[workflowEntry.ID] {
+		t.Fatalf("missing relevant memories: %+v", layers.Relevant)
 	}
 }
 
@@ -486,7 +493,7 @@ func TestBuildContextLayersPrioritizesScopeMatchedRelevantRecall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("remember weixin memory: %v", err)
 	}
-	genericEntry, err := manager.Remember(SaveInput{
+	_, err = manager.Remember(SaveInput{
 		Title:   "Image Delivery Debugging",
 		Summary: "Investigate image sending issues in runtime channels.",
 		Content: "Check generic channel delivery paths when image sending fails.",
@@ -501,14 +508,11 @@ func TestBuildContextLayersPrioritizesScopeMatchedRelevantRecall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build context layers: %v", err)
 	}
-	if len(layers.Relevant) < 2 {
-		t.Fatalf("expected scoped and fallback relevant memories, got %+v", layers.Relevant)
+	if len(layers.Relevant) != 1 {
+		t.Fatalf("expected only scope-matched memories, got %+v", layers.Relevant)
 	}
 	if layers.Relevant[0].ID != weixinEntry.ID {
 		t.Fatalf("expected weixin-scoped memory to be prioritized first, got %+v", layers.Relevant)
-	}
-	if layers.Relevant[1].ID != genericEntry.ID {
-		t.Fatalf("expected generic memory to remain as fallback recall, got %+v", layers.Relevant)
 	}
 }
 
@@ -524,7 +528,7 @@ func TestBuildContextLayersMatchesScopeFromSourceMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("remember feishu memory: %v", err)
 	}
-	genericEntry, err := manager.Remember(SaveInput{
+	_, err = manager.Remember(SaveInput{
 		Title:   "Attachment Debugging Checklist",
 		Summary: "General attachment troubleshooting steps.",
 		Content: "Start from transport logs and confirm upload credentials.",
@@ -538,14 +542,11 @@ func TestBuildContextLayersMatchesScopeFromSourceMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build context layers: %v", err)
 	}
-	if len(layers.Relevant) < 2 {
-		t.Fatalf("expected scoped and fallback relevant memories, got %+v", layers.Relevant)
+	if len(layers.Relevant) != 1 {
+		t.Fatalf("expected only scope-matched memories, got %+v", layers.Relevant)
 	}
 	if layers.Relevant[0].ID != feishuEntry.ID {
 		t.Fatalf("expected source-scoped feishu memory to be prioritized first, got %+v", layers.Relevant)
-	}
-	if layers.Relevant[1].ID != genericEntry.ID {
-		t.Fatalf("expected generic memory to remain as fallback recall, got %+v", layers.Relevant)
 	}
 }
 
@@ -594,7 +595,7 @@ func TestBuildContextLayersAppliesTokenBudgets(t *testing.T) {
 		t.Fatalf("remember warning memory: %v", err)
 	}
 
-	layers, err := manager.BuildContextLayers("请分析 runtime 和 delivery warning")
+	layers, err := manager.BuildContextLayers("delivery warning")
 	if err != nil {
 		t.Fatalf("build context layers: %v", err)
 	}

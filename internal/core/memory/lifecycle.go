@@ -115,6 +115,9 @@ func (m *Manager) markReferenced(ids map[string]struct{}) {
 		if _, ok := ids[id]; !ok {
 			continue
 		}
+		if !entryAutoRecallEligible(entries[i], now) {
+			continue
+		}
 		if !entries[i].LastReferencedAt.IsZero() && now.Sub(entries[i].LastReferencedAt) < referenceThrottle {
 			continue
 		}
@@ -146,6 +149,12 @@ func (m *Manager) markReferenced(ids map[string]struct{}) {
 	if err := m.writeEntries(entries); err != nil {
 		return
 	}
+}
+
+// RecordInjection acknowledges only layers actually included in a successful
+// model request. Previews and throttled-out recalls must not call this.
+func (m *Manager) RecordInjection(layers ContextLayers) {
+	m.markReferenced(referencedIDs(layers.Identity, layers.Core, layers.Relevant))
 }
 
 // MilestonePatterns are title fragments that mark a durable memory as a

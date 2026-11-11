@@ -52,6 +52,7 @@ type Requirements struct {
 	HookNames           []string `json:"hook_names,omitempty"`
 	ShellHints          []string `json:"shell_hints,omitempty"`
 	OSHints             []string `json:"os_hints,omitempty"`
+	SupportedOS         []string `json:"supported_os,omitempty"`
 }
 
 // CatalogEntry is the lightweight metadata exposed before a skill is activated.
@@ -275,6 +276,25 @@ func applyRuntimeCompatibility(parsed *Skill) {
 	if parsed == nil {
 		return
 	}
+	// Cached normalization used to turn any mention of "Windows" into an OS
+	// restriction. Re-evaluate advisory hints from source, including old caches.
+	hadOSHint := len(parsed.Requires.OSHints) > 0
+	inferred, _ := analyzeRequirements(parsed)
+	parsed.Requires.OSHints = inferred.OSHints
+	cleanOSNotes := func(values []string) []string {
+		var kept []string
+		for _, value := range values {
+			if value != "Contains OS-specific assumptions." && !strings.HasPrefix(value, "Current runtime OS is ") {
+				kept = append(kept, value)
+			}
+		}
+		return kept
+	}
+	parsed.Compatibility.Notes = cleanOSNotes(parsed.Compatibility.Notes)
+	parsed.Warnings = cleanOSNotes(parsed.Warnings)
+	if hadOSHint && len(parsed.Requires.OSHints) == 0 && parsed.Compatibility.Status == CompatibilityDegradedSupported && len(parsed.Compatibility.MissingCapabilities)+len(parsed.Compatibility.MissingDependencies)+len(parsed.Compatibility.Notes) == 0 {
+		parsed.Compatibility.Status = CompatibilityNativeSupported
+	}
 
 	missingDeps := missingExecutables(parsed.Requires.Executables)
 	if len(missingDeps) > 0 {
@@ -293,6 +313,21 @@ func applyRuntimeCompatibility(parsed *Skill) {
 		}
 		parsed.Compatibility.Notes = stringutil.AppendUnique(parsed.Compatibility.Notes, osMismatchNote)
 		parsed.Warnings = stringutil.AppendUnique(parsed.Warnings, osMismatchNote)
+	}
+	if len(parsed.Requires.SupportedOS) > 0 {
+		supported := false
+		for _, osName := range parsed.Requires.SupportedOS {
+			if normalizeRuntimeOS(osName) == normalizeRuntimeOS(runtime.GOOS) {
+				supported = true
+				break
+			}
+		}
+		if !supported {
+			parsed.Compatibility.Status = CompatibilityUnsupported
+			note := fmt.Sprintf("Declared supported_os=%s excludes current runtime %s.", strings.Join(parsed.Requires.SupportedOS, ","), runtime.GOOS)
+			parsed.Compatibility.Notes = stringutil.AppendUnique(parsed.Compatibility.Notes, note)
+			parsed.Warnings = stringutil.AppendUnique(parsed.Warnings, note)
+		}
 	}
 
 	parsed.Compatibility.MissingCapabilities = stringutil.Unique(parsed.Compatibility.MissingCapabilities)
@@ -349,7 +384,7 @@ func runtimeOSMismatch(hints []string) string {
 			return ""
 		}
 	}
-	return fmt.Sprintf("Current runtime OS is %s, but this skill contains %s-specific guidance.", current, strings.Join(stringutil.Unique(hints), ", "))
+	return fmt.Sprintf("Current runtime OS is %s, but this skill contains %s-specific execution examples. These hints are advisory; supported_os declares hard requirements.", current, strings.Join(stringutil.Unique(hints), ", "))
 }
 
 func normalizeRuntimeOS(value string) string {
@@ -758,7 +793,7 @@ func parseSkill(name, pathValue, raw string) (*Skill, error) {
 		RecommendedBundles: stringListValue(frontmatter["recommended_bundles"]),
 		Sections:           sections,
 		SectionOrder:       order,
-		Requires:           Requirements{},
+		Requires:           Requirements{SupportedOS: stringListValue(frontmatter["supported_os"])},
 		Compatibility: Compatibility{
 			Status: CompatibilityNativeSupported,
 		},

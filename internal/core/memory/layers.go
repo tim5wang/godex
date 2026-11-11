@@ -239,8 +239,9 @@ func (m *Manager) selectCoreMemories(entries []Entry, limit int) ([]RelevantMemo
 			return nil, err
 		}
 		core = append(core, RelevantMemory{
-			Entry:   record.Entry,
-			Content: record.Content,
+			Entry:          record.Entry,
+			Content:        record.Content,
+			SourceDocument: sourceDocumentFromContent(record.Content),
 		})
 	}
 	return core, nil
@@ -279,8 +280,9 @@ func (m *Manager) selectIdentityMemories(entries []Entry, limit int) ([]Relevant
 			return nil, err
 		}
 		identity = append(identity, RelevantMemory{
-			Entry:   record.Entry,
-			Content: record.Content,
+			Entry:          record.Entry,
+			Content:        record.Content,
+			SourceDocument: sourceDocumentFromContent(record.Content),
 		})
 	}
 	return identity, nil
@@ -539,6 +541,7 @@ func estimateRelevantMemoryTokens(mem RelevantMemory) int {
 	total += compress.CountTokens(mem.File)
 	total += compress.CountTokens(mem.Summary)
 	total += compress.CountTokens(mem.Content)
+	total += compress.CountTokens(mem.SourceDocument)
 	return total
 }
 

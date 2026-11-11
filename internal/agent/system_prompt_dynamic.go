@@ -15,6 +15,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/instructions"
 	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/core/templates"
+	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/platform/textutil"
 	"github.com/tim5wang/godex/internal/platform/tooling"
 	"github.com/tim5wang/godex/internal/tools"
@@ -22,15 +23,22 @@ import (
 )
 
 type EnvironmentPromptInput struct {
-	Version      version.Info
-	WorkspaceDir string
-	SkillsDir    string
-	StateDir     string
-	TempDir      string
-	Shell        string
-	Platform     string
-	Timezone     string
-	Now          time.Time
+	Version            version.Info
+	WorkspaceDir       string
+	SkillsDir          string
+	StateDir           string
+	TempDir            string
+	Shell              string
+	Platform           string
+	Timezone           string
+	Now                time.Time
+	ExecutionMode      string
+	ApprovalMode       string
+	SecurityProfile    string
+	Channel            string
+	HasDefaultDelivery bool
+	CronTimezone       string
+	HeartbeatTimezone  string
 }
 
 const (
@@ -74,7 +82,7 @@ func (a *Agent) buildDynamicSystemPrompt(agentProfile string) (string, error) {
 	), "\n\n"), nil
 }
 
-func (a *Agent) buildDynamicRuntimePromptSections(agentProfile string) ([]runtimePromptSection, error) {
+func (a *Agent) buildDynamicRuntimePromptSections(agentProfile string, session ...automation.SessionContext) ([]runtimePromptSection, error) {
 	profile := a.effectiveTemplateProfile(agentProfile)
 	sections := make([]runtimePromptSection, 0, 5)
 
@@ -92,7 +100,7 @@ func (a *Agent) buildDynamicRuntimePromptSections(agentProfile string) ([]runtim
 		}
 		sections = appendRuntimePromptSection(sections, "active_skills", protocol.KindBackground, buildActiveSkillsPrompt(a.activeSkillStates()))
 	}
-	sections = appendRuntimePromptSection(sections, "environment", protocol.KindBackground, buildEnvironmentPrompt(a.environmentPromptInput()))
+	sections = appendRuntimePromptSection(sections, "environment", protocol.KindBackground, buildEnvironmentPrompt(a.environmentPromptInput(session...)))
 	sections = appendRuntimePromptSection(sections, "tool_availability", protocol.KindBackground, buildToolAvailabilityPromptForProfile(a.toolHandler.Catalog(), profile))
 	// P4 prompt/context contributor: append sections contributed by active
 	// plugins (e.g. WASM plugins via pluginrt Manager.PromptSections). The
@@ -182,39 +190,52 @@ func runtimePromptSectionTokenMap(sections []runtimePromptSection) map[string]in
 	return out
 }
 
-func (a *Agent) environmentPromptInput() EnvironmentPromptInput {
+func (a *Agent) environmentPromptInput(session ...automation.SessionContext) EnvironmentPromptInput {
 	now := a.now()
-	timezone := "Local"
-	if loc := now.Location(); loc != nil && loc.String() != "" {
-		timezone = loc.String()
-	}
-
-	shell := os.Getenv("SHELL")
-	if shell == "" {
+	shell := filepath.Base(os.Getenv("SHELL"))
+	if shell == "." || shell == "" {
 		shell = "unknown"
-	} else {
-		shell = filepath.Base(shell)
 	}
-
-	workspaceDir := a.cfg.WorkspaceDir
-	// Relay sessions (exec_mode=relay:<node>) run their bash/file tools on a
-	// remote node through the center tunnel, not in this process's local
-	// directory. Show the remote node so the model does not mistake the local
-	// A-side path for where tools actually execute.
-	if binding := a.SandboxBinding(); binding.Execution.Mode == tooling.ExecutionModeRelay && binding.Execution.RelayNode != "" {
-		workspaceDir = "relay node " + binding.Execution.RelayNode
+	binding := a.SandboxBinding()
+	mode := binding.Execution.Mode
+	if mode == "" {
+		mode = tooling.ExecutionModeLocal
 	}
-
+	workspace := binding.WorkspaceDir
+	if workspace == "" {
+		workspace = a.cfg.WorkspaceDir
+	}
+	if mode == tooling.ExecutionModeRelay {
+		workspace = "relay node " + binding.Execution.RelayNode + " (workspace resolved by node)"
+		shell = "remote executor"
+	}
+	if mode == tooling.ExecutionModeSSH {
+		workspace = binding.Execution.SSHWorkspace
+		shell = "remote executor"
+	}
+	var sc automation.SessionContext
+	if len(session) > 0 {
+		sc = session[0]
+	}
+	approval := sc.ApprovalMode
+	if approval == "" {
+		approval = a.cfg.Tools.Permissions.InteractiveApprovalMode
+	}
+	if approval == "" {
+		approval = "configured policy default"
+	}
+	channel := sc.Source
+	if channel == "" {
+		channel = sc.LocatorChannel
+	}
+	timezone := runtimeTimezone(now)
 	return EnvironmentPromptInput{
-		Version:      version.Current(),
-		WorkspaceDir: workspaceDir,
-		SkillsDir:    a.cfg.SkillsDir,
-		StateDir:     a.cfg.StateDir,
-		TempDir:      a.cfg.TempDir,
-		Shell:        shell,
-		Platform:     runtime.GOOS,
-		Timezone:     timezone,
-		Now:          now,
+		Version: version.Current(), WorkspaceDir: workspace, SkillsDir: a.cfg.SkillsDir,
+		StateDir: a.cfg.StateDir, TempDir: binding.TempDir, Shell: shell, Platform: runtime.GOOS,
+		Timezone: timezone, Now: now, ExecutionMode: mode, ApprovalMode: approval,
+		SecurityProfile: sc.SecurityProfile, Channel: channel, HasDefaultDelivery: !sc.DefaultDelivery.IsZero(),
+		CronTimezone:      schedulingTimezone(a.cfg.Cron.DefaultTimezone, timezone),
+		HeartbeatTimezone: schedulingTimezone(a.cfg.Heartbeat.DefaultTimezone, timezone),
 	}
 }
 
@@ -226,7 +247,8 @@ func buildEnvironmentPrompt(input EnvironmentPromptInput) string {
 		fmt.Sprintf("- Workspace root: %s", input.WorkspaceDir),
 		fmt.Sprintf("- Skills directory: %s", input.SkillsDir),
 		fmt.Sprintf("- State directory: %s", input.StateDir),
-		fmt.Sprintf("- Temporary files directory: %s", input.TempDir),
+		fmt.Sprintf("- Agent scratch directory: %s (inside the execution workspace; subject to tool permissions)", tooling.AgentScratchDir),
+		fmt.Sprintf("- Host output directory: %s (host-managed; not an additional Agent write root)", input.TempDir),
 		fmt.Sprintf("- Shell: %s", input.Shell),
 		fmt.Sprintf("- Platform: %s", input.Platform),
 		fmt.Sprintf("- Timezone: %s", input.Timezone),
@@ -234,16 +256,34 @@ func buildEnvironmentPrompt(input EnvironmentPromptInput) string {
 		"- Inbox and background updates are ephemeral runtime context and are not persisted automatically.",
 		"- Conversation history may be compacted automatically when it grows large.",
 	}
+	if input.ExecutionMode != "" {
+		lines = append(lines, "- Execution backend: "+input.ExecutionMode)
+	}
+	if input.ApprovalMode != "" {
+		lines = append(lines, "- Approval mode: "+input.ApprovalMode)
+	}
+	if input.SecurityProfile != "" {
+		lines = append(lines, "- Security profile: "+input.SecurityProfile)
+	}
+	if input.Channel != "" {
+		lines = append(lines, "- Channel: "+input.Channel, fmt.Sprintf("- Interactive UI cards supported: %t", input.Channel == "web"))
+	}
+	if input.CronTimezone != "" && (input.CronTimezone != input.Timezone || input.HeartbeatTimezone != input.Timezone) {
+		lines = append(lines, fmt.Sprintf("- Scheduling timezone defaults: cron=%s; heartbeat=%s (omit timezone to inherit)", input.CronTimezone, input.HeartbeatTimezone))
+	}
+	if input.HasDefaultDelivery {
+		lines = append(lines, "- Scheduled delivery: current session/channel supplied by the host; omit delivery_target to inherit it.")
+	}
 	return strings.Join(lines, "\n")
 }
 
-// buildEnvironmentDatePrompt renders the volatile date/weekday line. It is kept
+// buildEnvironmentDatePrompt renders the volatile clock/date/weekday. It is kept
 // OUT of the stable # Environment section (which sits before conversation
-// history): the daily rollover would invalidate the provider prefix cache for
+// history): clock updates would invalidate the provider prefix cache for
 // the whole history. It is appended in the volatile tail instead, where its
 // churn is uncached but tiny.
 func buildEnvironmentDatePrompt(now time.Time) string {
-	return fmt.Sprintf("- Local date: %s\n- Weekday: %s", now.Format("2006-01-02"), now.Weekday())
+	return fmt.Sprintf("- Current local time (RFC3339): %s\n- Local date: %s\n- Weekday: %s", now.Format(time.RFC3339), now.Format("2006-01-02"), now.Weekday())
 }
 
 func buildCapabilityCheckPrompt(catalog tools.ToolCatalog) string {
@@ -268,7 +308,7 @@ func buildCapabilityCheckPrompt(catalog tools.ToolCatalog) string {
 			"- Keep the active tool workspace small: when calling tool_exchange, disable bundles that are clearly irrelevant to the current conversation before or after enabling new ones.",
 			"- For obvious current-information requests such as weather, news, prices, stocks, exchange rates, scores, schedules, flights, or latest/recent status, use web_search directly when web is active; if web is inactive, call tool_exchange once with enable_bundles=[\"web\"] rather than querying for a weather/search tool.",
 			"- If tool_exchange returns no match, do not repeat similar capability queries; switch to active tools or say the capability is unavailable.",
-			"- When delegating web or current-information research to durable subagents, pass required_bundles=[\"web\"] after web is active; if subagent reports subagent_capability_required, enable the missing bundle with tool_exchange and retry once.",
+			"- For delegated web research, first enable the subagent bundle if inactive, ensure web is active in the parent, then pass required_bundles=[\"web\"]. If subagent_capability_required reports a missing capability, enable it with tool_exchange and retry once.",
 		)
 	} else {
 		lines = append(lines,
@@ -283,7 +323,7 @@ func buildCapabilityCheckPrompt(catalog tools.ToolCatalog) string {
 	if hasWeb || hasBrowser {
 		lines = append(lines,
 			"- Prefer web for current information, browser for dynamic pages, and glob for broad file discovery.",
-			"- After web_search or web_fetch returns useful results, synthesize from ranked results, fetched previews, metadata, and chunks; fetch one specific new URL only when more detail is needed. If web_fetch reports needs_browser, use the provided fallback_hint (a proven curl/GitHub-API/npm-registry bypass, see docs/tools_issues.md) or the browser tool for dynamic pages. Do not repeat the same search query or fetch the same URL.",
+			"- After web_search or web_fetch returns useful results, synthesize from ranked results, fetched previews, metadata, and chunks; fetch one specific new URL only when more detail is needed. If web_fetch reports needs_browser, use its self-contained fallback_hint as a historical workaround to verify, or an active browser tool. Fetch alternate official API/static URLs with web_fetch; use shell only when the returned hint explicitly requires it and shell is active. docs/tools_issues.md is optional project-local background, not a required dependency. Do not repeat the same search query or fetch the same URL.",
 		)
 	} else {
 		lines = append(lines, "- Prefer glob for broad file discovery.")
@@ -332,8 +372,8 @@ func buildCapabilityCheckPromptForProfile(catalog tools.ToolCatalog, profile str
 	}
 	if hasToolExchange {
 		lines = append(lines,
-			"- If the user asks for current web information, use tool_exchange to enable the web bundle, then use web_search or web_fetch. Do not use bash with curl/wget as a substitute for the web tools.",
-			"- When delegating web or current-information research to durable subagents, pass required_bundles=[\"web\"] after web is active; if subagent reports subagent_capability_required, enable the missing bundle with tool_exchange and retry once.",
+			"- If the user asks for current web information, use tool_exchange to enable the web bundle, then use web_search or web_fetch. For a reported fetch failure, follow the explicit fallback_hint; shell fallback requires an active shell tool and the same network/approval policy.",
+			"- For delegated web research, first enable the subagent bundle if inactive, ensure web is active in the parent, then pass required_bundles=[\"web\"]. If subagent_capability_required reports a missing capability, enable it with tool_exchange and retry once.",
 			"- Enable browser, subagent, background, package, skill, memory, MCP, or external agent bundles only when the user explicitly asks for that capability or the active task clearly requires it.",
 			"- If tool_exchange returns no match, continue with active coding tools or state the missing capability plainly.",
 		)
@@ -422,7 +462,7 @@ func buildToolAvailabilityPrompt(catalog tools.ToolCatalog) string {
 		lines = append(lines, "This session's tool set is fixed; capabilities not listed below are not available on demand.")
 	}
 	if catalogHasActiveTool(catalog, "web_search") || catalogHasActiveTool(catalog, "web_fetch") {
-		lines = append(lines, "Do not use bash/curl/python/node as a substitute for web_search or web_fetch when the web bundle is active.")
+		lines = append(lines, "Use active web_search/web_fetch for normal web work. Shell is allowed only after a reported fetch failure with a fallback_hint explicitly requiring it and an active shell tool; it remains subject to shell/network/approval policy.")
 	}
 
 	if active := formatBundleSummary(catalog.Bundles, true); active != "" {
@@ -469,7 +509,7 @@ func buildToolAvailabilityPromptForProfile(catalog tools.ToolCatalog, profile st
 		lines = append(lines, "This session's tool set is fixed; capabilities not listed below are not available on demand.")
 	}
 	if forbidden := activeReplacementForbiddenTools(catalog); forbidden != "" {
-		lines = append(lines, "Do not use bash/curl/python/node to substitute for "+forbidden+".")
+		lines = append(lines, "Use active "+forbidden+" during normal operation. For a reported web_fetch failure, shell fallback is allowed only when the returned fallback_hint explicitly requires it and shell is active; existing network/approval policy still applies.")
 	}
 	if active := formatBundleSummary(catalog.Bundles, true); active != "" {
 		lines = append(lines, "- Active bundles: "+active)
@@ -576,7 +616,7 @@ func formatSkillCatalogLine(item skill.CatalogEntry) string {
 		label = strings.TrimSpace(item.ID)
 	}
 	if strings.TrimSpace(item.ID) != "" && !strings.EqualFold(strings.TrimSpace(item.ID), label) {
-		label += " (id: " + strings.TrimSpace(item.ID) + ")"
+		label += " (load id: " + strings.TrimSpace(item.ID) + ")"
 	}
 	line := fmt.Sprintf("- %s: %s", label, item.Description)
 	if whenToUse := promptWhenToUse(item); len(whenToUse) > 0 {

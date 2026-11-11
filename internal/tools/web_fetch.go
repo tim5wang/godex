@@ -278,7 +278,7 @@ type webFetchArgs struct {
 }
 
 func NewWebFetchTool(service *WebFetchService) Tool {
-	return NewTypedTool(NewToolSpec("web_fetch", "Fetch a web page or URL, extract readable content, metadata, browser-needed warnings, and relevant chunks; spill large responses to a temp file. On anti-crawl hosts (WeChat/GitHub/npm/Cloudflare) a degraded result carries a fallback_hint with a proven bypass route (curl mobile-UA / GitHub API / npm registry).", map[string]interface{}{
+	return NewTypedTool(NewToolSpec("web_fetch", "Fetch a web page or URL, extract readable content, metadata, browser-needed warnings, and relevant chunks; spill large responses to a temp file. On anti-crawl hosts (WeChat/GitHub/npm/Cloudflare) a degraded result carries a self-contained fallback_hint suggesting a historical workaround (shell mobile-UA / official API / browser) to verify; availability is not guaranteed.", map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
 			"url": map[string]interface{}{
@@ -629,7 +629,7 @@ func fallbackHintForURL(rawURL string, needsBrowser bool, body []byte, contentLe
 	}
 	switch {
 	case strings.HasSuffix(host, "weixin.qq.com"):
-		return `web_fetch could not get the WeChat article body (needs_browser/captcha). Fall back to bash+curl with a mobile UA to download the raw HTML, then extract the div#js_content section. See docs/tools_issues.md 2026-08-24.`
+		return `web_fetch could not get the WeChat article body (needs_browser/captcha). A historical workaround is bash+curl with a mobile UA followed by extracting div#js_content. Use it only with an active shell and existing network/approval policy; otherwise use an available browser. Verify the result; this route is not guaranteed. Optional background: docs/tools_issues.md 2026-08-24.`
 	case host == "github.com":
 		return `web_fetch could not get the GitHub repo content. Prefer the GitHub API: GET api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1 for the file tree; if the branch is unknown, first GET api.github.com/repos/{owner}/{repo} to read the default_branch, then fetch raw files from raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}. See docs/tools_issues.md 2026-08-27.`
 	case host == "raw.githubusercontent.com":

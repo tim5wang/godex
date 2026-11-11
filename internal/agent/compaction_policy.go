@@ -542,7 +542,7 @@ func (a *Agent) maybeStartBackgroundCompaction(ctx context.Context) {
 		if err != nil {
 			return
 		}
-		promptStateSections, err := a.buildDynamicRuntimePromptSections(agentProfileFromContext(ctx))
+		promptStateSections, err := a.buildDynamicRuntimePromptSections(agentProfileFromContext(ctx), tools.SessionContextFromContext(ctx))
 		if err != nil {
 			return
 		}

@@ -13,7 +13,7 @@ const (
 	scopeLocal   = "local"
 )
 
-// Loader discovers AGENT.md instruction files for the current workspace.
+// Loader discovers AGENTS.md (or legacy AGENT.md) for the current workspace.
 type Loader struct{}
 
 // NewLoader creates a new instruction loader.
@@ -25,10 +25,16 @@ func NewLoader() *Loader {
 func (l *Loader) Load(workspaceDir, stateDir string) ([]InstructionSource, error) {
 	sources := make([]InstructionSource, 0, 3)
 
-	projectPath := filepath.Join(workspaceDir, "AGENT.md")
+	projectPath := filepath.Join(workspaceDir, "AGENTS.md")
 	projectSource, err := loadOptionalFile(projectPath, scopeProject, 1)
 	if err != nil {
 		return nil, err
+	}
+	if projectSource == nil {
+		projectSource, err = loadOptionalFile(filepath.Join(workspaceDir, "AGENT.md"), scopeProject, 1)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if projectSource != nil {
 		sources = append(sources, *projectSource)
@@ -41,10 +47,16 @@ func (l *Loader) Load(workspaceDir, stateDir string) ([]InstructionSource, error
 	}
 	sources = append(sources, ruleSources...)
 
-	localPath := filepath.Join(stateDir, "AGENT.local.md")
+	localPath := filepath.Join(stateDir, "AGENTS.local.md")
 	localSource, err := loadOptionalFile(localPath, scopeLocal, 3)
 	if err != nil {
 		return nil, err
+	}
+	if localSource == nil {
+		localSource, err = loadOptionalFile(filepath.Join(stateDir, "AGENT.local.md"), scopeLocal, 3)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if localSource != nil {
 		sources = append(sources, *localSource)

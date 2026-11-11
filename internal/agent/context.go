@@ -76,7 +76,7 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 	for _, msg := range stableMemoryMessages {
 		memoryIndexTokens += compress.CountTokens(protocol.MessageText(msg))
 	}
-	promptStateSections, err := a.buildDynamicRuntimePromptSections(agentProfile)
+	promptStateSections, err := a.buildDynamicRuntimePromptSections(agentProfile, tools.SessionContextFromContext(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -403,7 +403,7 @@ func (a *Agent) buildRuntimeSystemPrompt(agentProfile ...string) (string, error)
 	), "\n\n"), nil
 }
 
-const conciseDefaultResponsePrompt = "Default response style: be concise unless the user asks for a detailed report. Do not restate stable context, raw tool output, or lengthy process notes unless they directly change the answer. When a stage produces a verified finding or changes your decision, put a brief conclusion and any remaining verification in assistant text so the user and later calls can reuse it. Do not expose private reasoning or narrate routine tool calls. Reuse established evidence; only investigate unresolved questions that can change the result. Once the requested result is supported, deliver it without another round of confirmation. Batch independent read-only queries in one tool round; keep dependent steps ordered. For code navigation, prefer native grep and read_file with their returned match offsets and line ranges over shell pipelines."
+const conciseDefaultResponsePrompt = "Default response style: be concise unless the user asks for a detailed report. Do not restate stable context, raw tool output, or lengthy process notes unless they directly change the answer. When a stage produces a verified finding or changes your decision, put a brief conclusion and any remaining verification in assistant text so the user and later calls can reuse it. Do not expose private reasoning or narrate routine tool calls. Reuse established evidence; only investigate unresolved questions that can change the result. Once the requested result is supported, deliver it without another round of confirmation. Batch independent read-only queries in one tool round; keep dependent steps ordered. Follow Tool Availability for symbol versus text navigation; prefer the corresponding native tools over equivalent shell pipelines."
 
 // collectRuntimeMessages gathers per-turn runtime notifications. When gateTodo
 // is true (the active request path), the todo status is only injected when its
@@ -1076,9 +1076,13 @@ const maxRelevantMemoryContentRunes = 800
 func appendMemorySection(builder *strings.Builder, memories []memory.RelevantMemory, includeContent bool) {
 	for _, mem := range memories {
 		builder.WriteString(fmt.Sprintf("- %s [%s] (%s): %s\n", mem.Title, mem.Type, mem.File, mem.Summary))
-		if content := strings.TrimSpace(mem.Content); includeContent && content != "" {
+		content := textutil.TruncateRunes(strings.TrimSpace(mem.Content), maxRelevantMemoryContentRunes)
+		if mem.SourceDocument != "" && (!includeContent || !strings.Contains(content, "Source document: "+mem.SourceDocument)) {
+			builder.WriteString(fmt.Sprintf("  Source document: %s\n", mem.SourceDocument))
+		}
+		if includeContent && content != "" {
 			builder.WriteString("  ")
-			builder.WriteString(strings.ReplaceAll(textutil.TruncateRunes(content, maxRelevantMemoryContentRunes), "\n", "\n  "))
+			builder.WriteString(strings.ReplaceAll(content, "\n", "\n  "))
 			builder.WriteString("\n")
 		}
 	}

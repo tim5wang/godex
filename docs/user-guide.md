@@ -83,7 +83,11 @@ GoDex 将跨项目稳定资产和项目状态分开管理：
 - `GODEX_PROJECT_DIR` 默认是当前工作目录，只作为代码/文件工具的 workspace 边界。项目目录中的 `godex.yaml` / `.env` 仍是**可读的兼容层**：项目配置会深合并覆盖 home 配置（项目优先）。
 - `GODEX_CONFIG` 可指定一个显式配置文件（相对路径按 `GODEX_PROJECT_DIR` 解析）。
 
-项目指令（instructions）加载优先级：workspace 根 `AGENT.md`（项目级）> `<state>/rules/*.md`（规则级）> `<state>/AGENT.local.md`（本地级），注入到系统提示词的 `# Instructions` 段。
+项目指令（instructions）加载优先级：workspace 根 `AGENTS.md`（项目级）> `<state>/rules/*.md`（规则级）> `<state>/AGENTS.local.md`（本地级），注入到系统提示词的 `# Instructions` 段。规范文件缺失或为空时，分别回退到旧名 `AGENT.md` / `AGENT.local.md`；同一层不会重复注入两份。项目级当前只自动加载 workspace 根文件。
+
+Agent 的临时脚本和草稿统一使用 workspace 内的 `.godex/tmp`，仍受文件和 shell 工具权限约束。`paths.temp_dir`（默认 `~/.godex/tmp`）以及命令输出溢出目录 `.godex/.tmp/command-output` 由宿主管理，不会额外扩大 Agent 可写范围。环境提示从实际执行绑定读取 workspace 和输出目录，标明审批模式、渠道与时区；当前时刻单独置于易变上下文尾部，避免每轮破坏历史前缀缓存。调度省略时区时继承 cron/heartbeat 各自配置，省略送达目标时使用宿主提供的会话默认目标。
+
+简单问答、仅分析或用户要求不调用工具时，不强制建立 todo。多阶段任务在有意义的阶段边界批量更新；仅包含请求回声的空账本不注入，真实用户消息仍保留在对话历史。MCP 清单、LSP 状态和详细权限按任务需要查询，避免把完整运行时清单常驻上下文。文档型记忆会保留 `Source document:` 文件指针，正文截断后仍可定位原文。
 
 需要把旧的项目级配置迁移到 `~/.godex` 时：
 
@@ -955,6 +959,16 @@ Smoke execution 绑定 backend session，并复用普通 shell permission、appr
 - 本地路径：Web `Skills` 安装入口或 Chat 中 `skill` 工具（`action=install`）
 - GitHub：Web `Skills -> Packages` 填写 `owner/repo` 或 `https://github.com/owner/repo.git`
 - 调试顺序：先看 package quality → Commands/Roles/Prompts → 显式运行 smoke
+
+### Skill 平台要求
+
+技能正文中的平台示例只产生兼容提示，不直接判定技能不可用。例如 “On Windows, use python” 不会限制其他系统。确实只能在指定平台运行的技能应在 `SKILL.md` frontmatter 显式声明：
+
+```yaml
+supported_os: [darwin, linux]
+```
+
+`supported_os` 是硬要求：不包含当前宿主 OS 时，技能仍可查看，但不能激活到会话。`os_hints` 是从执行示例提取的参考信息，不能替代硬要求。目录里的 `(load id: ...)` 表示传给 skill load 的标识。
 
 ### Claude Code 生态导入
 

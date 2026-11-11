@@ -23,7 +23,7 @@ type todoListArgs struct{}
 
 // NewTodoWriteTool creates a new todo write tool.
 func NewTodoWriteTool(mgr *todo.Manager) Tool {
-	return NewTypedTool(NewToolSpec("todo_write", "Update the todo list for the current task. Use this tool proactively and often to track progress. The first action of a multi-step task must be a todo_write that lists every step in order. After finishing any sub-step, immediately call todo_write again to mark that item completed and set the next pending item to in_progress before starting the next action. The list must always contain exactly one in_progress item while work is in progress; never leave a finished item as in_progress, and never advance to the next item without first marking the previous one completed. To update, send the full updated list with items: [{content,status,active_form}]. Use the items array directly; do not wrap the list in a JSON string object.", map[string]interface{}{
+	return NewTypedTool(NewToolSpec("todo_write", "Track substantial multi-step execution when a todo list helps. Skip simple answers, analysis-only requests, and requests that forbid tool calls. Update at meaningful stage changes or batch completed items; a tool call is not required after every sub-step. Keep at most one in_progress item and mark completed work completed. To update, send the full list as items: [{content,status,active_form}], not a JSON string object.", map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
 			"items": map[string]interface{}{

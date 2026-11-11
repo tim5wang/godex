@@ -108,7 +108,7 @@ godex providers list
 godex providers test <provider-id>
 ```
 
-Global configuration and default runtime data live under `~/.godex`: providers, skills, sessions, memory, tmp/cache, logs, and related files are not written to the current project directory by default. Project directories only keep explicitly created project files such as `godex.yaml`, `.env.example`, and `AGENT.md`. For details, see [docs/user-guide.md](docs/user-guide.md).
+Global configuration and default runtime data live under `~/.godex`: providers, skills, sessions, memory, tmp/cache, logs, and related files are not written to the current project directory by default. Project directories only keep explicitly created project files such as `godex.yaml`, `.env.example`, and `AGENTS.md` (legacy `AGENT.md` is supported). For details, see [docs/user-guide.md](docs/user-guide.md).
 
 ## Common Entry Points
 

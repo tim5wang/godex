@@ -449,6 +449,15 @@ func truncateBody(content string) string {
 	return strings.TrimSpace(content[:end]) + "..."
 }
 
+func sourceDocumentFromContent(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		if path, ok := strings.CutPrefix(strings.TrimSpace(line), "Source document:"); ok {
+			return strings.TrimSpace(path)
+		}
+	}
+	return ""
+}
+
 func scoreRelevantMemory(queryLower string, terms []string, entry Entry, content string) int {
 	title := strings.ToLower(entry.Title)
 	summary := strings.ToLower(entry.Summary)

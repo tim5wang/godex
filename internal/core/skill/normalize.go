@@ -458,7 +458,11 @@ func applyNormalized(parsed *Skill, normalized normalizedArtifacts) {
 	if len(doc.Sections) > 0 {
 		parsed.SectionOrder = append([]string{}, doc.Sections...)
 	}
+	declaredOS := parsed.Requires.SupportedOS
 	parsed.Requires = doc.Requires
+	// Hard platform requirements must come from the skill author's declaration,
+	// never from inferred or model-generated normalization metadata.
+	parsed.Requires.SupportedOS = declaredOS
 	parsed.Compatibility = doc.Compatibility
 	parsed.Warnings = append([]string{}, doc.Warnings...)
 	parsed.SourceHash = doc.SourceHash
@@ -512,7 +516,7 @@ func fallbackWhenToUse(parsed *Skill) []string {
 
 func analyzeRequirements(parsed *Skill) (Requirements, []string) {
 	text := strings.ToLower(parsed.Content)
-	req := Requirements{}
+	req := Requirements{SupportedOS: parsed.Requires.SupportedOS}
 	warnings := make([]string, 0, 8)
 
 	if strings.Contains(text, "mcp__") || strings.Contains(text, "mcp ") || strings.Contains(text, "mcp_") {
@@ -557,13 +561,13 @@ func analyzeRequirements(parsed *Skill) (Requirements, []string) {
 	if strings.Contains(text, "powershell") || strings.Contains(text, ".ps1") {
 		req.ShellHints = stringutil.AppendUnique(req.ShellHints, "powershell")
 	}
-	if strings.Contains(parsed.Content, "C:\\") || strings.Contains(text, "windows") {
+	if strings.Contains(parsed.Content, "C:\\") || strings.Contains(text, ".ps1") || strings.Contains(text, "powershell ") || strings.Contains(text, "pwsh ") || strings.Contains(text, "windows-only") || strings.Contains(text, "requires windows") {
 		req.OSHints = stringutil.AppendUnique(req.OSHints, "windows")
 	}
-	if strings.Contains(text, "darwin") || strings.Contains(text, "macos") {
+	if strings.Contains(text, "macos-only") || strings.Contains(text, "darwin-only") || strings.Contains(text, "osascript ") || strings.Contains(text, "import appkit") {
 		req.OSHints = stringutil.AppendUnique(req.OSHints, "darwin")
 	}
-	if strings.Contains(text, "linux") {
+	if strings.Contains(text, "linux-only") || strings.Contains(text, "/proc/") || strings.Contains(text, "systemctl ") {
 		req.OSHints = stringutil.AppendUnique(req.OSHints, "linux")
 	}
 

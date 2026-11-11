@@ -21,6 +21,7 @@ const projectLedgerFileName = "project_ledger.json"
 type ProjectLedger struct {
 	SessionID          string                 `json:"session_id"`
 	Goal               string                 `json:"goal,omitempty"`
+	GoalExplicit       bool                   `json:"goal_explicit,omitempty"`
 	CurrentRequest     string                 `json:"current_request,omitempty"`
 	DecisionsExplicit  bool                   `json:"decisions_explicit,omitempty"`
 	ChangedFilesSource string                 `json:"changed_files_source,omitempty"`
@@ -81,6 +82,7 @@ func (s *Service) UpdateProjectLedger(sessionID string, patch ProjectLedgerPatch
 	ledger.SessionID = sessionID
 	if strings.TrimSpace(patch.Goal) != "" {
 		ledger.Goal = strings.TrimSpace(patch.Goal)
+		ledger.GoalExplicit = true
 	}
 	if strings.TrimSpace(patch.CurrentPhase) != "" {
 		ledger.CurrentPhase = strings.TrimSpace(patch.CurrentPhase)
@@ -146,6 +148,7 @@ func updateLedgerRequest(ledger *ProjectLedger, text string) {
 		}
 	}
 	ledger.Goal = truncateLedgerText(text, 240)
+	ledger.GoalExplicit = false
 }
 
 // projectLedgerForRuntimeContext returns the compact ledger text plus its
@@ -157,7 +160,16 @@ func (s *Service) projectLedgerForRuntimeContext(sessionID string) (string, time
 	if err != nil {
 		return "", time.Time{}
 	}
+	if !ledgerHasMaterialContext(ledger) {
+		return "", time.Time{}
+	}
 	return ledger.Compact, ledger.UpdatedAt
+}
+
+func ledgerHasMaterialContext(ledger ProjectLedger) bool {
+	return ledger.GoalExplicit || (ledger.CurrentPhase != "" && ledger.CurrentPhase != "active") || (ledger.ChangedFilesSource == "workspace_diff" && len(ledger.ChangedFiles) > 0) ||
+		len(ledger.Validation) > 0 || (ledger.DecisionsExplicit && len(ledger.Decisions) > 0) ||
+		len(ledger.Risks)+len(ledger.Blockers)+len(ledger.NextSteps) > 0
 }
 
 func (s *Service) updateProjectLedgerFromTurn(session *sessionState, turnID string, envelope message.Envelope, status string, runErr error, priorMessageCount int, at time.Time, changedFiles []string, changesKnown bool) error {
@@ -325,7 +337,6 @@ func trimLedgerTurns(items []ProjectLedgerTurn, limit int) []ProjectLedgerTurn {
 
 func renderProjectLedgerCompact(ledger ProjectLedger) string {
 	var builder strings.Builder
-	writeLedgerLine(&builder, "Current request", ledger.CurrentRequest)
 	writeLedgerLine(&builder, "Goal", ledger.Goal)
 	writeLedgerLine(&builder, "Current phase", ledger.CurrentPhase)
 	if ledger.ChangedFilesSource == "workspace_diff" {

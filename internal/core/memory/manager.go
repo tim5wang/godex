@@ -120,8 +120,9 @@ type SearchOptions struct {
 // RelevantMemory is a retrieved memory entry plus its content.
 type RelevantMemory struct {
 	Entry
-	Content string `json:"content"`
-	Score   int    `json:"score,omitempty"`
+	Content        string `json:"content"`
+	Score          int    `json:"score,omitempty"`
+	SourceDocument string `json:"source_document,omitempty"`
 }
 
 // StoredMemory is one durable memory entry with its full content body.
@@ -688,9 +689,10 @@ func (m *Manager) FindRelevant(query string, limit int) ([]RelevantMemory, error
 	relevant := make([]RelevantMemory, 0, len(results))
 	for _, result := range results {
 		relevant = append(relevant, RelevantMemory{
-			Entry:   result.Entry,
-			Content: truncateBody(result.Content),
-			Score:   scoreRelevantMemory(queryLower, terms, result.Entry, result.Content),
+			Entry:          result.Entry,
+			Content:        truncateBody(result.Content),
+			Score:          scoreRelevantMemory(queryLower, terms, result.Entry, result.Content),
+			SourceDocument: sourceDocumentFromContent(result.Content),
 		})
 	}
 	return relevant, nil

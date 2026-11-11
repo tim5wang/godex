@@ -40,6 +40,9 @@ func (a *Agent) ActivateSkill(name string) (tools.SkillActivation, error) {
 		return tools.SkillActivation{}, err
 	}
 	entry := a.resolveSkillEntry(a.skillLoader.CatalogEntryFor(skillDef))
+	if entry.Compatibility.Status == skill.CompatibilityUnsupported {
+		return tools.SkillActivation{}, fmt.Errorf("skill %q is unsupported: %s", entry.Name, strings.Join(entry.Compatibility.Notes, "; "))
+	}
 	skillID := entry.ID
 	entry = a.catalogEntryWithSuiteMetadata(skillID, entry)
 

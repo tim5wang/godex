@@ -83,7 +83,7 @@ func NewCronTool(manager CronManager) Tool {
 			},
 			"timezone": map[string]interface{}{
 				"type":        "string",
-				"description": "IANA timezone such as Asia/Shanghai",
+				"description": "Optional IANA timezone such as Asia/Shanghai; omit to inherit the configured cron timezone",
 			},
 			"session_mode": map[string]interface{}{
 				"type":        "string",

@@ -64,23 +64,6 @@ func TestTodoWriteToolAcceptsTodosAlias(t *testing.T) {
 	}
 }
 
-func TestTodoWriteToolSpecEnforcesProactiveUsage(t *testing.T) {
-	manager := localstore.NewTodoManager(t.TempDir())
-	tool := NewTodoWriteTool(manager)
-	desc := strings.ToLower(tool.Spec().Description)
-	musts := []string{
-		"proactively",
-		"in_progress",
-		"completed",
-		"before starting",
-	}
-	for _, phrase := range musts {
-		if !strings.Contains(desc, phrase) {
-			t.Fatalf("todo_write description must include %q to enforce proactive updates, got: %q", phrase, tool.Spec().Description)
-		}
-	}
-}
-
 func TestTodoWriteToolAcceptsJSONStringArray(t *testing.T) {
 	manager := localstore.NewTodoManager(t.TempDir())
 	tool := NewTodoWriteTool(manager)

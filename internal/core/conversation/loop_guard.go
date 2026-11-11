@@ -480,8 +480,8 @@ func staleTodoFeedback(itemID int, content, activeForm string, recovery, maxReco
 	}
 	lines = append(lines,
 		budget,
-		"Call todo_write now to: (1) mark this item completed if the work is done, (2) flip it to the next pending item, or (3) split it into smaller steps and update the plan.",
-		"Do not advance to the next sub-step without first reflecting the current state in the todo list.",
+		"At the next meaningful stage transition, update todo_write to reflect completed work and the next step. Batch status changes where practical.",
+		"Do not add status-only calls for every sub-step; preserve any user restriction on tool use.",
 	)
 	return strings.Join(lines, "\n")
 }

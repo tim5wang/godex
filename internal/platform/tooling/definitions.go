@@ -2,6 +2,9 @@ package tooling
 
 import "github.com/tim5wang/godex/internal/contracts/protocol"
 
+// AgentScratchDir is relative to the execution workspace, not the host TempDir.
+const AgentScratchDir = ".godex/tmp"
+
 type Definition struct {
 	Name             string
 	Description      string
@@ -28,7 +31,7 @@ func (d Definition) ToolSchema() protocol.ToolSchema {
 func BashDefinition() Definition {
 	return Definition{
 		Name:        "bash",
-		Description: "Run a shell command from the workspace root. Sandbox limits: no command substitution $() or backticks (precompute values instead); heredocs are supported but avoid embedding unbalanced quotes inside them; file writes are restricted to the workspace (use .godex/tmp for scratch scripts). Prefer one compound command (cmd1 && cmd2) over several sequential calls when the steps are dependent.",
+		Description: "Run a shell command from the workspace root. Sandbox limits: no command substitution $() or backticks (precompute values instead); heredocs are supported but avoid embedding unbalanced quotes inside them; file-tool writes and workspace-sensitive shell operations stay in the execution workspace. Use " + AgentScratchDir + " within that workspace for scratch scripts; the host output directory is not an extra write root. Prefer one compound command (cmd1 && cmd2) over several sequential calls when the steps are dependent.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -254,7 +257,7 @@ func AttachFileDefinition() Definition {
 			"properties": map[string]interface{}{
 				"path": map[string]interface{}{
 					"type":        "string",
-					"description": "Workspace-relative path such as .godex/.tmp/report.pdf, or the exact read-only path shown for a current-session attachment",
+					"description": "Workspace-relative path such as " + AgentScratchDir + "/report.pdf, or the exact read-only path shown for a current-session attachment",
 				},
 			},
 			"required": []string{"path"},

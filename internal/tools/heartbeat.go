@@ -53,7 +53,7 @@ func NewHeartbeatTool(manager HeartbeatManager) Tool {
 			},
 			"timezone": map[string]interface{}{
 				"type":        "string",
-				"description": "IANA timezone such as Asia/Shanghai",
+				"description": "Optional IANA timezone such as Asia/Shanghai; omit to inherit the configured heartbeat timezone",
 			},
 			"active_hours_start": map[string]interface{}{
 				"type":        "string",

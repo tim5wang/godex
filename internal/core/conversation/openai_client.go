@@ -432,8 +432,9 @@ type openAIToolCallFn struct {
 }
 
 type openAIResponse struct {
-	Choices []openAIChoice `json:"choices"`
-	Usage   openAIUsage    `json:"usage,omitempty"`
+	Error   *streamWireError `json:"error,omitempty"`
+	Choices []openAIChoice   `json:"choices"`
+	Usage   openAIUsage      `json:"usage,omitempty"`
 }
 
 type openAIUsage struct {
@@ -821,6 +822,7 @@ func parseOpenAIStream(reader io.Reader, handler StreamHandler) (*protocol.Respo
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64<<10), 4<<20)
 	streamStarted := false
+	terminal := false
 	var text strings.Builder
 	calls := map[int]*openAIToolCall{}
 	order := make([]int, 0)
@@ -849,12 +851,19 @@ func parseOpenAIStream(reader io.Reader, handler StreamHandler) (*protocol.Respo
 			}
 		}
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if payload == "" || payload == "[DONE]" {
+		if payload == "[DONE]" {
+			terminal = true
+			continue
+		}
+		if payload == "" {
 			continue
 		}
 		var event openAIResponse
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			return nil, err
+		}
+		if event.Error != nil {
+			return nil, streamEventError(event.Error)
 		}
 		// Capture usage from the stream. OpenAI providers emit usage in
 		// the final chunk (the one with finish_reason) and optionally in
@@ -870,6 +879,7 @@ func parseOpenAIStream(reader io.Reader, handler StreamHandler) (*protocol.Respo
 		choice := event.Choices[0]
 		if choice.FinishReason != "" {
 			finishReason = choice.FinishReason
+			terminal = true
 		}
 		if choice.Delta.Content != "" {
 			text.WriteString(choice.Delta.Content)
@@ -928,6 +938,9 @@ func parseOpenAIStream(reader io.Reader, handler StreamHandler) (*protocol.Respo
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
+	}
+	if !terminal {
+		return nil, io.ErrUnexpectedEOF
 	}
 	blocks := make([]protocol.Block, 0, 1+len(order))
 	// Surface OpenAI `reasoning_content` deltas as a thinking block

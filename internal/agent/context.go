@@ -89,9 +89,8 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 	quasiStableMessages = append(quasiStableMessages, promptStateMessages...)
 	// Volatile runtime context: memory recall, project ledger (fresh + changed),
 	// notifications/inbox/todos (todos only when they change), and the
-	// date/weekday line. Repo-map change notes and query focus are intentionally
-	// dropped: the stable repo map already sits before history, and per-turn
-	// diff/relevance churn was repeated uncached tail noise.
+	// date/weekday line. Repository structure is discovered on demand rather
+	// than injected as a workspace-wide map.
 	volatileMessages := a.buildVolatileTailMessages(ctx, memoryMessages, runtimeMessages)
 
 	triggerTokens := a.compactionTriggerTokens()
@@ -376,7 +375,7 @@ func (a *Agent) buildRuntimeSystemPrompt(agentProfile ...string) (string, error)
 	), "\n\n"), nil
 }
 
-const conciseDefaultResponsePrompt = "Default response style: be concise unless the user asks for a detailed report. Do not restate stable context, raw tool output, or lengthy process notes unless they directly change the answer."
+const conciseDefaultResponsePrompt = "Default response style: be concise unless the user asks for a detailed report. Do not restate stable context, raw tool output, or lengthy process notes unless they directly change the answer. When a stage produces a verified finding or changes your decision, put a brief conclusion and any remaining verification in assistant text so the user and later calls can reuse it. Do not expose private reasoning or narrate routine tool calls. Reuse established evidence; only investigate unresolved questions that can change the result. Once the requested result is supported, deliver it without another round of confirmation. Batch independent read-only queries in one tool round; keep dependent steps ordered. For code navigation, prefer native grep and read_file with their returned match offsets and line ranges over shell pipelines."
 
 // collectRuntimeMessages gathers per-turn runtime notifications. When gateTodo
 // is true (the active request path), the todo status is only injected when its

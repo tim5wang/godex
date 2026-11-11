@@ -2,11 +2,15 @@ package tools
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -21,18 +25,23 @@ const (
 )
 
 type grepArgs struct {
-	Pattern         string `json:"pattern"`
-	Path            string `json:"path,omitempty"`
-	Glob            string `json:"glob,omitempty"`
-	CaseInsensitive bool   `json:"case_insensitive,omitempty"`
-	MaxResults      int    `json:"max_results,omitempty"`
-	TimeoutSeconds  int    `json:"timeout_seconds,omitempty"`
+	Pattern          string `json:"pattern"`
+	Path             string `json:"path,omitempty"`
+	Glob             string `json:"glob,omitempty"`
+	CaseInsensitive  bool   `json:"case_insensitive,omitempty"`
+	MaxResults       int    `json:"max_results,omitempty"`
+	Offset           int    `json:"offset,omitempty"`
+	IncludeGenerated bool   `json:"include_generated,omitempty"`
+	TimeoutSeconds   int    `json:"timeout_seconds,omitempty"`
 }
 
 type grepResult struct {
-	Matches      []grepMatch `json:"matches"`
-	TotalMatches int         `json:"total_matches"`
-	Truncated    bool        `json:"truncated,omitempty"`
+	Matches                  []grepMatch `json:"matches"`
+	TotalMatches             int         `json:"total_matches"`
+	Truncated                bool        `json:"truncated,omitempty"`
+	Offset                   int         `json:"offset"`
+	NextOffset               *int        `json:"next_offset,omitempty"`
+	TotalMatchesIsLowerBound bool        `json:"total_matches_is_lower_bound,omitempty"`
 }
 
 type grepMatch struct {
@@ -41,14 +50,15 @@ type grepMatch struct {
 	Content string `json:"content"`
 }
 
-// GrepOptions configures a grep search. MaxResults must already be clamped
-// by the caller to [1, maxGrepMatches].
+// GrepOptions configures a search. MaxResults is a positive collection limit,
+// including any skipped matches and pagination lookahead requested by the tool.
 type GrepOptions struct {
-	Pattern         string
-	Path            string
-	Glob            string
-	CaseInsensitive bool
-	MaxResults      int
+	Pattern          string
+	Path             string
+	Glob             string
+	CaseInsensitive  bool
+	MaxResults       int
+	IncludeGenerated bool
 }
 
 // GrepResult contains the search results from a backend.
@@ -188,7 +198,7 @@ func (b *GoGrepBackend) Search(ctx context.Context, opts GrepOptions) (GrepResul
 	maxResults := opts.MaxResults
 
 	if info.IsDir() {
-		matches, total, err := b.searchDir(ctx, root, searchPath, re, opts.Glob, maxResults)
+		matches, total, err := b.searchDir(ctx, root, searchPath, re, opts.Glob, maxResults, opts.IncludeGenerated || targetsGeneratedGrepPath(opts.Path))
 		if err != nil {
 			return GrepResult{}, err
 		}
@@ -206,13 +216,13 @@ func (b *GoGrepBackend) Search(ctx context.Context, opts GrepOptions) (GrepResul
 	return GrepResult{
 		Matches:      matches,
 		TotalMatches: fileTotal,
-		Truncated:    false,
+		Truncated:    fileTotal > len(matches),
 	}, nil
 }
 
 // searchDir walks a directory tree collecting up to maxResults regex matches.
 // Returns (collected matches, total matches found, error).
-func (b *GoGrepBackend) searchDir(ctx context.Context, root workspacefs.FS, relDir string, re *regexp.Regexp, glob string, maxResults int) ([]grepMatch, int, error) {
+func (b *GoGrepBackend) searchDir(ctx context.Context, root workspacefs.FS, relDir string, re *regexp.Regexp, glob string, maxResults int, includeGenerated bool) ([]grepMatch, int, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, 0, err
 	}
@@ -220,6 +230,8 @@ func (b *GoGrepBackend) searchDir(ctx context.Context, root workspacefs.FS, relD
 	if err != nil {
 		return nil, 0, nil // skip unreadable directories
 	}
+	// Offset pagination must not depend on filesystem enumeration order.
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 
 	collected := make([]grepMatch, 0, min(maxResults, 64))
 	total := 0
@@ -232,12 +244,19 @@ func (b *GoGrepBackend) searchDir(ctx context.Context, root workspacefs.FS, relD
 			break
 		}
 		name := entry.Name()
+		// Links and special files are not traversed during a broad search.
+		if !entry.IsDir() && !entry.Type().IsRegular() {
+			continue
+		}
 		if shouldSkipGrepEntry(name) {
+			continue
+		}
+		if entry.IsDir() && !includeGenerated && generatedGrepDir(name) {
 			continue
 		}
 		entryRel := filepath.Join(relDir, name)
 		if entry.IsDir() {
-			subMatches, subTotal, err := b.searchDir(ctx, root, entryRel, re, glob, maxResults-len(collected))
+			subMatches, subTotal, err := b.searchDir(ctx, root, entryRel, re, glob, maxResults-len(collected), includeGenerated)
 			if err != nil {
 				return collected, total, err
 			}
@@ -265,6 +284,23 @@ func shouldSkipGrepEntry(name string) bool {
 	return strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "__pycache__"
 }
 
+func generatedGrepDir(name string) bool {
+	switch name {
+	case "target", "temp", "dist", "build", "coverage":
+		return true
+	}
+	return false
+}
+
+func targetsGeneratedGrepPath(path string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(filepath.Clean(path)), "/") {
+		if generatedGrepDir(part) {
+			return true
+		}
+	}
+	return false
+}
+
 // grepFile searches a single file for regex matches.
 // collectLimit caps how many matches are returned; total still counts all matches.
 func grepFile(ctx context.Context, root workspacefs.FS, re *regexp.Regexp, path string, collectLimit int) ([]grepMatch, int, error) {
@@ -276,6 +312,19 @@ func grepFile(ctx context.Context, root workspacefs.FS, re *regexp.Regexp, path 
 		return nil, 0, nil
 	}
 	defer f.Close()
+	// Ignore binary/unreadable entries without spending a full scan on build
+	// products or aborting all source matches on a directory-like entry.
+	var sample [4096]byte
+	n, sampleErr := f.Read(sample[:])
+	if sampleErr != nil && sampleErr != io.EOF {
+		return nil, 0, nil
+	}
+	if bytes.IndexByte(sample[:n], 0) >= 0 {
+		return nil, 0, nil
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return nil, 0, err
+	}
 
 	matches := make([]grepMatch, 0, min(collectLimit, 32))
 	total := 0
@@ -288,6 +337,9 @@ func grepFile(ctx context.Context, root workspacefs.FS, re *regexp.Regexp, path 
 		}
 		lineNum++
 		line := scanner.Text()
+		if strings.IndexByte(line, 0) >= 0 {
+			return nil, 0, nil
+		}
 		if re.MatchString(line) {
 			total++
 			if len(matches) < collectLimit {
@@ -348,6 +400,9 @@ func NewGrepToolWithBackend(backend GrepBackend) Tool {
 		if maxResults > maxGrepMatches {
 			maxResults = maxGrepMatches
 		}
+		if args.Offset < 0 || args.Offset > 10000 {
+			return ToolResult{}, fmt.Errorf("offset must be between 0 and 10000; narrow the pattern for deeper searches")
+		}
 		searchCtx, cancel := withOptionalTimeout(ctx, args.TimeoutSeconds)
 		defer cancel()
 
@@ -356,17 +411,47 @@ func NewGrepToolWithBackend(backend GrepBackend) Tool {
 			Path:            args.Path,
 			Glob:            args.Glob,
 			CaseInsensitive: args.CaseInsensitive,
-			MaxResults:      maxResults,
+			// One lookahead match distinguishes a full final page from a
+			// truncated page, including directory backends that stop early.
+			MaxResults:       args.Offset + maxResults + 1,
+			IncludeGenerated: args.IncludeGenerated,
 		})
 		if err != nil {
 			return ToolResult{}, err
 		}
 
-		return ToolResult{Structured: grepResult{
-			Matches:      result.Matches,
-			TotalMatches: result.TotalMatches,
-			Truncated:    result.Truncated,
-		}}, nil
+		start := min(args.Offset, len(result.Matches))
+		end := min(args.Offset+maxResults, len(result.Matches))
+		truncated := len(result.Matches) > end || result.TotalMatches > args.Offset+maxResults || result.Truncated
+		var next *int
+		if truncated && end > start {
+			value := args.Offset + end - start
+			next = &value
+		}
+		page := grepResult{
+			Matches:                  result.Matches[start:end],
+			TotalMatches:             result.TotalMatches,
+			Truncated:                truncated,
+			Offset:                   args.Offset,
+			NextOffset:               next,
+			TotalMatchesIsLowerBound: result.Truncated || len(result.Matches) == args.Offset+maxResults+1,
+		}
+		// Keep each page below the model-visible artifact threshold so its
+		// continuation cursor and line numbers remain directly available.
+		for len(page.Matches) > 1 {
+			data, marshalErr := json.Marshal(page)
+			if marshalErr != nil {
+				return ToolResult{}, marshalErr
+			}
+			if len(data) <= 24*1024 {
+				break
+			}
+			page.Matches = page.Matches[:len(page.Matches)/2]
+			page.Truncated = true
+			value := args.Offset + len(page.Matches)
+			page.NextOffset = &value
+		}
+		return ToolResult{Structured: page}, nil
 	})
 }
 

@@ -590,6 +590,9 @@ type RunOptions struct {
 	Checkpoint         func()
 	DrainInjections    func(context.Context, int) (conversation.InjectionDrain, error)
 	OnInjectionDrained func(conversation.InjectionDrain)
+	// MaxSilentToolRounds overrides the default evidence-checkpoint budget
+	// (12 tool rounds without assistant text). Negative disables the budget.
+	MaxSilentToolRounds int
 	// Harness selects a non-default engine for this turn (roadmap 6.4). When
 	// empty or "godex", the default engine loop runs as before. A different
 	// id routes the turn through the harness router, which resets engine
@@ -864,6 +867,8 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 	// so the completed assistant message (and its timeline detail) can carry
 	// the full thinking text alongside the answer.
 	var thinkingBuf strings.Builder
+	var textBuf strings.Builder
+	var streamPlaceholder bool
 	sink := opts.Sink
 	if sink == nil {
 		sink = events.NopSink
@@ -892,6 +897,10 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 	}
 
 	maxTurns := a.maxTurns()
+	deliveryBudget := opts.MaxSilentToolRounds
+	if deliveryBudget == 0 {
+		deliveryBudget = 12
+	}
 	a.mu.Lock()
 	caller := a.client
 	loopGuard := a.cfg.Tools.LoopGuard
@@ -904,7 +913,16 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 		MaxStalledTaskPollingTools: loopGuard.MaxStalledTaskPollingTools,
 		MaxLoopGuardRecoveries:     loopGuard.MaxRecoveries,
 		LoopGuardMode:              conversation.LoopGuardMode(loopGuard.Mode),
-		ToolTimeout:                toolTimeout,
+		MaxSilentToolRounds:        deliveryBudget,
+		MaxParallelTools:           4,
+		PrepareTool:                a.prepareParallelToolResult,
+		CanParallelTool: func(block protocol.Block) bool {
+			tool := a.toolHandler.Get(block.Name)
+			return tool != nil && tool.Spec().ParallelReadOnly
+		},
+		// Evidence delivery replaces file mutation as the progress signal.
+		MaxNoMutationRounds: -1,
+		ToolTimeout:         toolTimeout,
 		BuildRequest: func(ctx context.Context) (protocol.Request, error) {
 			build, err := a.buildContext(ctx)
 			if err != nil {
@@ -959,6 +977,11 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 		AppendAssistant: func(msg protocol.Message) {
 			a.appendMessage(msg)
 			checkpoint()
+			if strings.TrimSpace(protocol.MessageText(msg)) == "" {
+				thinkingBuf.Reset()
+				textBuf.Reset()
+				streamPlaceholder = false
+			}
 		},
 		AppendToolResults: func(msg protocol.Message) {
 			a.appendMessage(msg)
@@ -979,6 +1002,7 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 				return
 			}
 			payload := events.TextPayload{Role: protocol.RoleAssistant, Text: text}
+			textBuf.WriteString(text)
 			emit(events.EventAssistantTextDelta, payload)
 		},
 		OnAssistantThinkingDelta: func(text string) {
@@ -991,6 +1015,8 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 		},
 		OnStreamStarted: func() {
 			thinkingBuf.Reset()
+			textBuf.Reset()
+			streamPlaceholder = true
 			// The ChatGPT codex backend streams reasoning only as encrypted
 			// content, so there are no plaintext thinking deltas to forward.
 			// Emit a one-shot placeholder so the frontend shows "Thinking…"
@@ -998,6 +1024,17 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 			payload := events.TextPayload{Role: protocol.RoleAssistant, Text: "…"}
 			emit(events.EventAssistantThinkingDelta, payload)
 		},
+		OnStreamReset: func() {
+			thinking := thinkingBuf.String()
+			if streamPlaceholder {
+				thinking = "…" + thinking
+			}
+			emit(events.EventAssistantStreamReset, events.TextPayload{Text: textBuf.String(), Thinking: thinking})
+			textBuf.Reset()
+			thinkingBuf.Reset()
+			streamPlaceholder = false
+		},
+		OnMetrics: func(metrics protocol.TurnMetrics) { emit(events.EventTurnMetrics, metrics) },
 		OnContextOverflow: func(ctx context.Context) bool {
 			return a.compactForOverflow(ctx)
 		},
@@ -1027,6 +1064,8 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 		OnAssistantText: func(text string) {
 			payload := events.TextPayload{Role: protocol.RoleAssistant, Text: text, Thinking: thinkingBuf.String()}
 			thinkingBuf.Reset()
+			textBuf.Reset()
+			streamPlaceholder = false
 			emit(events.EventAssistantMessageComplete, payload)
 		},
 		OnToolStarted: func(block protocol.Block) {

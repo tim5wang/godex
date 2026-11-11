@@ -1,4 +1,5 @@
 import type { FeedItem, PendingPermission, SessionTimelineEntry, SubagentProgressItem } from "./types";
+import { discardFailedStreamDeltas } from "./streamReset";
 
 export function subagentStatusSortRank(status?: string) {
   switch ((status || "").toLowerCase()) {
@@ -218,7 +219,7 @@ export function collectToolCalls(items: SessionTimelineEntry[]): FeedItem[] {
  * new bubble.
  */
 export function collectThinkingDeltas(items: SessionTimelineEntry[]): FeedItem[] {
-  const ordered = [...items].sort((a, b) => Date.parse(a.timestamp ?? "") - Date.parse(b.timestamp ?? ""));
+  const ordered = discardFailedStreamDeltas(items);
   const result: FeedItem[] = [];
   let open: FeedItem | null = null;
   let openTurnId = "";
@@ -282,7 +283,7 @@ export function collectThinkingDeltas(items: SessionTimelineEntry[]): FeedItem[]
  * alignAssistantTextTurnIds + the per-turn skip in the feed merge).
  */
 export function collectTextDeltas(items: SessionTimelineEntry[]): FeedItem[] {
-  const ordered = [...items].sort((a, b) => Date.parse(a.timestamp ?? "") - Date.parse(b.timestamp ?? ""));
+  const ordered = discardFailedStreamDeltas(items);
   const result: FeedItem[] = [];
   let open: FeedItem | null = null;
   let openTurnId = "";

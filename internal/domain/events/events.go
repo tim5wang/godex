@@ -16,6 +16,8 @@ const (
 	EventUserMessageAccepted      EventType = "user_message_accepted"
 	EventAssistantTextDelta       EventType = "assistant_text_delta"
 	EventAssistantThinkingDelta   EventType = "assistant_thinking_delta"
+	EventAssistantStreamReset     EventType = "assistant_stream_reset"
+	EventTurnMetrics              EventType = "turn_metrics"
 	EventAssistantMessageComplete EventType = "assistant_message_completed"
 	EventModelRequestCompleted    EventType = "model_request_completed"
 	EventToolCallStarted          EventType = "tool_call_started"

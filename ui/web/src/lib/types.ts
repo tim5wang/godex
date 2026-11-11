@@ -8,6 +8,8 @@ export * from "./typesProduct";
 export type EventType =
   | "user_message_accepted"
   | "assistant_text_delta"
+  | "assistant_stream_reset"
+  | "turn_metrics"
   | "assistant_thinking_delta"
   | "assistant_message_completed"
   | "model_request_completed"

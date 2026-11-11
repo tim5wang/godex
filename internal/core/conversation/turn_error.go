@@ -2,12 +2,16 @@ package conversation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/packages/ssestream"
 )
 
 // TurnErrorClass classifies a turn-level failure by retryability.
@@ -118,25 +122,82 @@ func ClassifyTurnError(err error) TurnErrorClass {
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return TurnErrorRetryable
 	}
+	var streamErr *ssestream.StreamError
+	if errors.As(err, &streamErr) {
+		var event struct {
+			Error struct {
+				Code    string `json:"code"`
+				Type    string `json:"type"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(streamErr.Event.Data, &event) == nil {
+			code := event.Error.Code
+			if code == "" {
+				code = event.Error.Type
+			}
+			return classifyProviderStreamError(code, event.Error.Message)
+		}
+	}
+	var sdkErr *openai.Error
+	if errors.As(err, &sdkErr) {
+		return classifyHTTPStatus(sdkErr.StatusCode)
+	}
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
 		return ClassifyTurnError(urlErr.Err)
 	}
 	var statusErr *apiStatusError
 	if errors.As(err, &statusErr) {
-		switch statusErr.StatusCode {
-		case http.StatusRequestTimeout, http.StatusTooManyRequests,
-			http.StatusServiceUnavailable, http.StatusGatewayTimeout:
-			return TurnErrorTransient
-		}
-		if statusErr.StatusCode >= 500 {
-			return TurnErrorRetryable
-		}
-		if statusErr.StatusCode >= 400 {
-			return TurnErrorNonRetryable
-		}
+		return classifyHTTPStatus(statusErr.StatusCode)
 	}
 	return TurnErrorUnknown
+}
+
+func classifyHTTPStatus(status int) TurnErrorClass {
+	switch status {
+	case http.StatusRequestTimeout, http.StatusTooManyRequests,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return TurnErrorTransient
+	}
+	if status >= 500 {
+		return TurnErrorRetryable
+	}
+	if status >= 400 {
+		return TurnErrorNonRetryable
+	}
+	return TurnErrorUnknown
+}
+
+func classifyProviderStreamError(code, message string) TurnErrorClass {
+	switch strings.ToLower(code) {
+	case "rate_limit_error", "rate_limit_exceeded", "overloaded_error":
+		return TurnErrorTransient
+	case "server_error", "internal_error", "api_error":
+		return TurnErrorRetryable
+	case "stream_error":
+		text := strings.ToLower(message)
+		if strings.Contains(text, "eof") || strings.Contains(text, "connection reset") || strings.Contains(text, "connection closed") {
+			return TurnErrorRetryable
+		}
+	case "invalid_request_error", "invalid_request", "authentication_error", "permission_error", "context_length_exceeded":
+		return TurnErrorNonRetryable
+	}
+	return TurnErrorUnknown
+}
+
+func newProviderStreamError(code, message string) error {
+	text := "provider stream error (" + code + "): " + message
+	switch classifyProviderStreamError(code, message) {
+	case TurnErrorRetryable:
+		return NewRetryableTurnError(text)
+	case TurnErrorTransient:
+		return NewTransientTurnError(text)
+	case TurnErrorNonRetryable:
+		return NewNonRetryableTurnError(text)
+	default:
+		return errors.New(text)
+	}
 }
 
 const genericTurnFailureMessage = "That turn failed and couldn't be completed. The details are in the operator error log."

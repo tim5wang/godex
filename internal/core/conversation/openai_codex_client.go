@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -125,6 +125,10 @@ func (c *OpenAICodexClient) Stream(ctx context.Context, req protocol.Request, ha
 		return nil, err
 	}
 	response := codexStreamStateToProtocol(state)
+	if state.finishReason == "" {
+		finalErr = io.ErrUnexpectedEOF
+		return nil, finalErr
+	}
 	finalResp = response
 	return response, nil
 }
@@ -369,10 +373,7 @@ type codexToolCallAcc struct {
 func applyCodexResponsesSDKEvent(state *codexResponsesStreamState, event responses.ResponseStreamEventUnion, handler StreamHandler) error {
 	switch event.Type {
 	case "error", "response.error":
-		if event.Message != "" {
-			return fmt.Errorf("Codex API error: %s", event.Message)
-		}
-		return fmt.Errorf("Codex API error: %s", event.Code)
+		return newProviderStreamError(event.Code, event.Message)
 	case "response.output_text.delta":
 		state.text.WriteString(event.Delta)
 		if handler.OnTextDelta != nil && event.Delta != "" {
@@ -389,9 +390,17 @@ func applyCodexResponsesSDKEvent(state *codexResponsesStreamState, event respons
 				handler.OnThinkingDelta(event.Delta, "")
 			}
 		}
-	case "response.completed":
+	case "response.completed", "response.incomplete":
 		state.finishReason = string(event.Response.Status)
+		if state.finishReason == "" {
+			state.finishReason = "completed"
+		}
+		if event.Type == "response.incomplete" {
+			state.finishReason = "length"
+		}
 		state.usage = codexUsageToProtocol(event.Response.Usage)
+	case "response.failed":
+		return newProviderStreamError(string(event.Response.Error.Code), event.Response.Error.Message)
 	case "response.function_call_arguments.delta":
 		updateCodexResponsesToolCall(state, event.OutputIndex, "", "", event.Delta, true)
 	case "response.function_call_arguments.done":

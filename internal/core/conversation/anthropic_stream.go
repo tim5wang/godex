@@ -256,6 +256,17 @@ func (s *anthropicStream) result() *protocol.Response {
 
 func streamEventError(wireErr *streamWireError) error {
 	if wireErr != nil && wireErr.Message != "" {
+		if wireErr.Code != "" {
+			return newProviderStreamError(wireErr.Code, wireErr.Message)
+		}
+		switch classifyProviderStreamError(wireErr.Type, wireErr.Message) {
+		case TurnErrorRetryable:
+			return NewRetryableTurnError("stream error: " + wireErr.Message)
+		case TurnErrorTransient:
+			return NewTransientTurnError("stream error: " + wireErr.Message)
+		case TurnErrorNonRetryable:
+			return NewNonRetryableTurnError("stream error: " + wireErr.Message)
+		}
 		return fmt.Errorf("stream error: %s", wireErr.Message)
 	}
 	return fmt.Errorf("stream error")

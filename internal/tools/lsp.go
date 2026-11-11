@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,11 @@ import (
 	"sync"
 	"time"
 )
+
+// ErrLSPServerUnavailable reports that a language server could not be started,
+// exited, or was shut down. Callers can use errors.Is to turn an infrastructure
+// failure into an actionable message instead of mistaking it for an empty result.
+var ErrLSPServerUnavailable = errors.New("lsp server unavailable")
 
 // ---------------------------------------------------------------------------
 // Types
@@ -146,9 +152,10 @@ type lspServer struct {
 	stderr       io.ReadCloser
 	caps         map[string]interface{} // server capabilities from initialize response
 	mu           sync.Mutex
-	pending      map[int]chan<- json.RawMessage
+	pending      map[int]chan lspRPCResult
 	nextID       int
 	closed       bool
+	termErr      error // non-nil once the server is known to be gone
 	initOnce     sync.Once
 	initErr      error
 
@@ -181,6 +188,18 @@ type lspRPCResponse struct {
 type lspRPCError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+}
+
+func (e *lspRPCError) Error() string {
+	return fmt.Sprintf("LSP error %d: %s", e.Code, e.Message)
+}
+
+// lspRPCResult carries a reply back to the waiting caller. Keeping the error path
+// distinct from an empty result is what stops a failed request from being
+// reported as "server said nothing".
+type lspRPCResult struct {
+	Result json.RawMessage
+	Err    error
 }
 
 // ---------------------------------------------------------------------------
@@ -233,11 +252,13 @@ func (c *LSPClient) StartServer(ctx context.Context, language string) error {
 		c.mu.Unlock()
 		return nil
 	}
-	if _, exists := c.servers[language]; exists {
+	if sv, exists := c.servers[language]; exists {
 		c.mu.Unlock()
-		sv := c.servers[language]
 		sv.initOnce.Do(func() {})
-		return sv.initErr
+		sv.mu.Lock()
+		initErr := sv.initErr
+		sv.mu.Unlock()
+		return initErr
 	}
 	c.mu.Unlock()
 
@@ -263,7 +284,7 @@ func (c *LSPClient) StartServer(ctx context.Context, language string) error {
 	sv := &lspServer{
 		config:       *cfg,
 		workspace:    c.workspace,
-		pending:      make(map[int]chan<- json.RawMessage),
+		pending:      make(map[int]chan lspRPCResult),
 		nextID:       1,
 		openedDocs:   make(map[string]*openedDoc),
 		cachedDiags:  make(map[string][]LSPDiagnostic),
@@ -299,14 +320,26 @@ func (c *LSPClient) StartServer(ctx context.Context, language string) error {
 
 	var initErr error
 	sv.initOnce.Do(func() {
-		initErr = sv.initialize(ctx, workspaceURI)
-		if initErr != nil {
+		// initialize must not run while holding sv.mu: it calls notify, which locks it.
+		err := sv.initialize(ctx, workspaceURI)
+		sv.mu.Lock()
+		sv.initErr = err
+		sv.mu.Unlock()
+		if err != nil {
 			sv.close()
 		}
 	})
 
+	sv.mu.Lock()
+	initErr = sv.initErr
+	sv.mu.Unlock()
+
 	c.mu.Lock()
-	if initErr == nil {
+	if initErr != nil {
+		// Drop the dead server so a later attempt reports the same root cause
+		// again instead of a confusing "server is closed" forever after.
+		delete(c.servers, language)
+	} else {
 		c.ready[language] = true
 	}
 	c.mu.Unlock()
@@ -529,42 +562,69 @@ func (s *lspServer) diagnostics(ctx context.Context, filePath, language string) 
 		return cached, nil
 	}
 
-	// If no cache entry yet, try requesting diagnostics explicitly (LSP 3.17+)
+	// No cached entry (the server never pushed for this file, or the push is still
+	// in flight), so pull from LSP 3.17 textDocument/diagnostic. A transport failure
+	// here is reported rather than swallowed: returning an empty slice made an
+	// unreachable server look like a clean file.
 	params := map[string]interface{}{
 		"textDocument": map[string]string{"uri": uri},
 	}
 	raw, err := s.callWithTimeout(ctx, "textDocument/diagnostic", params)
 	if err != nil {
-		return nil, nil // silently fallback
+		return nil, fmt.Errorf("textDocument/diagnostic failed: %w", err)
+	}
+	if raw == nil || string(raw) == "null" {
+		// Server answered, but has nothing to report for this file.
+		return []LSPDiagnostic{}, nil
 	}
 
-	var diagResult struct {
+	diags, err := parseDiagnosticsResult(raw)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.cachedDiags[uri] = diags
+	s.mu.Unlock()
+	return diags, nil
+}
+
+// parseDiagnosticsResult accepts either a DocumentDiagnosticReport
+// ({"kind":...,"items":[...]}) or, from lenient servers, a bare array.
+//
+// A report whose "kind" is empty must still be honored: gopls replies with
+// {"kind":"","items":[...]}, so a strict kind == "full" check silently
+// discarded real diagnostics and reported a broken file as clean.
+func parseDiagnosticsResult(raw json.RawMessage) ([]LSPDiagnostic, error) {
+	if raw == nil || string(raw) == "null" {
+		return []LSPDiagnostic{}, nil
+	}
+
+	var report struct {
 		Kind  string          `json:"kind"`
-		Items json.RawMessage `json:"items,omitempty"`
+		Items json.RawMessage `json:"items"`
 	}
-	if err := json.Unmarshal(raw, &diagResult); err != nil || diagResult.Kind != "full" {
-		// Also try the older format (direct array)
+	if err := json.Unmarshal(raw, &report); err == nil && (report.Kind == "full" || report.Items != nil) {
 		var diags []LSPDiagnostic
-		if err := json.Unmarshal(raw, &diags); err == nil {
-			s.mu.Lock()
-			s.cachedDiags[uri] = diags
-			s.mu.Unlock()
-			return diags, nil
+		if len(report.Items) > 0 {
+			if err := json.Unmarshal(report.Items, &diags); err != nil {
+				return nil, fmt.Errorf("parse diagnostic items: %w", err)
+			}
 		}
-		return nil, nil
+		if diags == nil {
+			diags = []LSPDiagnostic{}
+		}
+		return diags, nil
 	}
 
-	if len(diagResult.Items) > 0 {
-		var diags []LSPDiagnostic
-		if err := json.Unmarshal(diagResult.Items, &diags); err == nil {
-			s.mu.Lock()
-			s.cachedDiags[uri] = diags
-			s.mu.Unlock()
-			return diags, nil
-		}
+	// Fall back to the older direct-array shape.
+	var diags []LSPDiagnostic
+	if err := json.Unmarshal(raw, &diags); err != nil {
+		return nil, fmt.Errorf("parse textDocument/diagnostic result: %w", err)
 	}
-
-	return nil, nil
+	if diags == nil {
+		diags = []LSPDiagnostic{}
+	}
+	return diags, nil
 }
 
 func (s *lspServer) completion(ctx context.Context, filePath string, line, character int) ([]LSPCompletionItem, error) {
@@ -798,8 +858,18 @@ func (s *lspServer) didClose(ctx context.Context, uri string) {
 // lspServer – initialize / call / notify
 // ---------------------------------------------------------------------------
 
-func (s *lspServer) initialize(ctx context.Context, workspaceURI string) error {
-	params := map[string]interface{}{
+// lspInitializeParams builds the initialize request params. It is a separate
+// function so the client capabilities can be asserted directly in tests: these
+// were once sent as bare booleans, which strict servers reject outright.
+//
+// LSP typing rules that matter here:
+//   - textDocument.hover.contentFormat is MarkupKind[] (e.g. ["markdown"]), not a bool
+//   - each "can I do X" entry (definition/references/documentSymbol/...) is a
+//     capability OBJECT, not a bool
+//   - the pull-diagnostics client capability key is "diagnostic";
+//     "documentDiagnostic" is the server-side request name, not a capability key
+func lspInitializeParams(workspaceURI string) map[string]interface{} {
+	return map[string]interface{}{
 		"processId": nil,
 		"clientInfo": map[string]string{
 			"name":    "godex",
@@ -812,25 +882,29 @@ func (s *lspServer) initialize(ctx context.Context, workspaceURI string) error {
 						"snippetSupport": false,
 					},
 				},
-				"hover": map[string]bool{
-					"contentFormat": true,
+				"hover": map[string]interface{}{
+					"contentFormat": []string{"markdown", "plaintext"},
 				},
-				"definition":       true,
-				"references":       true,
-				"documentSymbol":   true,
-				"typeDefinition":   true,
-				"implementation":   true,
-				"documentDiagnostic": true,
+				"definition":     map[string]interface{}{},
+				"references":     map[string]interface{}{},
+				"documentSymbol": map[string]interface{}{},
+				"typeDefinition": map[string]interface{}{},
+				"implementation": map[string]interface{}{},
+				"diagnostic":     map[string]interface{}{},
 			},
 			"workspace": map[string]interface{}{
-				"symbol":      true,
-				"diagnostics": true,
+				"symbol":      map[string]interface{}{},
+				"diagnostics": map[string]interface{}{"refreshSupport": true},
 			},
 		},
 		"workspaceFolders": []map[string]string{
 			{"uri": workspaceURI, "name": "workspace"},
 		},
 	}
+}
+
+func (s *lspServer) initialize(ctx context.Context, workspaceURI string) error {
+	params := lspInitializeParams(workspaceURI)
 
 	raw, err := s.call(ctx, "initialize", params)
 	if err != nil {
@@ -843,7 +917,9 @@ func (s *lspServer) initialize(ctx context.Context, workspaceURI string) error {
 	if err := json.Unmarshal(raw, &initResult); err != nil {
 		return fmt.Errorf("parse initialize result: %w", err)
 	}
+	s.mu.Lock()
 	s.caps = initResult.Capabilities
+	s.mu.Unlock()
 
 	s.notify(ctx, "initialized", map[string]interface{}{})
 	return nil
@@ -853,12 +929,16 @@ func (s *lspServer) initialize(ctx context.Context, workspaceURI string) error {
 func (s *lspServer) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	s.mu.Lock()
 	if s.closed {
+		err := s.termErr
+		if err == nil {
+			err = fmt.Errorf("%w: %s server is closed", ErrLSPServerUnavailable, s.config.Language)
+		}
 		s.mu.Unlock()
-		return nil, fmt.Errorf("LSP server for %s is closed", s.config.Language)
+		return nil, err
 	}
 	id := s.nextID
 	s.nextID++
-	respCh := make(chan json.RawMessage, 1)
+	respCh := make(chan lspRPCResult, 1)
 	s.pending[id] = respCh
 	s.mu.Unlock()
 
@@ -879,8 +959,15 @@ func (s *lspServer) call(ctx context.Context, method string, params any) (json.R
 	}
 
 	select {
-	case result := <-respCh:
-		return result, nil
+	case res := <-respCh:
+		if res.Err != nil {
+			return nil, fmt.Errorf("%s: %w", method, res.Err)
+		}
+		if res.Result == nil {
+			// No result and no error means the server went away mid-request.
+			return nil, fmt.Errorf("%s: %w: server exited or closed the connection", method, ErrLSPServerUnavailable)
+		}
+		return res.Result, nil
 	case <-ctx.Done():
 		s.mu.Lock()
 		if ch, ok := s.pending[id]; ok {
@@ -975,20 +1062,23 @@ func (s *lspServer) readLoop() {
 			continue
 		}
 
+		// resp.Error is a *lspRPCError; assigning a nil pointer straight into an
+		// error field would make it non-nil (typed nil) and turn success into
+		// failure, so only convert when it is actually set.
+		var rpcErr error
 		if resp.Error != nil {
-			ch <- nil
-			close(ch)
-			continue
+			rpcErr = resp.Error
 		}
-		ch <- resp.Result
+		ch <- lspRPCResult{Result: resp.Result, Err: rpcErr}
 		close(ch)
 	}
 
-	// Scanner loop ended – server process likely died.
-	// Close all pending channels so callers get immediate errors.
+	// Scanner loop ended – the server process is gone.
 	s.mu.Lock()
+	s.termErr = fmt.Errorf("%w: %s process exited", ErrLSPServerUnavailable, s.config.Language)
 	for id, ch := range s.pending {
 		delete(s.pending, id)
+		ch <- lspRPCResult{Err: s.termErr}
 		close(ch)
 	}
 	s.mu.Unlock()
@@ -1033,8 +1123,12 @@ func (s *lspServer) close() {
 		return
 	}
 	s.closed = true
+	if s.termErr == nil {
+		s.termErr = fmt.Errorf("%w: %s server was shut down", ErrLSPServerUnavailable, s.config.Language)
+	}
 	for id, ch := range s.pending {
 		delete(s.pending, id)
+		ch <- lspRPCResult{Err: s.termErr}
 		close(ch)
 	}
 	s.mu.Unlock()

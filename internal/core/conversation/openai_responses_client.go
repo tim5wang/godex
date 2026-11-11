@@ -2,6 +2,7 @@ package conversation
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -95,6 +96,10 @@ func (c *OpenAIResponsesClient) Stream(ctx context.Context, req protocol.Request
 		return nil, err
 	}
 	response := codexStreamStateToProtocol(state)
+	if state.finishReason == "" {
+		finalErr = io.ErrUnexpectedEOF
+		return nil, finalErr
+	}
 	finalResp = response
 	return response, nil
 }

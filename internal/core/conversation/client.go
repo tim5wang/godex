@@ -33,7 +33,8 @@ type StreamCaller interface {
 
 // StreamHandler receives model-provider deltas during one streamed call.
 type StreamHandler struct {
-	OnTextDelta func(string)
+	OnStreamReset func()
+	OnTextDelta   func(string)
 	// OnStreamStarted is invoked once when the first stream event arrives. It
 	// lets callers show a "thinking…" placeholder for providers (e.g. the
 	// ChatGPT codex backend) that deliver reasoning only as encrypted content
@@ -490,6 +491,7 @@ type streamWireDelta struct {
 }
 
 type streamWireError struct {
+	Code    string `json:"code,omitempty"`
 	Type    string `json:"type,omitempty"`
 	Message string `json:"message,omitempty"`
 }
@@ -625,13 +627,18 @@ func parseMessageStream(reader io.Reader, handler StreamHandler) (*protocol.Resp
 	stream := newAnthropicStream(handler)
 	var dataLines []string
 	streamed := false
+	terminal := false
 	flush := func() error {
 		if len(dataLines) == 0 {
 			return nil
 		}
 		payload := strings.TrimSpace(strings.Join(dataLines, "\n"))
 		dataLines = nil
-		if payload == "" || payload == "[DONE]" {
+		if payload == "[DONE]" {
+			terminal = true
+			return nil
+		}
+		if payload == "" {
 			return nil
 		}
 		streamed = true
@@ -639,7 +646,14 @@ func parseMessageStream(reader io.Reader, handler StreamHandler) (*protocol.Resp
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			return err
 		}
-		return stream.handle(event)
+		if event.Type == "message_stop" {
+			terminal = true
+		}
+		err := stream.handle(event)
+		if stream.response.StopReason != "" {
+			terminal = true
+		}
+		return err
 	}
 
 	for scanner.Scan() {
@@ -659,6 +673,9 @@ func parseMessageStream(reader io.Reader, handler StreamHandler) (*protocol.Resp
 	}
 	if err := flush(); err != nil {
 		return nil, streamed, err
+	}
+	if !terminal {
+		return nil, streamed, io.ErrUnexpectedEOF
 	}
 	return stream.result(), streamed, nil
 }

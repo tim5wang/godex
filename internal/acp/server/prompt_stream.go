@@ -75,6 +75,19 @@ func (s *backendPromptStream) accepts(event events.Event) bool {
 
 func (s *backendPromptStream) handleEvent(ctx context.Context, event events.Event) (PromptResult, bool, error) {
 	switch event.Type {
+	case events.EventAssistantStreamReset:
+		payload, ok := event.Payload.(events.TextPayload)
+		if ok {
+			text := s.collected.String()
+			if strings.HasSuffix(text, payload.Text) {
+				s.collected.Reset()
+				s.collected.WriteString(strings.TrimSuffix(text, payload.Text))
+			}
+			s.deltaSinceComplete = false
+			if s.turn.Updater != nil && payload.Text != "" {
+				_ = s.turn.Updater.Update(ctx, acp.UpdateAgentMessageText("\n[Previous partial response interrupted; retrying.]\n"))
+			}
+		}
 	case events.EventAssistantTextDelta:
 		s.handleAssistantTextDelta(ctx, event)
 	case events.EventAssistantThinkingDelta:

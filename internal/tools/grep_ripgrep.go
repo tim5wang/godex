@@ -74,9 +74,7 @@ func (b *RipGrepBackend) buildArgs(pattern string, opts GrepOptions) []string {
 		"--no-heading",
 		"--line-number",
 		"--color", "never",
-		// --no-ignore: search ALL files including those in .gitignore/.ignore/.rgignore.
-		// As a coding agent we need to see everything in the workspace.
-		"--no-ignore",
+		"--sort", "path", // stable match pagination across requests
 		// --no-require-git: don't require the search root to be in a git repo.
 		"--no-require-git",
 	}
@@ -87,6 +85,13 @@ func (b *RipGrepBackend) buildArgs(pattern string, opts GrepOptions) []string {
 
 	if opts.Glob != "" {
 		args = append(args, "--glob", opts.Glob)
+	}
+	if opts.IncludeGenerated || targetsGeneratedGrepPath(opts.Path) {
+		args = append(args, "--no-ignore")
+	} else {
+		// Exclusions follow the positive glob, so '*.go' cannot re-enable
+		// cached copies of source files.
+		args = append(args, "--glob", "!**/{target,temp,dist,build,coverage}/**")
 	}
 
 	args = append(args, "-e", pattern)

@@ -17,36 +17,65 @@ func (a *Agent) handleTool(ctx context.Context, name string, input map[string]in
 }
 
 func (a *Agent) handleToolResult(ctx context.Context, name string, input map[string]interface{}) (conversation.ToolExecutionResult, error) {
+	execute, err := a.prepareToolResult(ctx, name, input)
+	if execute == nil {
+		return conversation.ToolExecutionResult{}, err
+	}
+	return execute(ctx)
+}
+
+func (a *Agent) prepareToolResult(ctx context.Context, name string, input map[string]interface{}) (conversation.PreparedTool, error) {
+	return a.prepareToolExecution(ctx, name, input, false)
+}
+
+func (a *Agent) prepareParallelToolResult(ctx context.Context, name string, input map[string]interface{}) (conversation.PreparedTool, error) {
+	return a.prepareToolExecution(ctx, name, input, true)
+}
+
+func (a *Agent) prepareToolExecution(ctx context.Context, name string, input map[string]interface{}, parallel bool) (conversation.PreparedTool, error) {
 	if tools.SandboxIDFromContext(ctx) == "" {
 		ctx = tools.WithSandboxID(ctx, a.SandboxID())
 	}
-	result, err := a.toolHandler.HandleResult(ctx, name, input)
-	if err != nil {
-		execution := conversation.ToolExecutionResult{
-			ArtifactPaths: append([]string{}, result.ArtifactPaths...),
+	prepare := a.toolHandler.PrepareResult
+	if parallel {
+		prepare = a.toolHandler.PrepareReadOnlyResult
+	}
+	execute, prepareErr := prepare(ctx, name, input)
+	if execute == nil {
+		return nil, prepareErr
+	}
+	return func(runCtx context.Context) (conversation.ToolExecutionResult, error) {
+		if tools.SandboxIDFromContext(runCtx) == "" {
+			runCtx = tools.WithSandboxID(runCtx, a.SandboxID())
 		}
-		if toolResultHasModelOutput(result) {
-			output, outputErr := result.OutputString()
-			if outputErr != nil {
-				return conversation.ToolExecutionResult{}, outputErr
+		result, err := execute(runCtx)
+		if err != nil {
+			execution := conversation.ToolExecutionResult{
+				ArtifactPaths: append([]string{}, result.ArtifactPaths...),
 			}
-			execution.Output = output
+			if toolResultHasModelOutput(result) {
+				output, outputErr := result.OutputString()
+				if outputErr != nil {
+					return conversation.ToolExecutionResult{}, outputErr
+				}
+				execution.Output = output
+			}
+			return execution, err
 		}
-		return execution, err
-	}
-	if name == "history_search" {
-		if state := historyRecallTurnStateFromContext(ctx); state != nil {
-			state.consumeAutomaticExposure()
+		if name == "history_search" {
+			if state := historyRecallTurnStateFromContext(ctx); state != nil {
+				state.consumeAutomaticExposure()
+			}
 		}
-	}
-	output, err := result.OutputString()
-	if err != nil {
-		return conversation.ToolExecutionResult{}, err
-	}
-	return conversation.ToolExecutionResult{
-		Output:        output,
-		ArtifactPaths: append([]string{}, result.ArtifactPaths...),
-	}, nil
+		output, err := result.OutputString()
+		if err != nil {
+			return conversation.ToolExecutionResult{}, err
+		}
+		return conversation.ToolExecutionResult{
+			Output:        output,
+			ArtifactPaths: append([]string{}, result.ArtifactPaths...),
+		}, nil
+	}, prepareErr
 }
 
 // RunPackageSmokeCommand executes one explicitly requested package smoke command

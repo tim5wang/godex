@@ -16,11 +16,14 @@ import (
 )
 
 type fakeEvalBackend struct {
-	modelProfileID string
+	modelProfileID  string
+	reasoningEffort string
+	locators        []backend.SessionLocator
 }
 
 func (f *fakeEvalBackend) OpenSession(ctx context.Context, locator backend.SessionLocator) (*backend.OpenedSession, error) {
 	_ = ctx
+	f.locators = append(f.locators, locator)
 	return &backend.OpenedSession{SessionID: "session-" + locator.Key, Locator: locator}, nil
 }
 
@@ -29,6 +32,32 @@ func (f *fakeEvalBackend) SetSessionModelProfile(ctx context.Context, sessionID,
 	_ = sessionID
 	f.modelProfileID = profileID
 	return backend.ModelsView{SessionProfileID: profileID}, nil
+}
+
+func (f *fakeEvalBackend) SetSessionModelProfileWithReasoning(ctx context.Context, sessionID, profileID, effort string) (backend.ModelsView, error) {
+	f.reasoningEffort = effort
+	return f.SetSessionModelProfile(ctx, sessionID, profileID)
+}
+
+func TestReasoningABUsesRequestedEffortAndFreshSessions(t *testing.T) {
+	dir := t.TempDir()
+	suitePath := filepath.Join(dir, "godex.eval.yaml")
+	if err := os.WriteFile(suitePath, []byte("name: reasoning-ab\ncases:\n  - id: one\n    prompt: say answer\n    reasoning_effort: medium\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeEvalBackend{}
+	now := time.Now()
+	service := &Service{Backend: fake, Now: func() time.Time { return now }}
+	for i := 0; i < 2; i++ {
+		now = now.Add(time.Second)
+		report, err := service.RunSuite(context.Background(), RunOptions{SuitePath: suitePath, OutDir: dir, ModelProfileID: "same-model"})
+		if err != nil || !report.Passed || report.Results[0].ReasoningEffort != "medium" {
+			t.Fatalf("reasoning override was not tested/reported: %+v, %v", report, err)
+		}
+	}
+	if fake.modelProfileID != "same-model" || fake.reasoningEffort != "medium" || len(fake.locators) != 2 || fake.locators[0].Key == fake.locators[1].Key {
+		t.Fatalf("A/B trials must use the requested effort with independent history: %+v", fake)
+	}
 }
 
 func (f *fakeEvalBackend) Submit(ctx context.Context, sessionID string, envelope message.Envelope) (*backend.SubmitResult, error) {
@@ -66,6 +95,21 @@ func TestLoadSuiteValidatesRequiredFields(t *testing.T) {
 	}
 	if _, err := LoadSuite(path); err == nil {
 		t.Fatal("expected missing prompt error")
+	}
+}
+
+func TestLoadSuiteRejectsInvalidReasoningComparisons(t *testing.T) {
+	for _, item := range []string{
+		"    prompt: answer\n    reasoning_effort: typo\n",
+		"    replay_fixture: fixture\n    reasoning_effort: medium\n",
+	} {
+		path := filepath.Join(t.TempDir(), "godex.eval.yaml")
+		if err := os.WriteFile(path, []byte("name: invalid\ncases:\n  - id: one\n"+item), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadSuite(path); err == nil {
+			t.Fatalf("expected invalid reasoning comparison to fail: %s", item)
+		}
 	}
 }
 

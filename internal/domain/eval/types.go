@@ -1,6 +1,9 @@
 package eval
 
-import "time"
+import (
+	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"time"
+)
 
 // Suite describes one repeatable agent behavior benchmark.
 type Suite struct {
@@ -10,13 +13,14 @@ type Suite struct {
 
 // Case is one benchmark prompt plus deterministic expectations.
 type Case struct {
-	ID             string      `yaml:"id" json:"id"`
-	Title          string      `yaml:"title" json:"title,omitempty"`
-	Prompt         string      `yaml:"prompt" json:"prompt"`
-	ReplayFixture  string      `yaml:"replay_fixture" json:"replay_fixture,omitempty"`
-	ModelProfileID string      `yaml:"model_profile_id" json:"model_profile_id,omitempty"`
-	TimeoutSeconds int         `yaml:"timeout_seconds" json:"timeout_seconds,omitempty"`
-	Expected       Expectation `yaml:"expected" json:"expected,omitempty"`
+	ID              string      `yaml:"id" json:"id"`
+	Title           string      `yaml:"title" json:"title,omitempty"`
+	Prompt          string      `yaml:"prompt" json:"prompt"`
+	ReplayFixture   string      `yaml:"replay_fixture" json:"replay_fixture,omitempty"`
+	ModelProfileID  string      `yaml:"model_profile_id" json:"model_profile_id,omitempty"`
+	ReasoningEffort string      `yaml:"reasoning_effort" json:"reasoning_effort,omitempty"`
+	TimeoutSeconds  int         `yaml:"timeout_seconds" json:"timeout_seconds,omitempty"`
+	Expected        Expectation `yaml:"expected" json:"expected,omitempty"`
 }
 
 // Expectation defines the v1 deterministic scoring checks.
@@ -26,6 +30,9 @@ type Expectation struct {
 	RequiredTools                       []string `yaml:"required_tools" json:"required_tools,omitempty"`
 	ForbiddenTools                      []string `yaml:"forbidden_tools" json:"forbidden_tools,omitempty"`
 	MaxToolFailures                     *int     `yaml:"max_tool_failures" json:"max_tool_failures,omitempty"`
+	MaxModelCalls                       *int     `yaml:"max_model_calls" json:"max_model_calls,omitempty"`
+	MaxDurationMS                       *int64   `yaml:"max_duration_ms" json:"max_duration_ms,omitempty"`
+	MaxOutputTokens                     *int     `yaml:"max_output_tokens" json:"max_output_tokens,omitempty"`
 	MaxRepeatedAssistantMessages        *int     `yaml:"max_repeated_assistant_messages" json:"max_repeated_assistant_messages,omitempty"`
 	MaxRepeatedToolCalls                *int     `yaml:"max_repeated_tool_calls" json:"max_repeated_tool_calls,omitempty"`
 	ForbiddenToolExchangeQueries        []string `yaml:"forbidden_tool_exchange_queries" json:"forbidden_tool_exchange_queries,omitempty"`
@@ -48,19 +55,21 @@ type Report struct {
 
 // CaseResult is the persisted score for one case.
 type CaseResult struct {
-	ID                 string     `json:"id"`
-	Title              string     `json:"title,omitempty"`
-	SessionID          string     `json:"session_id,omitempty"`
-	TurnID             string     `json:"turn_id,omitempty"`
-	ModelProfileID     string     `json:"model_profile_id,omitempty"`
-	StartedAt          time.Time  `json:"started_at"`
-	CompletedAt        time.Time  `json:"completed_at"`
-	Passed             bool       `json:"passed"`
-	Error              string     `json:"error,omitempty"`
-	AssistantText      string     `json:"assistant_text,omitempty"`
-	Tools              []ToolCall `json:"tools,omitempty"`
-	InstabilitySignals []string   `json:"instability_signals,omitempty"`
-	Failures           []string   `json:"failures,omitempty"`
+	Metrics            *protocol.TurnMetrics `json:"metrics,omitempty"`
+	ID                 string                `json:"id"`
+	Title              string                `json:"title,omitempty"`
+	SessionID          string                `json:"session_id,omitempty"`
+	TurnID             string                `json:"turn_id,omitempty"`
+	ModelProfileID     string                `json:"model_profile_id,omitempty"`
+	ReasoningEffort    string                `json:"reasoning_effort,omitempty"`
+	StartedAt          time.Time             `json:"started_at"`
+	CompletedAt        time.Time             `json:"completed_at"`
+	Passed             bool                  `json:"passed"`
+	Error              string                `json:"error,omitempty"`
+	AssistantText      string                `json:"assistant_text,omitempty"`
+	Tools              []ToolCall            `json:"tools,omitempty"`
+	InstabilitySignals []string              `json:"instability_signals,omitempty"`
+	Failures           []string              `json:"failures,omitempty"`
 }
 
 // ToolCall is the compact tool lifecycle extracted from the session timeline.

@@ -146,6 +146,7 @@ type InjectionDrain struct {
 
 // Result describes the outcome of a runner execution.
 type Result struct {
+	Metrics           protocol.TurnMetrics
 	LastAssistantText string
 	Turns             int
 	Completed         bool
@@ -182,6 +183,12 @@ type Runner struct {
 	// event arrives; frontends show a "thinking…" placeholder for providers
 	// that stream no plaintext reasoning (e.g. the ChatGPT codex backend).
 	OnStreamStarted func()
+	// OnStreamReset discards only the uncommitted output of a failed attempt.
+	OnStreamReset    func()
+	OnMetrics        func(protocol.TurnMetrics)
+	PrepareTool      func(context.Context, string, map[string]interface{}) (PreparedTool, error)
+	CanParallelTool  func(protocol.Block) bool
+	MaxParallelTools int
 	// OnModelRequest is invoked once per model call after it completes, with
 	// the request, the (possibly nil on error) response, and wall-clock timing
 	// facts: startedAt, firstTokenAt (zero when the provider did not signal a
@@ -219,6 +226,12 @@ type Runner struct {
 	MaxContextOverflowRecoveries int
 	LoopGuardMode                LoopGuardMode
 	ToolTimeout                  time.Duration
+	// MaxSilentToolRounds requests a concise evidence checkpoint after this
+	// many tool rounds without assistant text. At twice the budget, tools are
+	// withheld for a bounded handoff. Non-positive values disable this budget.
+	MaxSilentToolRounds int
+	// ModelRetryDelay is the initial exponential retry backoff; zero uses 250ms.
+	ModelRetryDelay time.Duration
 }
 
 // NewRequest builds a provider request from structured messages.
@@ -258,7 +271,15 @@ func (r Runner) Run(ctx context.Context) (*Result, error) {
 	}
 
 	options := r.normalizedOptions()
-	state := &runnerState{result: &Result{}}
+	state := &runnerState{result: &Result{}, startedAt: time.Now()}
+	defer func() {
+		m := &state.result.Metrics
+		m.DurationMS = time.Since(state.startedAt).Milliseconds()
+		m.OtherMS = max(int64(0), m.DurationMS-m.ModelMS-m.ToolMS-m.RecoveryMS)
+		if r.OnMetrics != nil {
+			r.OnMetrics(*m)
+		}
+	}()
 	guard := options.newLoopGuard()
 	for turn := 0; turn < options.maxTurns; turn++ {
 		iteration := turn + 1
@@ -268,12 +289,18 @@ func (r Runner) Run(ctx context.Context) (*Result, error) {
 		if err != nil {
 			return nil, err
 		}
-		resp, streamed, req, err := r.callModelForTurn(ctx, req, iteration, options, state.result)
+		req = applyDeliveryBudget(req, state.silentToolRounds, options.maxSilentToolRounds)
+		resp, streamed, req, err := r.callModelForTurn(ctx, req, iteration, options, state)
 		if err != nil {
 			return state.result, err
 		}
 
 		assistant := protocol.MessageFromResponse(*resp)
+		if options.maxSilentToolRounds > 0 && state.silentToolRounds >= 2*options.maxSilentToolRounds && protocol.HasToolUse(resp.Content) {
+			state.result.Stopped = true
+			state.result.RecoveryHint = "The provider returned tool calls during a delivery-only request; resume from the saved tool results."
+			return state.result, fmt.Errorf("delivery budget exceeded: provider ignored the request to answer without tools")
+		}
 		if !protocol.HasToolUse(resp.Content) && strings.TrimSpace(protocol.MessageText(assistant)) == "" {
 			retry, err := r.recoverEmptyResponse(ctx, req, resp, iteration, options, state)
 			if retry {
@@ -282,6 +309,19 @@ func (r Runner) Run(ctx context.Context) (*Result, error) {
 			return state.result, err
 		}
 		r.appendAssistantResponse(assistant, streamed, state.result)
+		if strings.TrimSpace(protocol.MessageText(assistant)) != "" {
+			if state.result.Metrics.FirstTextMS == nil {
+				at := state.firstTextAt
+				if at.IsZero() {
+					at = time.Now()
+				}
+				elapsed := max(int64(0), at.Sub(state.startedAt).Milliseconds())
+				state.result.Metrics.FirstTextMS = &elapsed
+			}
+			state.silentToolRounds = 0
+		} else if protocol.HasToolUse(resp.Content) {
+			state.silentToolRounds++
+		}
 
 		if !protocol.HasToolUse(resp.Content) {
 			done, retry := r.handleFinalResponse(ctx, req, resp, assistant, iteration, options, state)
@@ -652,12 +692,26 @@ func hashString(value string) string {
 	return fmt.Sprintf("%x", sum[:])
 }
 
-func (r Runner) callModel(ctx context.Context, req protocol.Request) (*protocol.Response, bool, error) {
+func (r Runner) callModel(ctx context.Context, req protocol.Request) (*protocol.Response, bool, time.Time, error) {
 	startedAt := time.Now()
 	var firstTokenAt time.Time
+	var firstTextAt time.Time
 	if streamer, ok := r.Caller.(StreamCaller); ok {
 		resp, err := streamer.Stream(ctx, req, StreamHandler{
-			OnTextDelta: r.OnAssistantTextDelta,
+			OnTextDelta: func(text string) {
+				if strings.TrimSpace(text) != "" && firstTextAt.IsZero() {
+					firstTextAt = time.Now()
+				}
+				if r.OnAssistantTextDelta != nil {
+					r.OnAssistantTextDelta(text)
+				}
+			},
+			OnStreamReset: func() {
+				firstTextAt = time.Time{}
+				if r.OnStreamReset != nil {
+					r.OnStreamReset()
+				}
+			},
 			OnThinkingDelta: func(thinking, signature string) {
 				if thinking != "" && r.OnAssistantThinkingDelta != nil {
 					r.OnAssistantThinkingDelta(thinking)
@@ -676,13 +730,13 @@ func (r Runner) callModel(ctx context.Context, req protocol.Request) (*protocol.
 		if r.OnModelRequest != nil {
 			r.OnModelRequest(req, resp, startedAt, firstTokenAt, completedAt)
 		}
-		return resp, true, err
+		return resp, true, firstTextAt, err
 	}
 	resp, err := r.Caller.Call(ctx, req)
 	if r.OnModelRequest != nil {
 		r.OnModelRequest(req, resp, startedAt, firstTokenAt, time.Now())
 	}
-	return resp, false, err
+	return resp, false, time.Now(), err
 }
 
 // ExecuteToolUses runs all tool_use blocks and returns a structured tool_result message.
@@ -700,6 +754,9 @@ type ExecuteToolOptions struct {
 	Timeout           time.Duration
 	StuckWarningAfter time.Duration
 	OnStuck           func(ToolStuckEvent)
+	Prepare           func(context.Context, string, map[string]interface{}) (PreparedTool, error)
+	CanParallel       func(protocol.Block) bool
+	MaxParallel       int
 }
 
 func ExecuteToolUsesWithFilter(
@@ -729,13 +786,43 @@ func ExecuteToolUsesWithOptions(
 
 	resultBlocks := make([]protocol.Block, 0, len(toolUses))
 	executed := make([]ExecutedTool, 0, len(toolUses))
-	for idx, block := range toolUses {
-		if onStarted != nil {
+	var batch []preparedToolOutcome
+	batchStart := 0
+	for idx := 0; idx < len(toolUses); idx++ {
+		if ctx.Err() != nil {
+			for _, skipped := range toolUses[idx:] {
+				resultBlocks = append(resultBlocks, protocol.ToolResultBlock(skipped.ID, skippedToolOutput("skipped_due_to_cancellation")))
+			}
+			return protocol.NewMessage(protocol.RoleUser, resultBlocks...), executed, ctx.Err()
+		}
+		block := toolUses[idx]
+		if len(batch) == 0 && options.Prepare != nil && options.CanParallel != nil && options.MaxParallel > 1 {
+			end := idx
+			for end < len(toolUses) && end-idx < options.MaxParallel && options.CanParallel(toolUses[end]) {
+				end++
+			}
+			if end-idx > 1 {
+				batchStart = idx
+				batch = prepareParallelReads(ctx, toolUses[idx:end], options, onStarted)
+			}
+		}
+		if len(batch) == 0 && onStarted != nil {
 			onStarted(block)
 		}
 		startedAt := time.Now()
-		execution, err := executeToolWithTimeout(ctx, options.Timeout, block.ID, block.Name, block.Input, run, options.StuckWarningAfter, options.OnStuck)
-		durationMS := time.Since(startedAt).Milliseconds()
+		var execution ToolExecutionResult
+		var err error
+		var durationMS int64
+		if len(batch) > 0 {
+			outcome := batch[idx-batchStart]
+			execution, err, durationMS = outcome.result, outcome.err, outcome.durationMS
+			if idx-batchStart+1 == len(batch) {
+				batch = nil
+			}
+		} else {
+			execution, err = executeToolWithTimeout(ctx, options.Timeout, block.ID, block.Name, block.Input, run, options.StuckWarningAfter, options.OnStuck)
+			durationMS = time.Since(startedAt).Milliseconds()
+		}
 		executedTool := ExecutedTool{
 			ID:            block.ID,
 			Name:          block.Name,

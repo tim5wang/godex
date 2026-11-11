@@ -18,6 +18,9 @@ type ToolSpec struct {
 	Description string                 `json:"description"`
 	InputSchema map[string]interface{} `json:"input_schema"`
 	Aliases     map[string]string      `json:"aliases,omitempty"`
+	// ParallelReadOnly is a host declaration, never inferred from a tool name
+	// or model input. Unknown/dynamic tools remain sequential by default.
+	ParallelReadOnly bool `json:"-"`
 }
 
 // ToolCall is the normalized input envelope passed through the tool runtime.
@@ -76,10 +79,11 @@ func NewTypedTool[T any](spec ToolSpec, run func(context.Context, T) (ToolResult
 // SpecFromDefinition converts a tooling definition into a runtime spec.
 func SpecFromDefinition(def tooling.Definition, aliases map[string]string) ToolSpec {
 	return ToolSpec{
-		Name:        def.Name,
-		Description: def.Description,
-		InputSchema: cloneStringAnyMap(def.InputSchema),
-		Aliases:     cloneStringStringMap(aliases),
+		Name:             def.Name,
+		Description:      def.Description,
+		InputSchema:      cloneStringAnyMap(def.InputSchema),
+		Aliases:          cloneStringStringMap(aliases),
+		ParallelReadOnly: def.ParallelReadOnly,
 	}
 }
 
@@ -119,10 +123,11 @@ func (t *typedTool[T]) Description() string {
 
 func (t *typedTool[T]) Spec() ToolSpec {
 	return ToolSpec{
-		Name:        t.spec.Name,
-		Description: t.spec.Description,
-		InputSchema: cloneStringAnyMap(t.spec.InputSchema),
-		Aliases:     cloneStringStringMap(t.spec.Aliases),
+		Name:             t.spec.Name,
+		Description:      t.spec.Description,
+		InputSchema:      cloneStringAnyMap(t.spec.InputSchema),
+		Aliases:          cloneStringStringMap(t.spec.Aliases),
+		ParallelReadOnly: t.spec.ParallelReadOnly,
 	}
 }
 
@@ -182,9 +187,19 @@ func executeToolRuntime(ctx context.Context, tool Tool, args map[string]interfac
 }
 
 func executeToolRuntimeResult(ctx context.Context, tool Tool, args map[string]interface{}, before []BeforeInterceptor, after []AfterInterceptor) (ToolResult, error) {
+	execute, err := prepareToolRuntimeResult(ctx, tool, args, before, after)
+	if execute == nil {
+		return ToolResult{}, err
+	}
+	return execute(ctx)
+}
+
+// prepareToolRuntimeResult runs validation and permission interceptors in the
+// caller's order. The returned single-use body may run alongside other reads.
+func prepareToolRuntimeResult(ctx context.Context, tool Tool, args map[string]interface{}, before []BeforeInterceptor, after []AfterInterceptor) (func(context.Context) (ToolResult, error), error) {
 	call, err := tool.prepare(args, SessionContextFromContext(ctx))
 	if err != nil {
-		return ToolResult{}, err
+		return nil, err
 	}
 
 	var (
@@ -213,21 +228,23 @@ func executeToolRuntimeResult(ctx context.Context, tool Tool, args map[string]in
 		}
 	}
 
-	if execErr == nil && !shortCircuited {
-		result, execErr = tool.invoke(ctx, &call)
-	}
-
-	for _, interceptor := range after {
-		if interceptor == nil {
-			continue
+	return func(ctx context.Context) (ToolResult, error) {
+		if execErr == nil && !shortCircuited {
+			result, execErr = tool.invoke(ctx, &call)
 		}
-		result, execErr = interceptor(ctx, &call, result, execErr)
-	}
 
-	if execErr != nil {
-		return cloneToolResult(result), execErr
-	}
-	return cloneToolResult(result), nil
+		for _, interceptor := range after {
+			if interceptor == nil {
+				continue
+			}
+			result, execErr = interceptor(ctx, &call, result, execErr)
+		}
+
+		if execErr != nil {
+			return cloneToolResult(result), execErr
+		}
+		return cloneToolResult(result), nil
+	}, execErr
 }
 
 func serializeToolResult(result ToolResult) (string, error) {

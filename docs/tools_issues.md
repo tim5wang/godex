@@ -350,3 +350,56 @@ OSError: [Errno 86] Bad CPU type in executable: 'tesseract'
 - 只读工具不应隐式触发全库重建；重建应与读路径解耦或至少可取消。
 - 形参里把 `context.Context` 命名成 `_` 就是交出取消权：这是「挂住一小时无法中断」能发生的先决条件。
 - 量化优先：本次关键是先量出「单行 40ms × 10万行」，才把「候选集太大」这个看似合理的假设证伪。
+
+
+## 2026-11-11 — lsp 工具长期静默失效：client capabilities 用布尔值，gopls initialize 直接 -32700
+
+**问题**：`lsp` 工具「看起来可用但实际全废」。
+- `lsp operation=status` 报 `go:true`（服务器在 PATH 上）。
+- `operation=diagnostics` 返回 `No diagnostics (no errors or warnings).` —— 看起来像「代码很干净」。
+- 其余 `document_symbols` / `hover` / `references` / `definition` 全部报 `LSP server for go is closed`。
+
+**根因（用裸 gopls stdio 复现，非猜测）**：`internal/tools/lsp.go` 的 `initialize` 把客户端 capabilities 按**布尔值**发，违反 LSP schema。gopls 用严格反序列化，直接返回 JSON-RPC 错误：
+
+```
+-32700 JSON RPC parse error: json: cannot unmarshal bool into Go struct field
+HoverClientCapabilities.XInitializeParams.capabilities.textDocument.hover.contentFormat
+of type []protocol.MarkupKind
+```
+
+逐字段替换法测出**一整组**类型错误（不止 hover）：
+
+| 字段 | 错误发法 | 规范要求 |
+|---|---|---|
+| `textDocument.hover.contentFormat` | `true` (bool) | `MarkupKind[]` → `["markdown","plaintext"]` |
+| `definition`/`references`/`documentSymbol`/`typeDefinition`/`implementation` | `true` | 空对象 `{}` |
+| `documentDiagnostic` | `true` | 键名应为 `diagnostic`，值为对象 |
+| `workspace.symbol`/`workspace.diagnostics` | `true` | 空对象 `{}` |
+
+`initialize` 失败后 `sv.close()` 立即置 closed，于是：
+1. 首调报 init 错误，**后续调全报「server is closed」**（误导方向）；
+2. `StartServer` 返回 `sv.initErr` —— 而该字段**从未被赋值**（`initErr` 只在 `initOnce` 闭包里赋值成局部变量，被丢弃），所以错误信息永久丢失，只剩「closed」。
+3. `diagnostics` 对失败 `return nil, nil`，工具层渲染成 `No diagnostics` —— **失败被伪装成好消息**，这是最危险的一条。
+
+**附带发现**：pull 诊断的返回被 `kind == "full"` 卡掉。gopls 实际回 `{"kind":"","items":[...]}`（kind 为空串但 items 有内容），原逻辑只 `json.Unmarshal` 取 kind，不匹配就当失败 → 真诊断被丢。
+
+**解决**（`internal/tools/lsp.go` + 新增 `internal/tools/lsp_test.go`）：
+- capabilities 改为规范类型（`contentFormat` 用 `[]string`，各能力项用 `{}`，键名 `diagnostic`）；抽出 `lspInitializeParams()` 便于单测断言。
+- 新增 `ErrLSPServerUnavailable`；`readLoop`/`close()` 把错误**显式投递**给等待方，不再发零值。
+- `diagnostics` 失败改为**返回错误**（不再伪装成空）；抽出 `parseDiagnosticsResult()`，接受空 kind 的报告。
+- 修 typed-nil：`resp.Error` 是 `*lspRPCError`，**nil 指针赋给 `error` 字段会变成非 nil**，导致成功的请求被判为失败（`initialize: <nil>`）。单元测试当场抓到，改为判空后再转换。
+- 修 initErr 未回写 + 失败时从 `c.servers` 删除死服务器（否则「server is closed」永久掩盖真因）。
+
+**验证**：`go build ./...`、`go vet`、`gofmt`（本文件）通过；`go test ./internal/tools/` 全过；8 个新测试（含真 gopls 集成测试：initialize 成功 + `documentSymbol` 拿到 `Marker`/`Exported`）。
+**反向验证非空洞**：把三处修复逐一改回旧行为，对应测试均失败（3/3 CAUGHT）。
+
+**一个被自己反向验证证伪的假设（重要）**：我一度认为 `handlePublishDiagnostics` 里 `len(payload.Diagnostics) == 0` 会吞掉「空数组撤回诊断」。反向验证时该测试**改回旧代码仍然通过** → 假设错误。真因：`Diagnostics` 是 `json.RawMessage`（即 `[]byte`），`len()` 量的是 **JSON 字节数**，空数组 `[]` 是 2 字节不为 0，一直能正常清缓存。该「修复」已回退，测试改为 characterization test 并注明。
+
+**通用教训**：
+- **协议 schema 不能用猜的**：`contentFormat` 是 `MarkupKind[]` 而非 bool；「能不能用某能力」的字段是对象 `{}` 而非 `true`。发错类型时**严格服务器直接拒整个 initialize**，且客户端往往把错误吞掉，表现为「工具静默全废」。
+- **静默兜底是事故放大器**：`return nil, nil` + 空切片渲染 = 「No diagnostics」这种**看起来是结论的假成功**。基础设施失败必须能穿透成错误，宁可报错不可报空。
+- `initOnce` + 局部 `initErr` 是经典坑：错误只在闭包内可见，外部读到零值。要么写回结构体（注意用 `sv.mu`，不能与 `initialize` 里 `notify` 的锁重叠），要么别用 `sync.Once` 转发错误。
+- **typed-nil 陷阱**：`*ErrorType` 为 nil 时赋给 `error` 接口 → 接口非 nil。凡是「optional 错误指针」都要 `if e != nil { err = e }` 显式转换。
+- **零值 channel 投递**：进程死亡时 `close(ch)` 让接收方读到零值（nil/空），与「真的空结果」无法区分 → 必须显式投递 error。
+- **反向验证是必须的，不是可选的**：本次它直接证伪了我自己的一个「根因」。只做正向测试会留下一个「改错了但测试是绿的」的假修复。
+- 判断工具是否真可用，别只看 `status`/空结果：`status` 只看 `LookPath`（在 PATH ≠ 能 initialize）。用**真调用成功返回内容**（如拿到具体符号）才算验证。

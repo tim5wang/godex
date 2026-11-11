@@ -1,9 +1,20 @@
 package modelcontext
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
+
+func TestStructuredToolOutputRetainsCompleteJSON(t *testing.T) {
+	data, err := json.Marshal(map[string]string{"symbol": strings.Repeat("source-reference-", 200)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := CompressToolOutput("lsp", "", string(data)); got != string(data) || !json.Valid([]byte(got)) {
+		t.Fatal("structured symbol output was truncated into invalid JSON")
+	}
+}
 
 func TestCompressToolOutputBelowThresholdUntouched(t *testing.T) {
 	in := "small output"

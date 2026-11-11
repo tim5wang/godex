@@ -405,7 +405,7 @@ func noMutationFeedback(decision loopGuardDecision, recovery, maxRecovery int) s
 		fmt.Sprintf("Reason: %s.", decision.Summary()),
 		budget,
 		fmt.Sprintf("You have executed tools for %d rounds without modifying any file or producing a final answer.", decision.Count),
-		"If you are doing DEEP RESEARCH, that is fine: write your findings so far to a notes file (write_file) to checkpoint progress, then continue researching.",
+		"If you are doing DEEP RESEARCH, report a brief verified finding and what remains unresolved in assistant text, then continue only with verification that can change the result. Do not write a notes file merely to reset this warning.",
 		"If you have enough information, produce your final answer now without further tool calls.",
 		"If you need to implement changes, start writing them now (edit_file/write_file).",
 	}, "\n")

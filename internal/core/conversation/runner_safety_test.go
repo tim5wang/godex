@@ -199,9 +199,9 @@ func TestLoopGuardNoMutationSpiralNeverAborts(t *testing.T) {
 	if len(feedbacks) == 0 || !strings.Contains(feedbacks[0], "no_mutation_spiral") {
 		t.Fatalf("expected no_mutation_spiral recovery, got %+v", feedbacks)
 	}
-	// The nudge text blesses the research-notes escape hatch.
-	if !strings.Contains(feedbacks[0], "DEEP RESEARCH") || !strings.Contains(feedbacks[0], "write your findings") {
-		t.Fatalf("expected research-notes escape hatch in nudge, got %q", feedbacks[0])
+	// Research continues with visible findings rather than artificial writes.
+	if !strings.Contains(feedbacks[0], "DEEP RESEARCH") || !strings.Contains(feedbacks[0], "verified finding") {
+		t.Fatalf("expected evidence checkpoint in nudge, got %q", feedbacks[0])
 	}
 	// Repeated nudges are fine (research-safe), but the run must complete:
 	// the no-mutation signal never escalates to abort in strict mode.

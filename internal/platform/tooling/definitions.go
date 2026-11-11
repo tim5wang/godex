@@ -3,9 +3,10 @@ package tooling
 import "github.com/tim5wang/godex/internal/contracts/protocol"
 
 type Definition struct {
-	Name        string
-	Description string
-	InputSchema map[string]interface{}
+	Name             string
+	Description      string
+	InputSchema      map[string]interface{}
+	ParallelReadOnly bool
 }
 
 func (d Definition) Schema() map[string]interface{} {
@@ -48,8 +49,9 @@ func BashDefinition() Definition {
 
 func ReadFileDefinition() Definition {
 	return Definition{
-		Name:        "read_file",
-		Description: "Read UTF-8 text file contents from a workspace-relative path, or from an exact read-only attachment path supplied in the current conversation. Returns content with line numbers. Source code files are returned in full; other files default to 2000 lines. Do not use for binary files such as PDFs, images, media, or archives — use attach_file instead.",
+		ParallelReadOnly: true,
+		Name:             "read_file",
+		Description:      "Read UTF-8 text file contents from a workspace-relative path, or from an exact read-only attachment path supplied in the current conversation. Returns content with line numbers. Source code files are returned in full; other files default to 2000 lines. Do not use for binary files such as PDFs, images, media, or archives — use attach_file instead.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -150,8 +152,9 @@ type FileEdit struct {
 
 func GrepDefinition() Definition {
 	return Definition{
-		Name:        "grep",
-		Description: "Search file contents using a regex pattern. Returns matching lines with file paths and line numbers. Supports glob filtering and case-insensitive search.",
+		ParallelReadOnly: true,
+		Name:             "grep",
+		Description:      "Search file contents using a regex pattern. Scope path to the relevant directory. Use next_offset to page through the same query and read_file offset/limit for matched lines. Broad searches skip generated directories (target, temp, dist, build, coverage); set include_generated or target such a path explicitly when needed.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -179,6 +182,16 @@ func GrepDefinition() Definition {
 					"type":        "integer",
 					"description": "Optional timeout for this search in seconds. Omit to use the global tool timeout.",
 				},
+				"offset": map[string]interface{}{
+					"type":        "integer",
+					"minimum":     0,
+					"maximum":     10000,
+					"description": "Number of matching lines to skip, not a file line number. Use the previous next_offset. Default: 0.",
+				},
+				"include_generated": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Include common generated directories in broad searches. Default: false. Explicit generated paths are still searchable.",
+				},
 			},
 			"required": []string{"pattern"},
 		},
@@ -187,8 +200,9 @@ func GrepDefinition() Definition {
 
 func FindDefinition() Definition {
 	return Definition{
-		Name:        "find",
-		Description: "Find files matching a glob pattern. Searches recursively through directories. Supports patterns like '*.go', '**/*_test.go', 'cmd/**/main.go'.",
+		ParallelReadOnly: true,
+		Name:             "find",
+		Description:      "Find files matching a glob pattern. Searches recursively through directories. Supports patterns like '*.go', '**/*_test.go', 'cmd/**/main.go'.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -216,8 +230,9 @@ func FindDefinition() Definition {
 
 func LsDefinition() Definition {
 	return Definition{
-		Name:        "ls",
-		Description: "List the contents of a directory. Returns file names, types (file/directory), and sizes.",
+		ParallelReadOnly: true,
+		Name:             "ls",
+		Description:      "List the contents of a directory. Returns file names, types (file/directory), and sizes.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{

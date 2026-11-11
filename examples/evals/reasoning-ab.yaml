@@ -1,0 +1,37 @@
+# Run from the repository root with:
+# godex eval run --suite examples/evals/reasoning-ab.yaml --model-profile <same-model-id>
+# Repeat trials with reversed case order; a single pair is only a smoke check.
+name: reasoning-ab
+cases:
+  - id: tool-execution-medium
+    reasoning_effort: medium
+    prompt: >-
+      Read internal/core/conversation/runner.go. Name the function that executes
+      a batch of tool calls and explain which calls remain sequential and when
+      reads can run in parallel.
+      Use only read_file and grep; read the relevant line range if output is
+      truncated. Answer in English with the function name and evidence.
+      Do not use bash or edit files.
+    expected:
+      required_substrings: [ExecuteToolUsesWithOptions, parallel]
+      forbidden_tools: [bash, edit_file, write_file]
+      max_tool_failures: 0
+      max_model_calls: 8
+      max_duration_ms: 90000
+      max_output_tokens: 10000
+  - id: tool-execution-xhigh
+    reasoning_effort: xhigh
+    prompt: >-
+      Read internal/core/conversation/runner.go. Name the function that executes
+      a batch of tool calls and explain which calls remain sequential and when
+      reads can run in parallel.
+      Use only read_file and grep; read the relevant line range if output is
+      truncated. Answer in English with the function name and evidence.
+      Do not use bash or edit files.
+    expected:
+      required_substrings: [ExecuteToolUsesWithOptions, parallel]
+      forbidden_tools: [bash, edit_file, write_file]
+      max_tool_failures: 0
+      max_model_calls: 8
+      max_duration_ms: 90000
+      max_output_tokens: 10000

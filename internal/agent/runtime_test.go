@@ -135,6 +135,7 @@ func TestRunWithOptionsEmitsLifecycleEvents(t *testing.T) {
 		events.EventModelRequestCompleted,
 		events.EventAssistantTextDelta,
 		events.EventAssistantMessageComplete,
+		events.EventTurnMetrics,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("unexpected emitted events: got %v want %v", got, want)
@@ -143,6 +144,48 @@ func TestRunWithOptionsEmitsLifecycleEvents(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("unexpected emitted events: got %v want %v", got, want)
 		}
+	}
+}
+
+func TestRunWithOptionsParallelReadBatchKeepsSourceAndMetrics(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	var blocks []protocol.Block
+	for i := 0; i < 4; i++ {
+		name := "parallel-" + strconv.Itoa(i) + ".go"
+		content := strings.Repeat("// full source context\n", 200) + "// LAST-" + strconv.Itoa(i)
+		if err := os.WriteFile(filepath.Join(a.cfg.WorkspaceDir, name), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+		blocks = append(blocks, protocol.ToolUseBlock(name, "read_file", map[string]interface{}{"path": name}))
+	}
+	a.client = &sequenceCaller{responses: []protocol.Response{
+		{Content: blocks}, {Content: []protocol.Block{protocol.TextBlock("verified")}},
+	}}
+	var metrics protocol.TurnMetrics
+	if err := a.RunWithOptions(context.Background(), RunOptions{SessionID: "parallel-reads", Sink: events.SinkFunc(func(event events.Event) {
+		if event.Type == events.EventTurnMetrics {
+			metrics = event.Payload.(protocol.TurnMetrics)
+		}
+	})}); err != nil {
+		t.Fatal(err)
+	}
+	if metrics.ToolCalls != 4 || metrics.ModelCalls != 2 || metrics.FirstTextMS == nil {
+		t.Fatalf("missing batch metrics: %+v", metrics)
+	}
+	results := 0
+	for _, message := range a.GetMessages() {
+		for _, block := range message.Content {
+			if block.Type == protocol.BlockToolResult {
+				if !strings.Contains(block.Content, "LAST-") {
+					t.Fatalf("source tail was silently removed: %s", block.Content)
+				}
+				results++
+			}
+		}
+	}
+	if results != 4 {
+		t.Fatalf("expected four committed read results, got %d", results)
 	}
 }
 

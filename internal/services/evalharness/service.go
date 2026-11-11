@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"github.com/tim5wang/godex/internal/core/llm"
 	evaldomain "github.com/tim5wang/godex/internal/domain/eval"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
@@ -87,6 +88,14 @@ func LoadSuite(path string) (evaldomain.Suite, error) {
 		if strings.TrimSpace(item.Prompt) == "" && strings.TrimSpace(item.ReplayFixture) == "" {
 			return evaldomain.Suite{}, fmt.Errorf("eval case %q missing prompt or replay_fixture", id)
 		}
+		if effort := strings.TrimSpace(item.ReasoningEffort); effort != "" {
+			if llm.NormalizeReasoningEffort(effort) == "" {
+				return evaldomain.Suite{}, fmt.Errorf("eval case %q has invalid reasoning_effort %q", id, effort)
+			}
+			if strings.TrimSpace(item.ReplayFixture) != "" {
+				return evaldomain.Suite{}, fmt.Errorf("eval case %q cannot test reasoning_effort with a replay fixture", id)
+			}
+		}
 	}
 	return suite, nil
 }
@@ -130,7 +139,7 @@ func (s *Service) RunSuite(ctx context.Context, opts RunOptions) (evaldomain.Rep
 	defer writer.Flush()
 	suiteDir := filepath.Dir(opts.SuitePath)
 	for _, item := range suite.Cases {
-		output := s.runCase(ctx, suite.Name, suiteDir, item, opts.ModelProfileID)
+		output := s.runCase(ctx, runID, suiteDir, item, opts.ModelProfileID)
 		result := output.Result
 		report.Results = append(report.Results, result)
 		if result.Passed {
@@ -221,12 +230,12 @@ func ReadReport(path string) (evaldomain.Report, error) {
 	return report, nil
 }
 
-func (s *Service) runCase(ctx context.Context, suiteName, suiteDir string, item evaldomain.Case, overrideProfileID string) caseOutput {
+func (s *Service) runCase(ctx context.Context, runID, suiteDir string, item evaldomain.Case, overrideProfileID string) caseOutput {
 	if strings.TrimSpace(item.ReplayFixture) != "" {
 		return s.runReplayCase(suiteDir, item)
 	}
 	started := s.now()
-	result := evaldomain.CaseResult{ID: item.ID, Title: item.Title, StartedAt: started}
+	result := evaldomain.CaseResult{ID: item.ID, Title: item.Title, StartedAt: started, ReasoningEffort: llm.NormalizeReasoningEffort(item.ReasoningEffort)}
 	output := caseOutput{Result: result}
 	timeout := defaultCaseTimeout
 	if item.TimeoutSeconds > 0 {
@@ -234,7 +243,9 @@ func (s *Service) runCase(ctx context.Context, suiteName, suiteDir string, item 
 	}
 	caseCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	locator := backend.SessionLocator{Channel: "eval", Key: safeName(suiteName) + "-" + safeName(item.ID)}
+	// Each trial needs fresh history; reusing a suite/case locator biases A/B
+	// runs with earlier answers and tool results.
+	locator := backend.SessionLocator{Channel: "eval", Key: safeName(runID) + "-" + safeName(item.ID)}
 	opened, err := s.Backend.OpenSession(caseCtx, locator)
 	if err != nil {
 		result.CompletedAt = s.now()
@@ -248,12 +259,28 @@ func (s *Service) runCase(ctx context.Context, suiteName, suiteDir string, item 
 	if profileID == "" {
 		profileID = strings.TrimSpace(item.ModelProfileID)
 	}
-	if profileID != "" {
+	if profileID == "" && result.ReasoningEffort != "" {
+		profileID = opened.ModelProfileID
+	}
+	if profileID != "" || result.ReasoningEffort != "" {
 		result.ModelProfileID = profileID
-		if _, err := s.Backend.SetSessionModelProfile(caseCtx, opened.SessionID, profileID); err != nil {
+		var modelErr error
+		if result.ReasoningEffort != "" {
+			setter, ok := s.Backend.(interface {
+				SetSessionModelProfileWithReasoning(context.Context, string, string, string) (backend.ModelsView, error)
+			})
+			if !ok {
+				modelErr = fmt.Errorf("eval backend does not support reasoning_effort overrides")
+			} else {
+				_, modelErr = setter.SetSessionModelProfileWithReasoning(caseCtx, opened.SessionID, profileID, result.ReasoningEffort)
+			}
+		} else {
+			_, modelErr = s.Backend.SetSessionModelProfile(caseCtx, opened.SessionID, profileID)
+		}
+		if modelErr != nil {
 			result.CompletedAt = s.now()
-			result.Error = err.Error()
-			result.Failures = append(result.Failures, "set model profile: "+err.Error())
+			result.Error = modelErr.Error()
+			result.Failures = append(result.Failures, "set model profile: "+modelErr.Error())
 			output.Result = result
 			return output
 		}
@@ -279,7 +306,9 @@ func (s *Service) runCase(ctx context.Context, suiteName, suiteDir string, item 
 	if timelineErr == nil {
 		output.Timeline = timeline
 		result.Tools = extractTools(timeline)
+		result.Metrics = extractTurnMetrics(timeline, result.TurnID)
 	}
+	result.Failures = append(result.Failures, evaluatePerformanceExpectations(item.Expected, result.Metrics)...)
 	result.Failures = append(result.Failures, evaluateExpectations(item.Expected, result.AssistantText, result.Tools)...)
 	if snapshotErr != nil {
 		result.Failures = append(result.Failures, "snapshot: "+snapshotErr.Error())
@@ -309,6 +338,8 @@ func (s *Service) runReplayCase(suiteDir string, item evaldomain.Case) caseOutpu
 	result.TurnID = firstTimelineTurnID(timeline)
 	result.AssistantText = assistantTextFromTimeline(timeline)
 	result.Tools = extractTools(timeline)
+	result.Metrics = extractTurnMetrics(timeline, result.TurnID)
+	result.Failures = append(result.Failures, evaluatePerformanceExpectations(item.Expected, result.Metrics)...)
 	stability := analyzeTimelineStability(timeline)
 	stability.Signals = appendForbiddenToolExchangeSignals(item.Expected, stability)
 	result.InstabilitySignals = append([]string{}, stability.Signals...)

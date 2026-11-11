@@ -5,9 +5,9 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/llm"
-	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/platform/logger"
 )
 
@@ -98,6 +98,9 @@ func (c *fallbackCaller) Stream(ctx context.Context, req protocol.Request, handl
 			return nil, lastErr
 		}
 		logger.Warnf("model profile %q stream failed before completion, falling back to %q: %v", c.profiles[i].ID, c.profiles[order[pos+1]].ID, lastErr)
+		if handler.OnStreamReset != nil {
+			handler.OnStreamReset()
+		}
 	}
 	return nil, lastErr
 }

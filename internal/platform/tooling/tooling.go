@@ -85,6 +85,9 @@ type ReadFileLinesResult struct {
 	Path       string
 	TotalLines int
 	Truncated  bool
+	StartLine  int
+	EndLine    int
+	NextOffset int
 	// Image detection fields.
 	IsImage  bool   // true when file is a recognized image format
 	MimeType string // e.g. "image/png" when IsImage is true
@@ -288,7 +291,7 @@ func (e *WorkspaceExecutor) ReadFileLines(opts ReadFileLinesOptions) (ReadFileLi
 	if endIdx > totalLines {
 		endIdx = totalLines
 	}
-	truncated := endIdx < totalLines && opts.Limit <= 0
+	truncated := endIdx < totalLines
 
 	// Format output.
 	var out strings.Builder
@@ -307,7 +310,11 @@ func (e *WorkspaceExecutor) ReadFileLines(opts ReadFileLinesOptions) (ReadFileLi
 
 	output := out.String()
 	if truncated {
-		output += fmt.Sprintf("\n... (truncated: showing %d of %d lines, use offset/limit to read more)", endIdx-startIdx, totalLines)
+		output += fmt.Sprintf("\n... (truncated: lines %d-%d of %d; continue with offset=%d and limit=%d)", startIdx+1, endIdx, totalLines, endIdx+1, limit)
+	}
+	nextOffset := 0
+	if truncated {
+		nextOffset = endIdx + 1
 	}
 
 	return ReadFileLinesResult{
@@ -315,6 +322,9 @@ func (e *WorkspaceExecutor) ReadFileLines(opts ReadFileLinesOptions) (ReadFileLi
 		Path:       filepath.ToSlash(path),
 		TotalLines: totalLines,
 		Truncated:  truncated,
+		StartLine:  startIdx + 1,
+		EndLine:    endIdx,
+		NextOffset: nextOffset,
 	}, nil
 }
 

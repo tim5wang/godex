@@ -1,6 +1,9 @@
 package modelcontext
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // Tool output compression thresholds. Mirrors the spirit of rtk's
 // truncation caps (CAP_ERRORS / CAP_LIST / CAP_INVENTORY) but tuned for
@@ -41,7 +44,17 @@ const (
 // applies, or compression would not save at least minCompressRatio bytes.
 // The returned value never exceeds the input size (fail-safe).
 func CompressToolOutput(toolName, command, output string) string {
+	// These tools already provide bounded, addressable results. Generic line
+	// truncation corrupts grep JSON and silently removes source-code ranges.
+	// The outer artifact limit still bounds oversized results.
+	if toolName == "grep" || toolName == "read_file" {
+		return output
+	}
 	if len(output) < CompressMinBytes {
+		return output
+	}
+	// LSP and other structured tools also need their JSON shape intact.
+	if json.Valid([]byte(output)) {
 		return output
 	}
 

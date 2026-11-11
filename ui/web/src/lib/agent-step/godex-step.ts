@@ -190,6 +190,11 @@ export class GodexStepElement extends HTMLElement {
     return client.streamEvents(
       stepId,
       (event) => {
+        if (event.type === "assistant_stream_reset" && this.currentAssistant) {
+          const text = (event.payload as { text?: string } | undefined)?.text || "";
+          const current = this.currentAssistant.textContent || "";
+          if (text && current.endsWith(text)) this.currentAssistant.textContent = current.slice(0, -text.length);
+        }
         if (event.type === "assistant_text_delta") {
           const text = (event.payload as { text?: unknown } | undefined)?.text;
           if (typeof text === "string" && this.currentAssistant) {

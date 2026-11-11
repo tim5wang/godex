@@ -24,16 +24,20 @@ type runnerOptions struct {
 	maxInjectionCycles           int
 	maxLoopGuardRecoveries       int
 	maxNoMutationRounds          int
+	maxSilentToolRounds          int
 	loopGuardMode                LoopGuardMode
 }
 
 type runnerState struct {
+	startedAt                 time.Time
+	firstTextAt               time.Time
 	result                    *Result
 	emptyResponses            int
 	lengthRecoveries          int
 	reasoningLengthRecoveries int
 	injectionCycles           int
 	reasoningMaxTokens        int
+	silentToolRounds          int
 }
 
 func (r Runner) normalizedOptions() runnerOptions {
@@ -51,6 +55,7 @@ func (r Runner) normalizedOptions() runnerOptions {
 		maxInjectionCycles:           r.MaxInjectionCycles,
 		maxLoopGuardRecoveries:       r.MaxLoopGuardRecoveries,
 		maxNoMutationRounds:          r.MaxNoMutationRounds,
+		maxSilentToolRounds:          r.MaxSilentToolRounds,
 		loopGuardMode:                r.LoopGuardMode,
 	}
 	if options.maxTurns <= 0 {
@@ -89,7 +94,7 @@ func (r Runner) normalizedOptions() runnerOptions {
 	if options.maxLoopGuardRecoveries <= 0 {
 		options.maxLoopGuardRecoveries = defaultMaxLoopGuardRecoveries
 	}
-	if options.maxNoMutationRounds <= 0 {
+	if options.maxNoMutationRounds == 0 {
 		options.maxNoMutationRounds = defaultMaxNoMutationRounds
 	}
 	if options.loopGuardMode == "" {
@@ -124,13 +129,35 @@ func (r Runner) buildTurnRequest(ctx context.Context, iteration, reasoningMaxTok
 	return req, nil
 }
 
-func (r Runner) callModelForTurn(ctx context.Context, req protocol.Request, iteration int, options runnerOptions, result *Result) (*protocol.Response, bool, protocol.Request, error) {
+func applyDeliveryBudget(req protocol.Request, silentRounds, budget int) protocol.Request {
+	if budget <= 0 || silentRounds < budget {
+		return req
+	}
+	feedback := "Delivery checkpoint: report a brief verified conclusion and the remaining verification in assistant text before further tools. Reuse established evidence rather than restarting the investigation. If the task is complete, deliver the result now."
+	if silentRounds >= 2*budget {
+		req.Tools = nil
+		feedback = "Delivery budget reached: answer now using the evidence already collected, without tools. State verified findings, completed changes, and any unfinished work or limitations explicitly. Do not claim the task is complete or tests passed unless the evidence supports it."
+	}
+	req.RuntimeTail = strings.TrimSpace(req.RuntimeTail + "\n\n" + feedback)
+	return req
+}
+
+func (r Runner) callModelForTurn(ctx context.Context, req protocol.Request, iteration int, options runnerOptions, state *runnerState) (*protocol.Response, bool, protocol.Request, error) {
+	result := state.result
 	overflowRecoveries := 0
 	for attempt := 0; ; attempt++ {
-		resp, streamed, callErr := r.callModel(ctx, req)
+		started := time.Now()
+		resp, streamed, firstTextAt, callErr := r.callModel(ctx, req)
+		result.Metrics.ModelCalls++
+		result.Metrics.ModelMS += time.Since(started).Milliseconds()
+		if resp != nil && resp.Usage != nil {
+			result.Metrics.OutputTokens += resp.Usage.OutputTokens
+		}
 		if callErr == nil {
+			state.firstTextAt = firstTextAt
 			return resp, streamed, req, nil
 		}
+		result.Metrics.ModelErrors++
 		if errors.Is(ctx.Err(), context.Canceled) || errors.Is(callErr, context.Canceled) {
 			result.Stopped = true
 			result.RecoveryHint = diagnosticRecoveryHint(iteration, nil)
@@ -138,19 +165,51 @@ func (r Runner) callModelForTurn(ctx context.Context, req protocol.Request, iter
 			return nil, false, req, callErr
 		}
 		if IsContextLengthError(callErr) && r.OnContextOverflow != nil && overflowRecoveries < options.maxContextOverflowRecoveries {
+			recoveryStarted := time.Now()
 			overflowRecoveries++
 			r.emitPhase(PhaseEvent{Phase: PhaseRecoveryAttempt, Iteration: iteration, Model: req.Model, Message: fmt.Sprintf("provider context overflow; compacting and retrying (%d/%d): %v", overflowRecoveries, options.maxContextOverflowRecoveries, callErr), RecoveryHint: "The provider rejected the request for exceeding its context window; the runner compacted history and retried."})
 			if r.OnContextOverflow(ctx) {
 				if rebuilt, rebuildErr := r.BuildRequest(ctx); rebuildErr == nil {
 					rebuilt.Messages = SanitizeMessagesForProvider(rebuilt.Messages)
-					req = rebuilt
+					req = applyDeliveryBudget(rebuilt, state.silentToolRounds, options.maxSilentToolRounds)
+					result.Metrics.RecoveryMS += time.Since(recoveryStarted).Milliseconds()
+					result.Metrics.ModelRetries++
+					if r.OnStreamReset != nil {
+						r.OnStreamReset()
+					}
 					continue
 				}
 			}
+			result.Metrics.RecoveryMS += time.Since(recoveryStarted).Milliseconds()
 		}
 		class := ClassifyTurnError(callErr)
 		if (class == TurnErrorRetryable || class == TurnErrorTransient) && attempt < options.maxModelRetries {
+			recoveryStarted := time.Now()
+			if r.OnStreamReset != nil {
+				r.OnStreamReset()
+			}
 			r.emitPhase(PhaseEvent{Phase: PhaseRecoveryAttempt, Iteration: iteration, Model: req.Model, Message: fmt.Sprintf("model error classified as %s; retrying (%d/%d): %v", class, attempt+1, options.maxModelRetries, callErr), RecoveryHint: diagnosticRecoveryHint(iteration, nil)})
+			delay := r.ModelRetryDelay
+			if delay <= 0 {
+				delay = 250 * time.Millisecond
+			}
+			for i := 0; i < attempt && delay < 2*time.Second; i++ {
+				delay *= 2
+			}
+			if delay > 2*time.Second {
+				delay = 2 * time.Second
+			}
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				result.Metrics.RecoveryMS += time.Since(recoveryStarted).Milliseconds()
+				result.Stopped = true
+				return nil, false, req, ctx.Err()
+			case <-timer.C:
+			}
+			result.Metrics.RecoveryMS += time.Since(recoveryStarted).Milliseconds()
+			result.Metrics.ModelRetries++
 			continue
 		}
 		result.Stopped = true
@@ -233,9 +292,13 @@ func (r Runner) handleFinalResponse(ctx context.Context, req protocol.Request, r
 
 func (r Runner) handleToolResponse(ctx context.Context, req protocol.Request, resp *protocol.Response, iteration int, options runnerOptions, state *runnerState, guard *loopGuard) (bool, error) {
 	r.emitPhase(PhaseEvent{Phase: PhaseAwaitingTools, Iteration: iteration, Model: req.Model})
+	toolStarted := time.Now()
 	toolResultMsg, executed, toolErr := ExecuteToolUsesWithOptions(ctx, resp.Content, r.ExecuteTool, r.OnToolStarted, r.OnToolFinished, r.ToolResultFilter, ExecuteToolOptions{
 		Timeout: options.toolTimeout, StuckWarningAfter: toolStuckWarningAfter(options.toolTimeout), OnStuck: r.OnToolStuck,
+		Prepare: r.PrepareTool, CanParallel: r.CanParallelTool, MaxParallel: r.MaxParallelTools,
 	})
+	state.result.Metrics.ToolMS += time.Since(toolStarted).Milliseconds()
+	state.result.Metrics.ToolCalls += len(executed)
 	if len(toolResultMsg.Content) > 0 && r.AppendToolResults != nil {
 		r.AppendToolResults(toolResultMsg)
 	}

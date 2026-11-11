@@ -1186,6 +1186,11 @@ func (s *Session) clearActiveTurn(turnID string) {
 //     prose.  No colour-palette coordination required.
 func (s *Session) handleEvent(event events.Event) {
 	switch event.Type {
+	case events.EventAssistantStreamReset:
+		if s.assistantStreaming {
+			s.tui.WriteString("\n\n> Previous partial response interrupted; retrying.\n\n")
+		}
+		s.assistantStreaming = false
 	case events.EventAssistantTextDelta:
 		// First delta of a new block: ensure the
 		// previous turn's content is visually closed

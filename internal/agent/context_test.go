@@ -835,7 +835,7 @@ func TestBuildContextCodingProfileUsesLeanToolSurface(t *testing.T) {
 	}
 }
 
-func TestBuildContextCodingProfileIncludesRepoMap(t *testing.T) {
+func TestBuildContextCodingProfileOmitsRepoMap(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.RegisterTools()
 	if err := os.MkdirAll(filepath.Join(a.cfg.WorkspaceDir, "internal", "demo"), 0755); err != nil {
@@ -856,10 +856,13 @@ func RunTask() {}
 		t.Fatalf("build context: %v", err)
 	}
 	runtimeState := runtimePromptStateText(build.Messages)
-	for _, want := range []string{"# Repo Map", "internal/demo/worker.go", "type Worker", "func RunTask"} {
-		if !strings.Contains(runtimeState, want) {
-			t.Fatalf("expected repo map runtime state to contain %q, got %q", want, runtimeState)
+	for _, unwanted := range []string{"# Repo Map", "internal/demo/worker.go", "type Worker", "func RunTask"} {
+		if strings.Contains(runtimeState, unwanted) {
+			t.Fatalf("unexpected automatic repo map content %q in runtime state %q", unwanted, runtimeState)
 		}
+	}
+	if a.repoMap.text != "" || len(a.repoMap.entries) != 0 {
+		t.Fatal("building coding context should not scan the workspace for a repo map")
 	}
 }
 

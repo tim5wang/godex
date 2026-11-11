@@ -119,6 +119,9 @@ func NewReadFileToolWithExecutor(executor *tooling.WorkspaceExecutor) Tool {
 				"path":        result.Path,
 				"total_lines": result.TotalLines,
 				"truncated":   result.Truncated,
+				"start_line":  result.StartLine,
+				"end_line":    result.EndLine,
+				"next_offset": result.NextOffset,
 			},
 		}, nil
 	})

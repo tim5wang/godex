@@ -411,21 +411,46 @@ func (h *ToolHandler) Handle(ctx context.Context, name string, args map[string]i
 
 // HandleResult processes a tool call and returns the full typed runtime result.
 func (h *ToolHandler) HandleResult(ctx context.Context, name string, args map[string]interface{}) (ToolResult, error) {
+	execute, err := h.PrepareResult(ctx, name, args)
+	if execute == nil {
+		return ToolResult{}, err
+	}
+	return execute(ctx)
+}
+
+// PrepareResult checks the active registration, input, and permission chain
+// synchronously, before returning a single-use execution body.
+func (h *ToolHandler) PrepareResult(ctx context.Context, name string, args map[string]interface{}) (func(context.Context) (ToolResult, error), error) {
+	return h.prepareResult(ctx, name, args, false)
+}
+
+// PrepareReadOnlyResult rechecks the current declaration under the lookup
+// lock, preventing a replaced registration from inheriting permission to run
+// as a parallel read.
+func (h *ToolHandler) PrepareReadOnlyResult(ctx context.Context, name string, args map[string]interface{}) (func(context.Context) (ToolResult, error), error) {
+	return h.prepareResult(ctx, name, args, true)
+}
+
+func (h *ToolHandler) prepareResult(ctx context.Context, name string, args map[string]interface{}, requireReadOnly bool) (func(context.Context) (ToolResult, error), error) {
 	h.mu.RLock()
 	tool, ok := h.tools[name]
 	if !ok {
 		active := h.activeNamesLocked()
 		h.mu.RUnlock()
-		return ToolResult{}, ErrToolNotFound{Name: name, Available: active}
+		return nil, ErrToolNotFound{Name: name, Available: active}
 	}
 	if _, draining := h.draining[name]; draining {
 		h.mu.RUnlock()
-		return ToolResult{}, ErrToolDraining{Name: name}
+		return nil, ErrToolDraining{Name: name}
 	}
 	if _, ok := h.activeTools[name]; !ok {
 		bundle := h.meta[name].Bundle
 		h.mu.RUnlock()
-		return ToolResult{}, ErrToolInactive{Name: name, Bundle: bundle}
+		return nil, ErrToolInactive{Name: name, Bundle: bundle}
+	}
+	if requireReadOnly && !tool.Spec().ParallelReadOnly {
+		h.mu.RUnlock()
+		return nil, fmt.Errorf("tool %q is not declared safe for parallel reads", name)
 	}
 	schema := tool.Spec().ToolSchema().InputSchema
 	aliases := tool.Spec().Aliases
@@ -437,9 +462,9 @@ func (h *ToolHandler) HandleResult(ctx context.Context, name string, args map[st
 	// prepare() applies aliases idempotently.
 	applyAliases(args, aliases)
 	if err := validateToolInputSchema(name, args, schema); err != nil {
-		return ToolResult{}, err
+		return nil, err
 	}
-	return executeToolRuntimeResult(ctx, tool, args, before, after)
+	return prepareToolRuntimeResult(ctx, tool, args, before, after)
 }
 
 // Schemas returns registered tool schemas, optionally filtered by name.

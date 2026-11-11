@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { resetStreamFeed } from "../lib/streamReset";
 import type { AttachmentRef, FeedItem, ProtocolBlock, ProtocolMessage, RuntimeEvent, TodoFeedItem, TodoFeedStats } from "../lib/types";
 import { attachmentSummary, firstSummaryLine, isRecord, normalizeTodoItems, normalizeTodoStats, parseJSON, primaryToolInput, renderTodoList, shortID, summarizeTool, summarizeToolOutput, stringValue, truncateSummary, truncateToolTitle } from "./chatFeedUtils";
 export { groupFeedItemsIntoTurns, splitTurnSegments } from "./chatFeedUtils";
@@ -104,7 +105,7 @@ export function createChatStore() {
         return {};
       }
       const eventSessionId = event.session_id || state.sessionId;
-      const overlayItems = [...state.overlayItems];
+      let overlayItems = [...state.overlayItems];
       const pendingSends = [...state.pendingSends];
       let status = state.status;
       let running = state.running;
@@ -132,6 +133,12 @@ export function createChatStore() {
           status = "Accepted message";
           running = true;
           currentTurnId = event.turn_id || currentTurnId;
+          break;
+        }
+        case "assistant_stream_reset": {
+          const payload = event.payload as { text?: string; thinking?: string };
+          overlayItems = resetStreamFeed(overlayItems, event.turn_id || "", payload.text || "", payload.thinking || "");
+          status = "Retrying response…";
           break;
         }
         case "assistant_text_delta": {

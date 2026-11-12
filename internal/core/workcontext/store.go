@@ -18,7 +18,7 @@ import (
 )
 
 // schemaVersion is the current ordered migration version.
-const schemaVersion = 7
+const schemaVersion = 9
 
 // statusArkid is the terminal read-only status.
 const statusArchived = "archived"
@@ -28,8 +28,9 @@ var validStatuses = map[string]bool{"active": true, "paused": true, "archived": 
 
 // validFactStatuses are the accepted fact review statuses.
 var validFactStatuses = map[string]bool{
-	"candidate": true, "confirmed": true, "stale": true,
-	"superseded": true, "rejected": true,
+	"candidate": true, "observed": true, "confirmed": true, "stale": true,
+	"superseded": true, "rejected": true, "archived": true,
+	"verification_blocked": true,
 }
 
 // validProvenance values distinguish a human report from a system query. A

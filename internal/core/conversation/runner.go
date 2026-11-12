@@ -87,6 +87,7 @@ const (
 
 // ExecutedTool captures a completed tool invocation.
 type ExecutedTool struct {
+	ExitCode      *int
 	ID            string
 	Name          string
 	Input         map[string]interface{}
@@ -101,6 +102,7 @@ type ExecutedTool struct {
 
 // ToolExecutionResult is the structured outcome returned by the tool executor.
 type ToolExecutionResult struct {
+	ExitCode      *int
 	Output        string
 	ArtifactPaths []string
 	Code          string
@@ -828,6 +830,7 @@ func ExecuteToolUsesWithOptions(
 			Name:          block.Name,
 			Input:         protocol.ToolUseBlock(block.ID, block.Name, block.Input).Input,
 			Output:        execution.Output,
+			ExitCode:      execution.ExitCode,
 			ArtifactPaths: append([]string{}, execution.ArtifactPaths...),
 			Code:          strings.TrimSpace(execution.Code),
 			RecoveryHint:  strings.TrimSpace(execution.RecoveryHint),

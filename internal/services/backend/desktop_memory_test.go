@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -12,6 +13,56 @@ import (
 	"github.com/tim5wang/godex/internal/core/workcontext"
 	"github.com/tim5wang/godex/internal/domain/message"
 )
+
+func TestDreamCancellationRetainsWatermarkAndRecordsModelTiming(t *testing.T) {
+	s := newTestService(newTestConfig(t), &stubCaller{})
+	defer s.CloseWorkContexts()
+	c := createDesktopTest(t, s, "desktop")
+	store, _ := s.WorkContexts()
+	in, _, err := store.BeginDream(context.Background(), desktopTestScope(), c.ID, false, false, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.dreamOrganize = func(ctx context.Context, _ string, _ string) (string, error) { <-ctx.Done(); return "", ctx.Err() }
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	s.runDream(ctx, store, desktopTestScope(), *in)
+	state, _ := store.MemoryState(context.Background(), desktopTestScope(), c.ID)
+	if state.Status != "failed" || state.ProcessedSeq != 0 || state.RunID != "" {
+		t.Fatalf("cancellation consumed source or retained lease: %+v", state)
+	}
+	runs, _ := store.DreamRuns(context.Background(), desktopTestScope(), c.ID)
+	raw, _ := json.Marshal(runs[0]["result"])
+	var saved struct {
+		Metrics *workcontext.DreamMetrics `json:"metrics"`
+	}
+	_ = json.Unmarshal(raw, &saved)
+	if saved.Metrics == nil || saved.Metrics.InputBytes == 0 || saved.Metrics.TimeoutSeconds != 180 {
+		t.Fatalf("failure timing missing: %s", raw)
+	}
+}
+
+func TestDreamRejectsModelOutputAfterCancellation(t *testing.T) {
+	s := newTestService(newTestConfig(t), &stubCaller{})
+	defer s.CloseWorkContexts()
+	c := createDesktopTest(t, s, "desktop")
+	store, _ := s.WorkContexts()
+	in, _, err := store.BeginDream(context.Background(), desktopTestScope(), c.ID, false, false, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.dreamOrganize = func(context.Context, string, string) (string, error) {
+		time.Sleep(20 * time.Millisecond)
+		return `{"summary":"late result must not apply"}`, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	s.runDream(ctx, store, desktopTestScope(), *in)
+	state, _ := store.MemoryState(context.Background(), desktopTestScope(), c.ID)
+	if state.Status != "failed" || state.Summary != "" || state.ProcessedSeq != 0 {
+		t.Fatalf("late output was accepted: %+v", state)
+	}
+}
 
 func desktopTestScope() workcontext.Scope {
 	return workcontext.Scope{TenantID: "tenant", OwnerID: "alice"}
@@ -246,7 +297,7 @@ func TestDesktopSessionOwnerCannotBeReopenedOrLinkedByOtherOwner(t *testing.T) {
 }
 
 func TestDreamResponseRejectsTrailingOrUnknownOutput(t *testing.T) {
-	for _, raw := range []string{`{"summary":"ok"} {"summary":"second"}`, `{"summary":"ok","confirm_all":true}`, `not JSON`} {
+	for _, raw := range []string{`{"summary":"ok"} {"summary":"second"}`, `{"summary":"ok","confirm_all":true}`, `{"summary":"ok","skipped_candidates":[]}`, `not JSON`} {
 		if _, err := parseDreamResult(raw); err == nil {
 			t.Fatalf("accepted invalid response %q", raw)
 		}

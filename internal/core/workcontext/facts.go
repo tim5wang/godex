@@ -350,7 +350,7 @@ func (s *Store) recallScopeContexts(ctx context.Context, tenantID, ownerID, cont
 // recallStatusFilterSQL excludes retired facts (superseded/rejected) from recall.
 // Stale facts are kept but marked, per the governance rule that stale means
 // "needs recheck", not false.
-const recallStatusFilterSQL = `status NOT IN ('superseded','rejected')`
+const recallStatusFilterSQL = `status NOT IN ('superseded','rejected','archived')`
 
 // factsForContexts returns all facts in the given contexts when no query is
 // provided, excluding retired (superseded/rejected) facts.
@@ -679,6 +679,6 @@ func (f Fact) Current(now time.Time) bool {
 // ExpireFacts marks declared deadlines once. Reading/recalling does not move
 // these deadlines or count as new source evidence.
 func (s *Store) ExpireFacts(ctx context.Context, now time.Time) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE wc_facts SET status='stale',version=version+1 WHERE status='confirmed' AND valid_until<>'' AND julianday(valid_until)<=julianday(?)`, now.UTC().Format(time.RFC3339Nano))
+	_, err := s.db.ExecContext(ctx, `UPDATE wc_facts SET status='stale',version=version+1 WHERE status IN ('confirmed','candidate','observed') AND valid_until<>'' AND julianday(valid_until)<=julianday(?)`, now.UTC().Format(time.RFC3339Nano))
 	return err
 }

@@ -185,7 +185,7 @@ func renderWorkContextFeedback(detail workcontext.Detail, focus workcontext.Focu
 	for _, f := range detail.Facts {
 		label := "Confirmed"
 		if !f.Current(time.Now()) {
-			if f.Status == "superseded" || f.Status == "rejected" || uncertain >= 1 {
+			if f.Status == "superseded" || f.Status == "rejected" || f.Status == "archived" || uncertain >= 1 {
 				continue
 			}
 			label = "Unverified / needs recheck"
@@ -197,6 +197,6 @@ func renderWorkContextFeedback(detail workcontext.Detail, focus workcontext.Focu
 			break
 		}
 	}
-	b.WriteString("This turn is bound to this desktop. Shared resources and related desktops do not share raw work memory. The snapshot already supplies the current state: query only missing details. Update checkpoint/plan and evidence-backed proposals at meaningful stage changes; batch writes. Finish required work_context calls BEFORE your final message because the last text is the turn's answer. Ack only changes you have covered. Candidates and stale observations are not current facts. Verify the system of record for questions about now. Cross-desktop knowledge must be explicitly promoted through review.\n")
+	b.WriteString("This turn is bound to this desktop. Shared resources and related desktops do not share raw work memory. The snapshot already supplies the current state: query only missing details. Update checkpoint/plan and evidence-backed proposals at meaningful stage changes; batch writes. Finish required work_context calls BEFORE your final message because the last text is the turn's answer. Ack only changes you have covered. Candidates, unverified observations and stale observations are not current facts. Verify the system of record for questions about now. Cross-desktop knowledge must be explicitly promoted through review.\n")
 	return truncateInline(b.String(), 5000)
 }

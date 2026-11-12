@@ -30,8 +30,9 @@ export function KnowledgeCard(props: {
   onAccept: (fact: WorkFact, evidence?: { observed_at: string; source: string }) => void;
   onDismiss: (fact: WorkFact) => void;
   onPromote: (fact: WorkFact) => void;
+  onArchive?: (fact: WorkFact) => void;
 }) {
-  const { fact, contextTitle, statusColor, readOnly, tr, trLabel, onAccept, onDismiss, onPromote } = props;
+  const { fact, contextTitle, statusColor, readOnly, tr, trLabel, onAccept, onDismiss, onPromote, onArchive } = props;
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewForm] = Form.useForm<{ observed: Dayjs; source: string }>();
   const [open, setOpen] = useState(false);
@@ -83,12 +84,13 @@ export function KnowledgeCard(props: {
 
         <Space wrap style={{ marginTop: 12 }}>
           {contextTitle && <Tag>{contextTitle}</Tag>}
-          {fact.status === "candidate" && !readOnly && <>
+          {["candidate", "observed"].includes(fact.status) && !readOnly && <>
             <Button size="small" type="primary" onClick={() => { if (!fact.observed_at || !fact.source || fact.source.startsWith("dream://")) { reviewForm.setFieldsValue({ source: fact.source.startsWith("dream://") ? "" : fact.source, observed: fact.observed_at ? dayjs(fact.observed_at) : undefined }); setReviewOpen(true); } else onAccept(fact); }}>{tr("accept")}</Button>
             <Button size="small" danger onClick={() => onDismiss(fact)}>{tr("dismiss")}</Button>
           </>}
           {!fact.memory_candidate_id && fact.status === "confirmed" && !readOnly && <Button size="small" icon={<ThunderboltOutlined aria-hidden="true" />} onClick={() => onPromote(fact)}>{tr("promoteMemory")}</Button>}
           {fact.memory_candidate_id && <Tag color="purple">{tr("memoryCandidate")}</Tag>}
+          {onArchive && !readOnly && !["archived", "superseded", "rejected"].includes(fact.status) && <Button size="small" onClick={() => onArchive(fact)}>{tr("archiveFact")}</Button>}
         </Space>
       </> : null}
       <Modal open={reviewOpen} title={tr("reviewEvidence")} onCancel={() => setReviewOpen(false)} onOk={() => { void reviewForm.validateFields().then((values) => { onAccept(fact, { observed_at: values.observed.toISOString(), source: values.source }); setReviewOpen(false); }); }}>

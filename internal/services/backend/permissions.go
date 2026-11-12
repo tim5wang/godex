@@ -63,7 +63,7 @@ func (s *Service) ApprovePermission(ctx context.Context, sessionID, requestID st
 				break
 			}
 		}
-		resumeTurnID := session.nextTurnID(s.now())
+		resumeTurnID := memoryVerificationApprovalTurnID(session, resolution.Request.TurnID, session.nextTurnID(s.now()))
 		resolution.ResumeTurnID = resumeTurnID
 		resumeResult, resumeErr := s.resumePendingTurnLocked(ctx, session, requestID, resumeTurnID)
 		resolution.Resumed = true

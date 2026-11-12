@@ -31,11 +31,18 @@ func TestMemoryOrganizerLeavesRoomForReasoningAndUsesNoTools(t *testing.T) {
 	if err != nil || output != `{"summary":"bounded"}` {
 		t.Fatalf("organize: %q %v", output, err)
 	}
-	if probe.request.MaxTokens <= 2048 || probe.request.MaxTokens > cfg.MaxTokens {
+	if probe.request.MaxTokens != 8192 {
 		t.Fatalf("thinking exhausts or exceeds configured budget: %d", probe.request.MaxTokens)
 	}
 	if len(probe.request.Tools) != 0 || len(probe.request.Messages) != 1 || probe.request.ReasoningEffort != "low" || probe.calls != 1 {
 		t.Fatalf("unexpected request: %+v", probe.request)
+	}
+	cfg.MaxTokens = 32768
+	if _, err = shared.OrganizeMemory(context.Background(), &cfg, "organize", "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	if probe.request.MaxTokens != 8192 {
+		t.Fatal("organizer lost its maintenance budget cap")
 	}
 	cfg.MaxTokens = 1000
 	if _, err = shared.OrganizeMemory(context.Background(), &cfg, "organize", "fixture"); err != nil {

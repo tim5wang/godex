@@ -442,6 +442,7 @@ export interface WorkMemoryState {
   summary: string;
   enabled: boolean;
   interval_seconds: number;
+  timeout_seconds?: number;
   next_run_at: string;
   status: string;
   last_error?: string;
@@ -455,7 +456,15 @@ export interface WorkMemoryRun {
   status: string;
   created_at: string;
   error?: string;
-  result?: { summary?: string; duplicates?: string[][]; conflicts?: string[][]; candidates?: Array<{ title: string; content: string }>; generated_fact_ids?: string[] };
+  result?: { summary?: string; duplicates?: string[][]; conflicts?: string[][]; candidates?: Array<{ title: string; content: string }>; references?: Array<{ title: string; content: string; source_fact_ids: string[] }>; mutations?: Array<{ before: WorkFact; after_status: string; reason: string; canonical_id?: string }>; metrics?: { model: string; model_ms: number; input_bytes: number; timeout_seconds: number }; generated_fact_ids?: string[]; skipped_candidates?: Array<{ title: string; content: string; source_fact_ids: string[]; reason: string }> };
+}
+
+export interface WorkMemoryIssue { id: string; facts: WorkFact[]; created_at: string }
+export function getWorkMemoryIssues(token: string | null, contextId: string) {
+  return request<WorkMemoryIssue[]>(`/v1/work-contexts/${encodeURIComponent(contextId)}/memory/issues`, { method: "GET" }, token);
+}
+export function resolveWorkMemoryIssue(token: string | null, contextId: string, issue: WorkMemoryIssue, keepId: string) {
+  return request(`/v1/work-contexts/${encodeURIComponent(contextId)}/memory/issues/${encodeURIComponent(issue.id)}/resolve`, { method: "POST", body: JSON.stringify({ keep_id: keepId, versions: Object.fromEntries(issue.facts.map((f) => [f.id, f.version])) }) }, token);
 }
 
 // Maintenance is a scoped background job; it never creates a user chat turn.
@@ -468,8 +477,8 @@ export function organizeWorkContext(token: string | null, contextId: string, for
 export function getWorkMemory(token: string | null, contextId: string) {
   return request<WorkMemoryState>(`/v1/work-contexts/${encodeURIComponent(contextId)}/memory`, { method: "GET" }, token);
 }
-export function updateWorkMemorySchedule(token: string | null, contextId: string, enabled: boolean, interval_seconds: number) {
-  return request<WorkMemoryState>(`/v1/work-contexts/${encodeURIComponent(contextId)}/memory`, { method: "PATCH", body: JSON.stringify({ enabled, interval_seconds }) }, token);
+export function updateWorkMemorySchedule(token: string | null, contextId: string, enabled: boolean, interval_seconds: number, timeout_seconds?: number) {
+  return request<WorkMemoryState>(`/v1/work-contexts/${encodeURIComponent(contextId)}/memory`, { method: "PATCH", body: JSON.stringify({ enabled, interval_seconds, timeout_seconds }) }, token);
 }
 export function getWorkMemoryRuns(token: string | null, contextId: string) {
   return request<WorkMemoryRun[]>(`/v1/work-contexts/${encodeURIComponent(contextId)}/memory/runs`, { method: "GET" }, token);

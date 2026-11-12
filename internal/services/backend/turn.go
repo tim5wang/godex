@@ -590,6 +590,10 @@ func (s *Service) startUserTurnLocked(session *sessionState, envelope message.En
 	attachSessionGraphContext(session, &runtimeCtx)
 	runtimeCtx.ProjectLedger, runtimeCtx.ProjectLedgerUpdatedAt = s.projectLedgerForRuntimeContext(sessionID)
 	s.refreshWorkContextFeedback(session, envelope.BodyText())
+	memoryGrant, err := s.prepareMemoryVerificationGrant(session, envelope, now)
+	if err != nil {
+		return preparedUserTurn{}, nil, err
+	}
 	priorMessageCount := len(session.agent.GetMessages())
 	if envelope.Timestamp.IsZero() {
 		envelope.Timestamp = now
@@ -651,6 +655,7 @@ func (s *Service) startUserTurnLocked(session *sessionState, envelope message.En
 		PriorMessageCount: priorMessageCount,
 	}
 	session.recordTurnStarted(turnID, envelope, priorMessageCount, now)
+	session.setMemoryVerificationGrant(turnID, memoryGrant)
 	if err := s.writeSessionTurns(session); err != nil {
 		return preparedUserTurn{}, nil, err
 	}
@@ -684,6 +689,8 @@ func (s *Service) startUserTurnLocked(session *sessionState, envelope message.En
 
 func (s *Service) finishAgentTurnLocked(ctx context.Context, session *sessionState, turnID string, envelope message.Envelope, runtimeCtx automation.SessionContext, priorMessageCount int) (*SubmitResult, error) {
 	sessionID := session.id
+	verification, closeVerification, verificationErr := s.beginMemoryVerification(ctx, session, turnID)
+	defer closeVerification()
 	workspaceBefore := captureLedgerWorkspace(session.agent.SandboxBinding())
 	artifactEvents := &artifactCollector{}
 	unsubscribeArtifacts := session.events.Attach(artifactEvents)
@@ -725,85 +732,89 @@ func (s *Service) finishAgentTurnLocked(ctx context.Context, session *sessionSta
 		}
 	}
 
-	runErr := session.agent.RunWithOptions(ctx, agent.RunOptions{
-		SessionID:        sessionID,
-		TurnID:           turnID,
-		ActorID:          session.identity.ID,
-		ActorKind:        "main",
-		EmitRunnerPhases: true,
-		Sink:             runSink,
-		RuntimeContext:   runtimeCtx,
-		Harness:          requestedHarness,
-		// Forward the session's ACP model override to external engines
-		// (godex engine ignores it). The ACP harness applies it via the
-		// session config "model" option on the live session.
-		Model: strings.TrimSpace(session.acpModel),
-		// Forward the session's ACP reasoning-effort override to external
-		// engines (godex engine ignores it). The ACP harness applies it via
-		// the session config "reasoning_effort" option on the live session.
-		ReasoningEffort: strings.TrimSpace(session.acpReasoningEffort),
-		Checkpoint: func() {
-			s.checkpointRunningTurn(session, turnID)
-		},
-		DrainInjections: func(ctx context.Context, limit int) (conversation.InjectionDrain, error) {
-			_ = ctx
-			now := s.now()
-			injected := session.drainTurnInjections(turnID, limit, now)
-			if len(injected) == 0 {
-				return conversation.InjectionDrain{}, nil
-			}
-			messages := make([]protocol.Message, 0, len(injected))
-			summaries := make([]string, 0, len(injected))
-			mode := ""
-			for _, envelope := range injected {
-				injectedMsg := envelope.ToProtocolMessage(protocol.RoleUser, "", false)
-				if envelope.Metadata != nil && strings.EqualFold(envelope.Metadata["queue_mode"], string(QueueModeSteering)) {
-					// Steering is an interruption, not a follow-up: frame the
-					// injected instruction explicitly so the model pauses the
-					// current sub-task instead of treating it as one more
-					// queued user message that can be deferred. The metadata
-					// text/parts must carry the frame too: BuildAPIMessages
-					// rebuilds upgraded user messages from metadata, ignoring
-					// msg.Content.
-					framed := steeringFrame(envelope.BodyText())
-					injectedMsg.Content = []protocol.Block{protocol.TextBlock(framed)}
-					if injectedMsg.Metadata == nil {
-						injectedMsg.Metadata = &protocol.Metadata{}
+	runErr := verificationErr
+	if runErr == nil {
+		runErr = session.agent.RunWithOptions(ctx, agent.RunOptions{
+			SessionID:        sessionID,
+			TurnID:           turnID,
+			ActorID:          session.identity.ID,
+			ActorKind:        "main",
+			EmitRunnerPhases: true,
+			Sink:             runSink,
+			RuntimeContext:   runtimeCtx,
+			Harness:          requestedHarness,
+			// Forward the session's ACP model override to external engines
+			// (godex engine ignores it). The ACP harness applies it via the
+			// session config "model" option on the live session.
+			Model: strings.TrimSpace(session.acpModel),
+			// Forward the session's ACP reasoning-effort override to external
+			// engines (godex engine ignores it). The ACP harness applies it via
+			// the session config "reasoning_effort" option on the live session.
+			ReasoningEffort: strings.TrimSpace(session.acpReasoningEffort),
+			Checkpoint: func() {
+				s.checkpointRunningTurn(session, turnID)
+			},
+			DrainInjections: func(ctx context.Context, limit int) (conversation.InjectionDrain, error) {
+				_ = ctx
+				now := s.now()
+				injected := session.drainTurnInjections(turnID, limit, now)
+				if len(injected) == 0 {
+					return conversation.InjectionDrain{}, nil
+				}
+				messages := make([]protocol.Message, 0, len(injected))
+				summaries := make([]string, 0, len(injected))
+				mode := ""
+				for _, envelope := range injected {
+					injectedMsg := envelope.ToProtocolMessage(protocol.RoleUser, "", false)
+					if envelope.Metadata != nil && strings.EqualFold(envelope.Metadata["queue_mode"], string(QueueModeSteering)) {
+						// Steering is an interruption, not a follow-up: frame the
+						// injected instruction explicitly so the model pauses the
+						// current sub-task instead of treating it as one more
+						// queued user message that can be deferred. The metadata
+						// text/parts must carry the frame too: BuildAPIMessages
+						// rebuilds upgraded user messages from metadata, ignoring
+						// msg.Content.
+						framed := steeringFrame(envelope.BodyText())
+						injectedMsg.Content = []protocol.Block{protocol.TextBlock(framed)}
+						if injectedMsg.Metadata == nil {
+							injectedMsg.Metadata = &protocol.Metadata{}
+						}
+						injectedMsg.Metadata.Text = framed
+						injectedMsg.Metadata.Parts = nil
 					}
-					injectedMsg.Metadata.Text = framed
-					injectedMsg.Metadata.Parts = nil
+					messages = append(messages, injectedMsg)
+					if summary := turnSummary(envelope.BodyText()); summary != "" {
+						summaries = append(summaries, summary)
+					}
+					if envelope.Metadata != nil && mode == "" {
+						mode = envelope.Metadata["queue_mode"]
+					}
 				}
-				messages = append(messages, injectedMsg)
-				if summary := turnSummary(envelope.BodyText()); summary != "" {
-					summaries = append(summaries, summary)
-				}
-				if envelope.Metadata != nil && mode == "" {
-					mode = envelope.Metadata["queue_mode"]
-				}
-			}
-			remaining := len(session.pendingTurnInjections(turnID))
-			_ = s.writeSessionTurns(session)
-			session.events.Emit(events.Event{
-				SessionID: sessionID,
-				TurnID:    turnID,
-				Type:      events.EventMessageInjected,
-				Timestamp: now,
-				Payload: events.MessageInjectedPayload{
+				remaining := len(session.pendingTurnInjections(turnID))
+				_ = s.writeSessionTurns(session)
+				session.events.Emit(events.Event{
+					SessionID: sessionID,
+					TurnID:    turnID,
+					Type:      events.EventMessageInjected,
+					Timestamp: now,
+					Payload: events.MessageInjectedPayload{
+						Count:     len(injected),
+						Mode:      mode,
+						Remaining: remaining,
+						Summary:   strings.Join(summaries, " | "),
+					},
+				})
+				return conversation.InjectionDrain{
+					Messages:  messages,
 					Count:     len(injected),
-					Mode:      mode,
 					Remaining: remaining,
+					Mode:      mode,
 					Summary:   strings.Join(summaries, " | "),
-				},
-			})
-			return conversation.InjectionDrain{
-				Messages:  messages,
-				Count:     len(injected),
-				Remaining: remaining,
-				Mode:      mode,
-				Summary:   strings.Join(summaries, " | "),
-			}, nil
-		},
-	})
+				}, nil
+			},
+		})
+	}
+	runErr = s.finishMemoryVerificationRun(ctx, verification, runErr)
 	// Persist the external ACP session id so a later host restart can resume
 	// the same external conversation (the harness keeps it in memory only).
 	s.syncACPSessionIDs(session, requestedHarness)
@@ -851,6 +862,7 @@ func (s *Service) finishAgentTurnLocked(ctx context.Context, session *sessionSta
 			errorText = runErr.Error()
 		}
 	}
+	status = memoryVerificationTurnStatus(status, runErr)
 	session.updateTurnStatus(turnID, status, pendingRequestID, errorText, updatedAt)
 	if status == "error" {
 		session.updateTurnPhase(turnID, conversation.PhaseError, "", "", updatedAt)

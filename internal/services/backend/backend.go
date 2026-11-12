@@ -292,26 +292,27 @@ type CancelQueuedTurnResult struct {
 
 // TurnRecord is the persisted lifecycle state for one user turn.
 type TurnRecord struct {
-	ID                    string                 `json:"id"`
-	Status                string                 `json:"status"`
-	Source                string                 `json:"source,omitempty"`
-	Sender                string                 `json:"sender,omitempty"`
-	Summary               string                 `json:"summary,omitempty"`
-	StartedAt             time.Time              `json:"started_at"`
-	UpdatedAt             time.Time              `json:"updated_at"`
-	CompletedAt           *time.Time             `json:"completed_at,omitempty"`
-	PendingRequestID      string                 `json:"pending_request_id,omitempty"`
-	BlockedByPermissionID string                 `json:"blocked_by_permission_id,omitempty"`
-	PermissionStatus      tools.PermissionStatus `json:"permission_status,omitempty"`
-	Error                 string                 `json:"error,omitempty"`
-	RetryOf               string                 `json:"retry_of,omitempty"`
-	CanRetry              bool                   `json:"can_retry,omitempty"`
-	CanResume             bool                   `json:"can_resume,omitempty"`
-	ResumeAvailable       bool                   `json:"resume_available,omitempty"`
-	RecoveryHint          string                 `json:"recovery_hint,omitempty"`
-	Phase                 string                 `json:"phase,omitempty"`
-	InjectionCount        int                    `json:"injection_count,omitempty"`
-	LastToolName          string                 `json:"last_tool_name,omitempty"`
+	MemoryVerification    *memoryVerificationGrant `json:"memory_verification,omitempty"`
+	ID                    string                   `json:"id"`
+	Status                string                   `json:"status"`
+	Source                string                   `json:"source,omitempty"`
+	Sender                string                   `json:"sender,omitempty"`
+	Summary               string                   `json:"summary,omitempty"`
+	StartedAt             time.Time                `json:"started_at"`
+	UpdatedAt             time.Time                `json:"updated_at"`
+	CompletedAt           *time.Time               `json:"completed_at,omitempty"`
+	PendingRequestID      string                   `json:"pending_request_id,omitempty"`
+	BlockedByPermissionID string                   `json:"blocked_by_permission_id,omitempty"`
+	PermissionStatus      tools.PermissionStatus   `json:"permission_status,omitempty"`
+	Error                 string                   `json:"error,omitempty"`
+	RetryOf               string                   `json:"retry_of,omitempty"`
+	CanRetry              bool                     `json:"can_retry,omitempty"`
+	CanResume             bool                     `json:"can_resume,omitempty"`
+	ResumeAvailable       bool                     `json:"resume_available,omitempty"`
+	RecoveryHint          string                   `json:"recovery_hint,omitempty"`
+	Phase                 string                   `json:"phase,omitempty"`
+	InjectionCount        int                      `json:"injection_count,omitempty"`
+	LastToolName          string                   `json:"last_tool_name,omitempty"`
 
 	PriorMessageCount int                `json:"prior_message_count,omitempty"`
 	Envelope          *message.Envelope  `json:"envelope,omitempty"`
@@ -437,11 +438,12 @@ type sessionState struct {
 	graph                  *sessiongraph.SessionGraph
 	turnCounter            uint64
 
-	mu       sync.RWMutex
-	running  bool
-	timeline *events.Recorder
-	journal  *sessionEventBatcher
-	active   *activeTurn
+	mu                 sync.RWMutex
+	running            bool
+	timeline           *events.Recorder
+	journal            *sessionEventBatcher
+	active             *activeTurn
+	memoryVerification *memoryVerificationRuntime
 	// stopping refuses new work while the runtime drains (see drain.go).
 	stopping bool
 	// bgCount counts detached writers that are not turns (the title generator).

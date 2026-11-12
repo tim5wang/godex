@@ -452,6 +452,7 @@ function handleWorkContext(store: Store) {
 
     if (ctx && ctxMatch) {
       const sub = ctxMatch[2] ?? "";
+      if (sub === "/memory/issues" && method === "GET") return json([]);
       if (!sub && method === "GET") return json(detail(ctx));
       if (!sub && method === "PATCH") {
         const input = body();
@@ -1982,4 +1983,56 @@ test("requires original source evidence before confirming a Dream proposal", asy
   await dialog.getByRole("button", { name: /^(确\s*定|OK)$/ }).click();
   await expect.poll(() => review?.source).toBe("report://human/verified");
   expect(review?.observed_at).toBe("2026-10-30T09:00:00.000Z");
+});
+
+test("shows skipped cross-scope proposals without treating organization as failed", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  await install(page, seededStore());
+  const rejectedTitle = "不应扩大范围的合并建议";
+  await page.route("**/api/v1/work-contexts/ctx-1/memory", (route) => route.fulfill({ json: {
+    source_seq: 48, processed_seq: 48, summary: "其他合法整理结果已保留", enabled: true,
+    interval_seconds: 21600, next_run_at: NOW, status: "completed", run_id: "", rescan_cursor: -1,
+  } }));
+  await page.route("**/api/v1/work-contexts/ctx-1/memory/runs", (route) => route.fulfill({ json: [{
+    id: "partial-result", status: "completed", created_at: NOW,
+    result: { summary: "其他合法整理结果已保留", candidates: [], skipped_candidates: [
+      { title: rejectedTitle, content: "跨范围建议不作为知识保存", source_fact_ids: ["fact-1", "fact-2"], reason: "mixed_applicability" },
+    ] },
+  }] }));
+  await openSection(page, "知识");
+  const panel = boards(page).locator(".ant-card").filter({ has: page.getByText("记忆整理", { exact: true }) }).first();
+  await panel.getByText("整理记录", { exact: true }).click();
+  await expect(panel.getByText("已整理（部分建议未采纳）", { exact: true })).toBeVisible();
+  await expect(panel.getByText(rejectedTitle, { exact: true })).toBeVisible();
+  await expect(panel.getByText("该建议引用了不同适用范围的记录，未保存为知识。原记录保留，可按范围分别提炼。", { exact: true })).toBeVisible();
+  await expect(boards(page).locator(".wd-knowledge").filter({ hasText: rejectedTitle })).toHaveCount(0);
+});
+
+test("resolves one memory conflict group and keeps archived evidence accessible", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  const seed = seededStore();
+  const original = { ...seed.facts![0], status: "observed" };
+  const archived = { ...original, id: "archived-1", title: "保留的历史证据", status: "archived" };
+  seed.facts = [original, archived];
+  await install(page, seed);
+  let issueList = [{ id: "issue-1", facts: [{ ...original, status: "stale", version: 2 }, { ...original, id: "other-claim", title: "另一种结论", content: "另一条待判断记录", status: "stale", version: 3 }], created_at: NOW }];
+  let resolution: Record<string, unknown> | undefined;
+  await page.route("**/api/v1/work-contexts/ctx-1/memory/issues", (route) => route.fulfill({ json: issueList }));
+  await page.route("**/api/v1/work-contexts/ctx-1/memory/issues/issue-1/resolve", (route) => {
+    resolution = route.request().postDataJSON(); issueList = [];
+    return route.fulfill({ json: { resolved: true } });
+  });
+  await page.route("**/api/v1/work-contexts/ctx-1/memory", (route) => route.fulfill({ json: { source_seq: 2, processed_seq: 2, summary: "整理结果", enabled: true, interval_seconds: 21600, timeout_seconds: 180, next_run_at: NOW, status: "completed", run_id: "", rescan_cursor: -1 } }));
+  await openSection(page, "知识");
+  await expect(boards(page).getByText("需要判断的记忆冲突", { exact: true })).toBeVisible();
+  await expect(boards(page).getByText("保留的历史证据", { exact: true })).toHaveCount(0);
+  await boards(page).getByRole("button", { name: "查看归档", exact: true }).click();
+  await expect(boards(page).getByText("保留的历史证据", { exact: true })).toBeVisible();
+  await boards(page).getByRole("button", { name: "采用此条，归档其余", exact: true }).first().click();
+  await expect.poll(() => resolution).toEqual({ keep_id: original.id, versions: { [original.id]: 2, "other-claim": 3 } });
+  await expect(boards(page).getByText("需要判断的记忆冲突", { exact: true })).toHaveCount(0);
+  const card = boards(page).locator(".wd-knowledge").filter({ hasText: original.title }).first();
+  await card.locator(".wd-knowledge-head").click();
+  await card.getByRole("button", { name: "归档记录", exact: true }).click();
+  await expect(card.getByText("已归档", { exact: true })).toBeVisible();
 });

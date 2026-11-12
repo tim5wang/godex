@@ -10,26 +10,30 @@ import (
 	"github.com/tim5wang/godex/internal/tools"
 )
 
+type workContextArgs struct {
+	Action       string                            `json:"action"`
+	Query        string                            `json:"query"`
+	Scope        string                            `json:"scope"`
+	IfVersion    int                               `json:"if_version"`
+	Checkpoint   workcontext.Checkpoint            `json:"checkpoint"`
+	Fact         workcontext.FactInput             `json:"fact"`
+	SupersedesID string                            `json:"supersedes_id"`
+	Todo         workcontext.TodoInput             `json:"todo"`
+	TodoID       string                            `json:"todo_id"`
+	TodoStatus   string                            `json:"todo_status"`
+	TodoOwner    string                            `json:"todo_owner"`
+	TodoDueAt    string                            `json:"todo_due_at"`
+	Cursor       int                               `json:"cursor"`
+	Limit        int                               `json:"limit"`
+	Operations   []memoryVerificationToolOperation `json:"operations"`
+}
+
 // The tool is bound to an existing persisted session link, not to an arbitrary
 // caller-supplied tenant or desktop ID. Knowing an ID grants no extra access.
 func (s *Service) newWorkContextTool(sessionID string, bindings ...workMemoryBinding) tools.Tool {
-	type args struct {
-		Action       string                 `json:"action"`
-		Query        string                 `json:"query"`
-		Scope        string                 `json:"scope"`
-		IfVersion    int                    `json:"if_version"`
-		Checkpoint   workcontext.Checkpoint `json:"checkpoint"`
-		Fact         workcontext.FactInput  `json:"fact"`
-		SupersedesID string                 `json:"supersedes_id"`
-		Todo         workcontext.TodoInput  `json:"todo"`
-		TodoID       string                 `json:"todo_id"`
-		TodoStatus   string                 `json:"todo_status"`
-		TodoOwner    string                 `json:"todo_owner"`
-		TodoDueAt    string                 `json:"todo_due_at"`
-	}
-	return tools.NewTypedTool(tools.NewToolSpec("work_context", "Read the work stream this session is linked to, recall current-desktop knowledge, save the checkpoint, plan items (todos) and record evidence-backed facts. focus shows what changed since the stream was last seen plus the plan; plan reads or adds a plan item; todo_patch edits one (status/owner/due); ack marks the stream seen (do it BEFORE your final message — see the ordering note below). list_streams searches your other streams by keyword. Use the already injected desktop snapshot and query only missing details. Batch checkpoint/plan changes at meaningful stage transitions; propose facts for conclusions with sources, and supersede an outdated fact by id instead of editing it. ORDERING: finish every work_context call (checkpoint, propose_fact, todo_patch, ack) BEFORE the text the user reads, and end the turn with that text. A work_context call appended AFTER your final text makes the closing line look like the turn's answer and folds the actual report away (the feed shows the last text as the answer). It cannot confirm facts, accept tasks, change permissions or query production automatically. IMPORTANT: if_version means the version of the entity the action writes, and it differs per action — for checkpoint it is the STREAM's version (from action=get), for todo_patch it is that PLAN ITEM's own version (from action=plan, usually 1-2, never the stream's). Passing the wrong entity's version always conflicts. Omit if_version to write without a precondition; a conflict error reports the current version to retry with.", map[string]interface{}{
-		"type": "object", "properties": map[string]interface{}{
-			"action":     map[string]interface{}{"type": "string", "enum": []string{"list_streams", "get", "brief", "recall", "focus", "ack", "checkpoint", "plan", "todo_patch", "propose_fact", "supersede"}},
+	return tools.NewTypedTool(tools.NewToolSpec("work_context", "Read the work stream this session is linked to, recall current-desktop knowledge, save the checkpoint, plan items (todos) and record evidence-backed facts. focus shows what changed since the stream was last seen plus the plan; plan reads or adds a plan item; todo_patch edits one (status/owner/due); ack marks the stream seen (do it BEFORE your final message — see the ordering note below). list_streams searches your other streams by keyword. Use the already injected desktop snapshot and query only missing details. Batch checkpoint/plan changes at meaningful stage transitions; propose facts for conclusions with sources, and supersede an outdated fact by id instead of editing it. ORDERING: finish every work_context call (checkpoint, propose_fact, todo_patch, ack) BEFORE the text the user reads, and end the turn with that text. A work_context call appended AFTER your final text makes the closing line look like the turn's answer and folds the actual report away (the feed shows the last text as the answer). Without a host-recorded explicit user verification task it cannot confirm/archive/merge facts. In an authorized task use memory_inventory, memory_apply, memory_status and memory_finish. memory_apply accepts batches with mandatory fact versions and successful objective evidence_ids from actual tool calls. Never fabricate evidence or use summaries. Block genuinely undecidable or inaccessible records with a reason. This grants no extra system/tool permissions. It cannot accept tasks or change permissions. IMPORTANT: if_version means the version of the entity the action writes, and it differs per action — for checkpoint it is the STREAM's version (from action=get), for todo_patch it is that PLAN ITEM's own version (from action=plan, usually 1-2, never the stream's). Passing the wrong entity's version always conflicts. For memory_apply, each operation must supply its own if_version or group versions; top-level if_version does not apply. Other actions may omit if_version to write without a precondition; a conflict error reports the current version to retry with.", map[string]interface{}{
+		"type": "object", "properties": workContextToolProperties(map[string]interface{}{
+			"action":     map[string]interface{}{"type": "string", "enum": []string{"list_streams", "get", "brief", "recall", "focus", "ack", "checkpoint", "plan", "todo_patch", "propose_fact", "supersede", "memory_inventory", "memory_apply", "memory_status", "memory_finish"}},
 			"query":      map[string]string{"type": "string"},
 			"scope":      map[string]interface{}{"type": "string", "enum": []string{"current"}},
 			"if_version": map[string]interface{}{"type": "integer", "description": "Version of the entity this action writes, 0/omitted = no precondition. Per action: checkpoint = the STREAM version (from action=get); todo_patch = that PLAN ITEM's own version (from action=plan). Passing the stream version to todo_patch always conflicts."},
@@ -49,8 +53,8 @@ func (s *Service) newWorkContextTool(sessionID string, bindings ...workMemoryBin
 			"todo_status": map[string]interface{}{"type": "string", "enum": []string{"todo", "doing", "done", "blocked"}},
 			"todo_owner":  map[string]string{"type": "string"},
 			"todo_due_at": map[string]string{"type": "string"},
-		}, "required": []string{"action"},
-	}, nil), func(ctx context.Context, input args) (tools.ToolResult, error) {
+		}), "required": []string{"action"},
+	}, nil), func(ctx context.Context, input workContextArgs) (tools.ToolResult, error) {
 		store, err := s.WorkContexts()
 		if err != nil {
 			return tools.ToolResult{}, err
@@ -66,6 +70,14 @@ func (s *Service) newWorkContextTool(sessionID string, bindings ...workMemoryBin
 		// session to be bound; every other action is scoped to the bound stream.
 		if strings.TrimSpace(input.Action) != "list_streams" && id == "" {
 			return tools.ToolResult{}, fmt.Errorf("this session is not linked to a work desktop; link it in Work Desktop first")
+		}
+		if isMemoryVerificationAction(input.Action) {
+			out, e := s.handleMemoryVerification(ctx, sessionID, workMemoryBinding{Scope: scope, ContextID: id}, input)
+			if e != nil {
+				return tools.ToolResult{}, e
+			}
+			raw, e := json.Marshal(out)
+			return tools.ToolResult{Text: string(raw), Structured: out}, e
 		}
 		var out any
 		switch strings.TrimSpace(input.Action) {
@@ -146,4 +158,11 @@ func (s *Service) newWorkContextTool(sessionID string, bindings ...workMemoryBin
 		}
 		return tools.ToolResult{Text: string(raw), Structured: out}, nil
 	})
+}
+
+func workContextToolProperties(base map[string]interface{}) map[string]interface{} {
+	for key, value := range memoryVerificationToolProperties() {
+		base[key] = value
+	}
+	return base
 }

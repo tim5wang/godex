@@ -1047,6 +1047,7 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 				Name:          tool.Name,
 				Input:         protocol.ToolUseBlock(tool.ID, tool.Name, tool.Input).Input,
 				Output:        tool.Output,
+				ExitCode:      tool.ExitCode,
 				Error:         tool.Error,
 				ArtifactPaths: append([]string{}, tool.ArtifactPaths...),
 				Code:          tool.Code,

@@ -524,11 +524,15 @@ func mergeTurnRecord(existing, next TurnRecord) TurnRecord {
 	if next.Envelope != nil || next.PriorMessageCount != 0 {
 		merged.PriorMessageCount = next.PriorMessageCount
 	}
+	if next.MemoryVerification != nil {
+		merged.MemoryVerification = cloneMemoryVerificationGrant(next.MemoryVerification)
+	}
 	return merged
 }
 
 func cloneTurnRecord(record TurnRecord) TurnRecord {
 	cloned := record
+	cloned.MemoryVerification = cloneMemoryVerificationGrant(record.MemoryVerification)
 	if record.CompletedAt != nil {
 		completedAt := *record.CompletedAt
 		cloned.CompletedAt = &completedAt

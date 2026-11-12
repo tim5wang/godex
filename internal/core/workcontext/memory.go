@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -16,9 +17,11 @@ import (
 
 const dreamBatchSize = 16
 const dreamLease = 2 * time.Minute
+const dreamInputBytes = 12000
 
 // MemoryState separates source changes from derived maintenance and read receipts.
 type MemoryState struct {
+	TimeoutSeconds  int    `json:"timeout_seconds"`
 	SourceSeq       int64  `json:"source_seq"`
 	ProcessedSeq    int64  `json:"processed_seq"`
 	Summary         string `json:"summary"`
@@ -41,6 +44,8 @@ type MemoryChange struct {
 }
 
 type DreamInput struct {
+	TimeoutSeconds  int            `json:"timeout_seconds,omitempty"`
+	Metrics         *DreamMetrics  `json:"-"`
 	RunID           string         `json:"run_id"`
 	ContextID       string         `json:"context_id"`
 	ThroughSeq      int64          `json:"through_seq"`
@@ -73,6 +78,50 @@ type DreamResult struct {
 	Candidates []DreamCandidate `json:"candidates,omitempty"`
 }
 
+// Skipped proposals remain auditable, but are never inserted as work knowledge.
+// This metadata is host-owned, outside the model's DreamResult schema.
+type DreamSkippedCandidate struct {
+	DreamCandidate
+	Reason string `json:"reason"`
+}
+
+type dreamScopeGroup struct {
+	ID            string   `json:"id"`
+	Scope         string   `json:"scope"`
+	SourceFactIDs []string `json:"source_fact_ids"`
+}
+
+// Normalize JSON formatting without coercing large numeric IDs. Plain-text
+// scopes are compared conservatively; related wording does not grant more scope.
+func dreamScopeKey(scope string) string {
+	scope = strings.TrimSpace(scope)
+	decoder := json.NewDecoder(strings.NewReader(scope))
+	decoder.UseNumber()
+	var value any
+	if decoder.Decode(&value) == nil && decoder.Decode(new(any)) == io.EOF {
+		if raw, err := json.Marshal(value); err == nil {
+			return "json:" + string(raw)
+		}
+	}
+	return "text:" + scope
+}
+
+func dreamScopeGroups(facts []Fact) []dreamScopeGroup {
+	var groups []dreamScopeGroup
+	indices := map[string]int{}
+	for _, fact := range facts {
+		key := dreamScopeKey(fact.Scope)
+		index, exists := indices[key]
+		if !exists {
+			index = len(groups)
+			indices[key] = index
+			groups = append(groups, dreamScopeGroup{ID: fmt.Sprintf("scope-%d", index+1), Scope: textutil.TruncateRunes(fact.Scope, 400)})
+		}
+		groups[index].SourceFactIDs = append(groups[index].SourceFactIDs, fact.ID)
+	}
+	return groups
+}
+
 type DreamTarget struct {
 	Scope     Scope
 	ContextID string
@@ -82,11 +131,11 @@ func dreamTime(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05.
 
 func scanMemoryState(row interface{ Scan(...any) error }) (MemoryState, error) {
 	var v MemoryState
-	err := row.Scan(&v.SourceSeq, &v.ProcessedSeq, &v.Summary, &v.Enabled, &v.IntervalSeconds, &v.NextRunAt, &v.RunID, &v.LeaseUntil, &v.Status, &v.LastError, &v.FailureCount, &v.RescanCursor, &v.RescanThrough)
+	err := row.Scan(&v.SourceSeq, &v.ProcessedSeq, &v.Summary, &v.Enabled, &v.IntervalSeconds, &v.NextRunAt, &v.RunID, &v.LeaseUntil, &v.Status, &v.LastError, &v.FailureCount, &v.RescanCursor, &v.RescanThrough, &v.TimeoutSeconds)
 	return v, err
 }
 
-const memoryStateColumns = `source_seq,processed_seq,summary,enabled,interval_seconds,next_run_at,run_id,lease_until,status,last_error,failure_count,rescan_cursor,rescan_through`
+const memoryStateColumns = `source_seq,processed_seq,summary,enabled,interval_seconds,next_run_at,run_id,lease_until,status,last_error,failure_count,rescan_cursor,rescan_through,timeout_seconds`
 
 func (s *Store) MemoryState(ctx context.Context, scope Scope, id string) (MemoryState, error) {
 	tenant, owner := scopeArgs(scope)
@@ -98,11 +147,11 @@ func (s *Store) MemoryState(ctx context.Context, scope Scope, id string) (Memory
 
 func (s *Store) MemoryRevision(ctx context.Context, scope Scope) string {
 	tenant, owner := scopeArgs(scope)
-	var count, total int64
-	if s.db.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(m.source_seq),0) FROM wc_memory_state m JOIN wc_contexts c ON c.tenant_id=m.tenant_id AND c.id=m.context_id WHERE c.tenant_id=? AND c.owner_id=?`, tenant, owner).Scan(&count, &total) != nil {
+	var count, total, versions int64
+	if s.db.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(m.source_seq),0),COALESCE(SUM((SELECT SUM(f.version) FROM wc_facts f WHERE f.tenant_id=c.tenant_id AND f.context_id=c.id)),0) FROM wc_memory_state m JOIN wc_contexts c ON c.tenant_id=m.tenant_id AND c.id=m.context_id WHERE c.tenant_id=? AND c.owner_id=?`, tenant, owner).Scan(&count, &total, &versions) != nil {
 		return "unavailable"
 	}
-	return fmt.Sprintf("%d:%d", count, total)
+	return fmt.Sprintf("%d:%d:%d", count, total, versions)
 }
 
 func (s *Store) Fact(ctx context.Context, scope Scope, contextID, factID string) (Fact, error) {
@@ -130,6 +179,13 @@ func (s *Store) Facts(ctx context.Context, scope Scope, contextID string) ([]Fac
 
 // ConfigureDream changes scheduling, not source memory. It never dirties itself.
 func (s *Store) ConfigureDream(ctx context.Context, scope Scope, id string, enabled bool, interval int, now time.Time) (MemoryState, error) {
+	return s.ConfigureDreamWithTimeout(ctx, scope, id, enabled, interval, 0, now)
+}
+
+func (s *Store) ConfigureDreamWithTimeout(ctx context.Context, scope Scope, id string, enabled bool, interval, timeout int, now time.Time) (MemoryState, error) {
+	if timeout != 0 && (timeout < 30 || timeout > 600) {
+		return MemoryState{}, fmt.Errorf("%w: timeout_seconds must be 30..600", ErrInvalid)
+	}
 	if interval < 60 || interval > 30*24*3600 {
 		return MemoryState{}, fmt.Errorf("%w: interval_seconds must be 60..2592000", ErrInvalid)
 	}
@@ -145,6 +201,11 @@ func (s *Store) ConfigureDream(ctx context.Context, scope Scope, id string, enab
 	_, err = tx.ExecContext(ctx, `UPDATE wc_memory_state SET enabled=?,interval_seconds=?,next_run_at=? WHERE tenant_id=? AND context_id=?`, enabled, interval, dreamTime(now.Add(time.Duration(interval)*time.Second)), tenant, id)
 	if err != nil {
 		return MemoryState{}, err
+	}
+	if timeout != 0 {
+		if _, err = tx.ExecContext(ctx, `UPDATE wc_memory_state SET timeout_seconds=? WHERE tenant_id=? AND context_id=?`, timeout, tenant, id); err != nil {
+			return MemoryState{}, err
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		return MemoryState{}, err
@@ -203,7 +264,7 @@ func (s *Store) BeginDream(ctx context.Context, scope Scope, id string, force, a
 			return nil, state, err
 		}
 	}
-	input := DreamInput{RunID: newID(), ContextID: id, Context: c, PreviousSummary: state.Summary, Mode: "manual"}
+	input := DreamInput{RunID: newID(), ContextID: id, Context: c, PreviousSummary: state.Summary, Mode: "manual", TimeoutSeconds: state.TimeoutSeconds}
 	if automatic {
 		input.Mode = "automatic"
 	}
@@ -223,22 +284,14 @@ func (s *Store) BeginDream(ctx context.Context, scope Scope, id string, force, a
 	if err != nil {
 		return nil, state, err
 	}
-	input.ThroughSeq = state.SourceSeq
+	input.ThroughSeq = to
 	if len(input.Changes) > 0 {
 		input.ThroughSeq = input.Changes[len(input.Changes)-1].Seq
 	}
-	input.Facts, err = dreamFacts(ctx, tx, tenant, id, input.Changes)
-	if err != nil {
+	if err = boundDreamInput(ctx, tx, tenant, owner, id, &input); err != nil {
 		return nil, state, err
 	}
-	input.Facts, err = dreamRelatedFacts(ctx, tx, tenant, id, input.Facts)
-	if err != nil {
-		return nil, state, err
-	}
-	input.Records, err = dreamRecords(ctx, tx, tenant, owner, id, input.Changes)
-	if err != nil {
-		return nil, state, err
-	}
+
 	raw, err := json.Marshal(input)
 	if err != nil {
 		return nil, state, err
@@ -247,7 +300,8 @@ func (s *Store) BeginDream(ctx context.Context, scope Scope, id string, force, a
 	if err != nil {
 		return nil, state, err
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE wc_memory_state SET run_id=?,lease_until=?,status='running',last_error='' WHERE tenant_id=? AND context_id=?`, input.RunID, dreamTime(now.Add(dreamLease)), tenant, id)
+	lease := max(dreamLease, time.Duration(input.TimeoutSeconds)*time.Second+30*time.Second)
+	_, err = tx.ExecContext(ctx, `UPDATE wc_memory_state SET run_id=?,lease_until=?,status='running',last_error='' WHERE tenant_id=? AND context_id=?`, input.RunID, dreamTime(now.Add(lease)), tenant, id)
 	if err != nil {
 		return nil, state, err
 	}
@@ -256,7 +310,7 @@ func (s *Store) BeginDream(ctx context.Context, scope Scope, id string, force, a
 	}
 	state.RunID = input.RunID
 	state.Status = "running"
-	state.LeaseUntil = dreamTime(now.Add(dreamLease))
+	state.LeaseUntil = dreamTime(now.Add(lease))
 	return &input, state, nil
 }
 
@@ -351,7 +405,7 @@ func dreamRelatedFacts(ctx context.Context, tx *sql.Tx, tenant, id string, chang
 	if len(changed) == 0 {
 		return changed, nil
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id,context_id,title,content,kind,status,scope,subject,predicate,source,source_excerpt,source_revision,observed_at,verified_at,provenance,supersedes_id,memory_candidate_id,version,created_at,valid_until FROM wc_facts WHERE tenant_id=? AND context_id=? AND status NOT IN ('rejected','superseded') ORDER BY created_at DESC,id LIMIT 64`, tenant, id)
+	rows, err := tx.QueryContext(ctx, `SELECT id,context_id,title,content,kind,status,scope,subject,predicate,source,source_excerpt,source_revision,observed_at,verified_at,provenance,supersedes_id,memory_candidate_id,version,created_at,valid_until FROM wc_facts WHERE tenant_id=? AND context_id=? AND status NOT IN ('rejected','superseded','archived') ORDER BY created_at DESC,id LIMIT 64`, tenant, id)
 	if err != nil {
 		return nil, err
 	}
@@ -403,33 +457,7 @@ func dreamRelatedFacts(ctx context.Context, tx *sql.Tx, tenant, id string, chang
 }
 
 // ModelInput does not contain tool schemas or the full conversation history.
-func (in DreamInput) ModelInput() string {
-	in.Context.Title = textutil.TruncateRunes(in.Context.Title, 160)
-	in.Context.Background = textutil.TruncateRunes(in.Context.Background, 400)
-	in.Context.Goal = textutil.TruncateRunes(in.Context.Goal, 300)
-	in.Context.Checkpoint.Summary = textutil.TruncateRunes(in.Context.Checkpoint.Summary, 600)
-	in.Context.Checkpoint.Completed = nil
-	in.Context.Checkpoint.EvidenceRefs = nil
-	in.Context.Checkpoint.InProgress = nil
-	in.Context.Checkpoint.NextActions = nil
-	in.Context.Checkpoint.OpenQuestions = nil
-	in.Context.Checkpoint.Blockers = nil
-	in.PreviousSummary = textutil.TruncateRunes(in.PreviousSummary, 1200)
-	in.Facts = append([]Fact(nil), in.Facts...)
-	for i := range in.Facts {
-		in.Facts[i].Title = textutil.TruncateRunes(in.Facts[i].Title, 160)
-		in.Facts[i].Content = textutil.TruncateRunes(in.Facts[i].Content, 300)
-		in.Facts[i].SourceExcerpt = textutil.TruncateRunes(in.Facts[i].SourceExcerpt, 160)
-		in.Facts[i].Scope = textutil.TruncateRunes(in.Facts[i].Scope, 400)
-		in.Facts[i].Source = textutil.TruncateRunes(in.Facts[i].Source, 240)
-		in.Facts[i].SourceRevision = textutil.TruncateRunes(in.Facts[i].SourceRevision, 160)
-		in.Facts[i].Subject = textutil.TruncateRunes(in.Facts[i].Subject, 160)
-		in.Facts[i].Predicate = textutil.TruncateRunes(in.Facts[i].Predicate, 100)
-		in.Facts[i].Kind = textutil.TruncateRunes(in.Facts[i].Kind, 60)
-	}
-	raw, _ := json.Marshal(in)
-	return string(raw)
-}
+func (in DreamInput) ModelInput() string { return dreamModelInput(in) }
 
 // FinishDream applies derived output under CAS. It never rewrites confirmed
 // evidence or advances past the snapshot's processed source watermark.
@@ -450,13 +478,14 @@ func (s *Store) FinishDream(ctx context.Context, scope Scope, in DreamInput, res
 	if state.RunID != in.RunID {
 		return ErrConflict
 	}
+	var skipped []DreamSkippedCandidate
 	if runErr == nil {
-		runErr = validateDreamEvidence(ctx, tx, tenant, in, result)
+		result, skipped, runErr = validateDreamEvidence(ctx, tx, tenant, in, result)
 	}
 	if runErr != nil {
 		err = failDream(ctx, tx, tenant, in, state, runErr, now)
 	} else {
-		err = applyDream(ctx, tx, tenant, owner, in, result, state, now)
+		err = applyDream(ctx, tx, tenant, owner, in, result, skipped, state, now)
 	}
 	if err != nil {
 		return err
@@ -467,9 +496,9 @@ func (s *Store) FinishDream(ctx context.Context, scope Scope, in DreamInput, res
 	return runErr
 }
 
-func validateDreamEvidence(ctx context.Context, tx *sql.Tx, tenant string, in DreamInput, result DreamResult) error {
+func validateDreamEvidence(ctx context.Context, tx *sql.Tx, tenant string, in DreamInput, result DreamResult) (DreamResult, []DreamSkippedCandidate, error) {
 	if len([]rune(result.Summary)) > 2400 || len(result.Candidates) > 4 || len(result.Duplicates) > 16 || len(result.Conflicts) > 16 {
-		return fmt.Errorf("%w: oversized Dream output", ErrInvalid)
+		return result, nil, fmt.Errorf("%w: oversized Dream output", ErrInvalid)
 	}
 	known := map[string]Fact{}
 	for _, f := range in.Facts {
@@ -479,67 +508,88 @@ func validateDreamEvidence(ctx context.Context, tx *sql.Tx, tenant string, in Dr
 		for _, id := range pair {
 			f, ok := known[id]
 			if !ok {
-				return fmt.Errorf("%w: Dream referenced outside evidence", ErrInvalid)
+				return result, nil, fmt.Errorf("%w: Dream referenced outside evidence", ErrInvalid)
 			}
 			current, err := getFactTx(ctx, tx, tenant, in.ContextID, id)
 			if err != nil {
-				return err
+				return result, nil, err
 			}
 			if current.Version != f.Version {
-				return ErrConflict
+				return result, nil, ErrConflict
 			}
 		}
 	}
+	var accepted []DreamCandidate
+	var skipped []DreamSkippedCandidate
 	for _, proposal := range result.Candidates {
-		if strings.TrimSpace(proposal.Title) == "" || strings.TrimSpace(proposal.Content) == "" || len([]rune(proposal.Title)) > 200 || len([]rune(proposal.Content)) > 2000 || len(proposal.SourceFactIDs) == 0 {
-			return fmt.Errorf("%w: invalid Dream candidate", ErrInvalid)
+		reason, err := validateDreamCandidate(ctx, tx, tenant, in.ContextID, known, proposal)
+		if err != nil {
+			return result, nil, err
 		}
-		scope := ""
-		for _, id := range proposal.SourceFactIDs {
-			f, ok := known[id]
-			if !ok {
-				return fmt.Errorf("%w: unknown Dream source", ErrInvalid)
-			}
-			current, err := getFactTx(ctx, tx, tenant, in.ContextID, id)
-			if err != nil {
-				return err
-			}
-			if current.Version != f.Version || current.Status == "rejected" || current.Status == "superseded" {
-				return ErrConflict
-			}
-			if scope != "" && scope != f.Scope {
-				return fmt.Errorf("%w: cannot widen applicability", ErrInvalid)
-			}
-			scope = f.Scope
+		if reason != "" {
+			skipped = append(skipped, DreamSkippedCandidate{DreamCandidate: proposal, Reason: reason})
+			continue
 		}
+		accepted = append(accepted, proposal)
 	}
-	return nil
+	result.Candidates = accepted
+	return result, skipped, nil
 }
 
-func applyDream(ctx context.Context, tx *sql.Tx, tenant, owner string, in DreamInput, result DreamResult, state MemoryState, now time.Time) error {
+func validateDreamCandidate(ctx context.Context, tx *sql.Tx, tenant, contextID string, known map[string]Fact, proposal DreamCandidate) (string, error) {
+	if strings.TrimSpace(proposal.Title) == "" || strings.TrimSpace(proposal.Content) == "" || len([]rune(proposal.Title)) > 200 || len([]rune(proposal.Content)) > 2000 || len(proposal.SourceFactIDs) == 0 {
+		return "", fmt.Errorf("%w: invalid Dream candidate", ErrInvalid)
+	}
+	var scope string
+	mixed, missing := false, false
+	for i, id := range proposal.SourceFactIDs {
+		fact, ok := known[id]
+		if !ok {
+			return "", fmt.Errorf("%w: unknown Dream source", ErrInvalid)
+		}
+		current, err := getFactTx(ctx, tx, tenant, contextID, id)
+		if err != nil {
+			return "", err
+		}
+		if current.Version != fact.Version || current.Status == "rejected" || current.Status == "superseded" {
+			return "", ErrConflict
+		}
+		key := dreamScopeKey(fact.Scope)
+		if i == 0 {
+			scope = key
+		} else if scope != key {
+			mixed = true
+		}
+		if strings.TrimSpace(fact.Scope) == "" {
+			missing = true
+		}
+	}
+	if missing {
+		return "missing_applicability", nil
+	}
+	if mixed {
+		return "mixed_applicability", nil
+	}
+	return "", nil
+}
+
+func applyDream(ctx context.Context, tx *sql.Tx, tenant, owner string, in DreamInput, result DreamResult, skipped []DreamSkippedCandidate, state MemoryState, now time.Time) error {
 	if _, err := tx.ExecContext(ctx, `INSERT INTO wc_memory_guard VALUES(?,?)`, tenant, in.ContextID); err != nil {
 		return err
 	}
-	generated := []string{}
-	for _, c := range result.Candidates {
-		id, err := insertDreamCandidate(ctx, tx, tenant, owner, in, c, now)
-		if err != nil {
-			return err
-		}
-		if id != "" {
-			generated = append(generated, id)
-		}
+	mutations, issues, err := organizeDreamFacts(ctx, tx, tenant, in, result, now)
+	if err != nil {
+		return err
 	}
+	references := result.Candidates
+	result.Candidates = nil
 	if _, err := tx.ExecContext(ctx, `DELETE FROM wc_memory_guard WHERE tenant_id=? AND context_id=?`, tenant, in.ContextID); err != nil {
 		return err
 	}
 	if strings.TrimSpace(result.Summary) == "" {
 		result.Summary = state.Summary
 	}
-	raw, _ := json.Marshal(struct {
-		DreamResult
-		GeneratedFactIDs []string `json:"generated_fact_ids"`
-	}{result, generated})
+	raw, _ := json.Marshal(dreamAppliedResult{DreamResult: result, GeneratedFactIDs: []string{}, References: references, SkippedCandidates: skipped, Mutations: mutations, IssueIDs: issues, Metrics: in.Metrics})
 	if _, err := tx.ExecContext(ctx, `UPDATE wc_memory_runs SET status='completed',result_json=?,completed_at=? WHERE id=?`, string(raw), dreamTime(now), in.RunID); err != nil {
 		return err
 	}
@@ -554,56 +604,15 @@ func applyDream(ctx context.Context, tx *sql.Tx, tenant, owner string, in DreamI
 	if state.SourceSeq > in.ThroughSeq || cursor >= 0 {
 		next = now.Add(time.Minute)
 	}
-	_, err := tx.ExecContext(ctx, `UPDATE wc_memory_state SET processed_seq=MAX(processed_seq,?),summary=?,run_id='',lease_until='',status='completed',last_error='',failure_count=0,next_run_at=?,rescan_cursor=? WHERE tenant_id=? AND context_id=?`, in.ThroughSeq, result.Summary, dreamTime(next), cursor, tenant, in.ContextID)
+	_, err = tx.ExecContext(ctx, `UPDATE wc_memory_state SET processed_seq=MAX(processed_seq,?),summary=?,run_id='',lease_until='',status='completed',last_error='',failure_count=0,next_run_at=?,rescan_cursor=? WHERE tenant_id=? AND context_id=?`, in.ThroughSeq, result.Summary, dreamTime(next), cursor, tenant, in.ContextID)
 	return err
 }
 
-func insertDreamCandidate(ctx context.Context, tx *sql.Tx, tenant, owner string, in DreamInput, c DreamCandidate, now time.Time) (string, error) {
-	var count int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM wc_facts WHERE tenant_id=? AND context_id=? AND title=? AND content=? AND status NOT IN ('rejected','superseded')`, tenant, in.ContextID, c.Title, c.Content).Scan(&count); err != nil {
-		return "", err
-	}
-	if count > 0 {
-		return "", nil
-	}
-	source, err := getFactTx(ctx, tx, tenant, in.ContextID, c.SourceFactIDs[0])
-	if err != nil {
-		return "", err
-	}
-	for _, sourceID := range c.SourceFactIDs[1:] {
-		f, e := getFactTx(ctx, tx, tenant, in.ContextID, sourceID)
-		if e != nil {
-			return "", e
-		}
-		if f.ValidUntil != "" {
-			deadline, _ := time.Parse(time.RFC3339Nano, f.ValidUntil)
-			current, _ := time.Parse(time.RFC3339Nano, source.ValidUntil)
-			if source.ValidUntil == "" || deadline.Before(current) {
-				source.ValidUntil = f.ValidUntil
-			}
-		}
-	}
-	refsData := make([]map[string]any, 0, len(c.SourceFactIDs))
-	for _, id := range c.SourceFactIDs {
-		for _, f := range in.Facts {
-			if f.ID == id {
-				refsData = append(refsData, map[string]any{"fact_id": id, "version": f.Version})
-			}
-		}
-	}
-	refs, _ := json.Marshal(refsData)
-	fact := Fact{ValidUntil: source.ValidUntil, ID: newID(), ContextID: in.ContextID, Title: c.Title, Content: c.Content, Kind: "method", Status: "candidate", Scope: source.Scope, Source: "dream://" + in.RunID, SourceRevision: string(refs), SourceExcerpt: "Derived from source fact IDs; requires review: " + string(refs), ObservedAt: source.ObservedAt, Provenance: provenanceDerived, Version: 1, CreatedAt: dreamTime(now)}
-	if err = insertFactTx(ctx, tx, tenant, owner, fact); err != nil {
-		return "", err
-	}
-	indexFactTx(ctx, tx, tenant, fact)
-	return fact.ID, nil
-}
-
 func failDream(ctx context.Context, tx *sql.Tx, tenant string, in DreamInput, state MemoryState, runErr error, now time.Time) error {
+	metrics, _ := json.Marshal(dreamAppliedResult{Metrics: in.Metrics})
 	message := textutil.TruncateRunes(runErr.Error(), 600)
 	backoff := 5 * time.Minute * time.Duration(1<<min(state.FailureCount, 6))
-	if _, err := tx.ExecContext(ctx, `UPDATE wc_memory_runs SET status='failed',error=?,completed_at=? WHERE id=?`, message, dreamTime(now), in.RunID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE wc_memory_runs SET status='failed',error=?,completed_at=?,result_json=? WHERE id=?`, message, dreamTime(now), string(metrics), in.RunID); err != nil {
 		return err
 	}
 	_, err := tx.ExecContext(ctx, `UPDATE wc_memory_state SET run_id='',lease_until='',status='failed',last_error=?,failure_count=failure_count+1,next_run_at=? WHERE tenant_id=? AND context_id=?`, message, dreamTime(now.Add(backoff)), tenant, in.ContextID)
@@ -666,14 +675,21 @@ func (s *Store) RevertDream(ctx context.Context, scope Scope, id, runID string) 
 		return state, ErrConflict
 	}
 	var input DreamInput
-	var output struct {
-		GeneratedFactIDs []string `json:"generated_fact_ids"`
-	}
+	var output dreamAppliedResult
 	if err = json.Unmarshal([]byte(inputJSON), &input); err != nil {
 		return state, err
 	}
 	if err = json.Unmarshal([]byte(resultJSON), &output); err != nil {
 		return state, err
+	}
+	for _, m := range output.Mutations {
+		f, e := getFactTx(ctx, tx, tenant, id, m.Before.ID)
+		if e != nil {
+			return state, e
+		}
+		if f.Version != m.AfterVersion || f.Status != m.AfterStatus {
+			return state, ErrConflict
+		}
 	}
 	for _, factID := range output.GeneratedFactIDs {
 		f, e := getFactTx(ctx, tx, tenant, id, factID)
@@ -686,6 +702,18 @@ func (s *Store) RevertDream(ctx context.Context, scope Scope, id, runID string) 
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO wc_memory_guard VALUES(?,?)`, tenant, id); err != nil {
 		return state, err
+	}
+	for _, m := range output.Mutations {
+		f := m.Before
+		f.Version = m.AfterVersion
+		if _, err = changeDreamStatus(ctx, tx, tenant, f, m.Before.Status, "revert", ""); err != nil {
+			return state, err
+		}
+	}
+	for _, key := range output.IssueIDs {
+		if _, err = tx.ExecContext(ctx, `UPDATE wc_memory_issues SET status='reverted' WHERE tenant_id=? AND context_id=? AND id=?`, tenant, id, key); err != nil {
+			return state, err
+		}
 	}
 	for _, factID := range output.GeneratedFactIDs {
 		if _, err = tx.ExecContext(ctx, `UPDATE wc_facts SET status='rejected',version=version+1 WHERE tenant_id=? AND context_id=? AND id=?`, tenant, id, factID); err != nil {

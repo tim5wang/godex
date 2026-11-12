@@ -199,11 +199,28 @@ func registerWorkContextRoutes(mux *http.ServeMux, service *backend.Service, pro
 		var input struct {
 			Enabled         bool `json:"enabled"`
 			IntervalSeconds int  `json:"interval_seconds"`
+			TimeoutSeconds  int  `json:"timeout_seconds"`
 		}
 		if err := decodeJSON(r, &input); err != nil {
 			return nil, invalidJSON(err)
 		}
-		return s.ConfigureDream(r.Context(), scope, id(r), input.Enabled, input.IntervalSeconds, time.Now())
+		return s.ConfigureDreamWithTimeout(r.Context(), scope, id(r), input.Enabled, input.IntervalSeconds, input.TimeoutSeconds, time.Now())
+	})
+	handle("GET /v1/work-contexts/{id}/memory/verifications", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
+		return s.MemoryVerificationHistory(r.Context(), scope, id(r), "", "")
+	})
+	handle("GET /v1/work-contexts/{id}/memory/issues", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
+		return s.MemoryIssues(r.Context(), scope, id(r))
+	})
+	handle("POST /v1/work-contexts/{id}/memory/issues/{issueID}/resolve", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
+		var input workcontext.ResolveMemoryIssue
+		if err := decodeJSON(r, &input); err != nil {
+			return nil, invalidJSON(err)
+		}
+		if err := s.ResolveMemoryIssue(r.Context(), scope, id(r), r.PathValue("issueID"), input); err != nil {
+			return nil, err
+		}
+		return map[string]bool{"resolved": true}, nil
 	})
 	handle("POST /v1/work-contexts/{id}/memory/runs/{runID}/revert", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
 		return s.RevertDream(r.Context(), scope, id(r), r.PathValue("runID"))

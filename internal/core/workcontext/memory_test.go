@@ -2,9 +2,11 @@ package workcontext
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -102,8 +104,13 @@ func TestDreamWatermarkIgnoresReadsAndDerivedWrites(t *testing.T) {
 			}
 		}
 	}
-	if candidates != 1 {
-		t.Fatalf("derived candidate missing: %d", candidates)
+	if candidates != 0 {
+		t.Fatal("derived reference became a review task")
+	}
+	runs, _ := s.DreamRuns(ctx, testScope(), c.ID)
+	raw, _ := json.Marshal(runs[0]["result"])
+	if !strings.Contains(string(raw), `"references"`) {
+		t.Fatal("reference insight missing")
 	}
 }
 
@@ -270,14 +277,14 @@ func TestDreamExpiredLeaseRecoveredAfterReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	replacement, _, err := s.BeginDream(ctx, testScope(), c.ID, false, false, now.Add(3*time.Minute))
+	replacement, _, err := s.BeginDream(ctx, testScope(), c.ID, false, false, now.Add(4*time.Minute))
 	if err != nil || replacement == nil || replacement.RunID == old.RunID {
 		t.Fatalf("lease unrecoverable: %+v %v", replacement, err)
 	}
-	if err = s.FinishDream(ctx, testScope(), *old, DreamResult{Summary: "late stale result"}, nil, now.Add(3*time.Minute)); !errors.Is(err, ErrConflict) {
+	if err = s.FinishDream(ctx, testScope(), *old, DreamResult{Summary: "late stale result"}, nil, now.Add(4*time.Minute)); !errors.Is(err, ErrConflict) {
 		t.Fatalf("late result applied: %v", err)
 	}
-	if err = s.FinishDream(ctx, testScope(), *replacement, DreamResult{Summary: "recovered"}, nil, now.Add(3*time.Minute)); err != nil {
+	if err = s.FinishDream(ctx, testScope(), *replacement, DreamResult{Summary: "recovered"}, nil, now.Add(4*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	runs, _ := s.DreamRuns(ctx, testScope(), c.ID)
@@ -441,15 +448,9 @@ func TestDreamIncrementIncludesRelevantExistingEvidenceAndRequiresOriginalReview
 	if err = s.FinishDream(ctx, testScope(), *in, result, nil, now); err != nil {
 		t.Fatal(err)
 	}
-	detail, _ := s.Get(ctx, testScope(), c.ID)
-	var candidate Fact
-	for _, f := range detail.Facts {
-		if f.Title == "OCR proposal" {
-			candidate = f
-		}
-	}
-	if candidate.ID == "" {
-		t.Fatal("candidate missing")
+	candidate, err := s.CreateFact(ctx, testScope(), c.ID, FactInput{Title: "legacy Dream proposal", Content: "scoped reference", Kind: "method", Scope: old.Scope, Source: "dream://" + in.RunID, ObservedAt: old.ObservedAt})
+	if err != nil {
+		t.Fatal(err)
 	}
 	if _, err = s.ReviewFact(ctx, testScope(), c.ID, candidate.ID, FactReview{Status: "confirmed", IfVersion: candidate.Version}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Dream summary used as verification source: %v", err)

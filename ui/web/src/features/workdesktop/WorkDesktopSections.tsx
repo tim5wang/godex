@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Alert, Button, Card, Empty, Input, Select, Space, Spin, Tag, Timeline, Typography } from "antd";
 import {
   ArrowRightOutlined,
@@ -31,7 +31,7 @@ import type { WorkFact, WorkTodo, WorkTodoInput } from "../../lib/apiWorkContext
 // Fixed palette per status: a status never borrows another status's colour, so the
 // rail, the header and the delegation rows cannot disagree about what "in_review" looks like.
 const cardStatusColor: Record<string, string> = { backlog: "default", todo: "blue", in_progress: "processing", in_review: "gold", done: "green" };
-const factStatusColor: Record<string, string> = { candidate: "gold", confirmed: "green", stale: "orange", superseded: "default", rejected: "default" };
+const factStatusColor: Record<string, string> = { candidate: "gold", verification_blocked: "red", confirmed: "green", stale: "orange", superseded: "default", rejected: "default" };
 
 /** Board header: icon + title + hover hint, plus actions. */
 function SectionHead(props: { icon: ReactNode; title: string; hint?: ReactNode; actions?: ReactNode }) {
@@ -57,6 +57,7 @@ function SectionHead(props: { icon: ReactNode; title: string; hint?: ReactNode; 
  * why this is a switch and not six always-rendered sections.
  */
 export function WorkDesktopSectionBoard(props: { section: string; data: WorkDesktopData }) {
+  const [showArchivedFacts, setShowArchivedFacts] = useState(false);
   const { data } = props;
   const {
     tr, trLabel, selected, readOnly, contextId, contexts,
@@ -103,6 +104,7 @@ export function WorkDesktopSectionBoard(props: { section: string; data: WorkDesk
   }
 
   if (props.section === "knowledge") {
+    const visibleFacts = showArchivedFacts ? data.detail?.facts ?? facts : facts.filter((fact) => !["archived", "superseded", "rejected"].includes(fact.status));
     return (
       <div className="wd-stack">
         <WorkMemoryPanel contextId={contextId!} readOnly={readOnly} onChanged={data.invalidateDetail} facts={facts} />
@@ -111,7 +113,8 @@ export function WorkDesktopSectionBoard(props: { section: string; data: WorkDesk
           title={tr("knowledge")}
           hint={<InfoHint title={tr("showHint")} text={`${tr("recallHint")} ${tr("governanceHint")}`} />}
           actions={<>
-            <Typography.Text type="secondary">{tr("searchCount", { count: facts.length })}</Typography.Text>
+            <Typography.Text type="secondary">{tr("searchCount", { count: visibleFacts.length })}</Typography.Text>
+            <Button size="small" onClick={() => setShowArchivedFacts(!showArchivedFacts)}>{tr(showArchivedFacts ? "hideArchivedFacts" : "showArchivedFacts")}</Button>
             <Button size="small" icon={<PlusOutlined aria-hidden="true" />} disabled={readOnly} onClick={() => openEditor("fact")}>{tr("addFact")}</Button>
           </>}
         />
@@ -119,7 +122,7 @@ export function WorkDesktopSectionBoard(props: { section: string; data: WorkDesk
           <Input prefix={<SearchOutlined aria-hidden="true" />} aria-label={tr("recallPlaceholder")} placeholder={tr("recallPlaceholder")} value={recallQuery} allowClear onChange={(event) => setRecallQuery(event.target.value)} />
           <Select aria-label={tr("recallScope")} value={recallScope} onChange={setRecallScope} options={[{ value: "current", label: tr("scopeCurrent") }, { value: "related", label: tr("scopeRelated") }, { value: "all", label: tr("scopeAll") }]} />
         </div>
-        {recallResult.isLoading ? <Spin /> : facts.length ? facts.map((fact) => <KnowledgeCard
+        {recallResult.isLoading ? <Spin /> : visibleFacts.length ? visibleFacts.map((fact) => <KnowledgeCard
           key={fact.id}
           fact={fact}
           contextTitle={contexts.find((item) => item.id === fact.context_id)?.title}
@@ -130,6 +133,7 @@ export function WorkDesktopSectionBoard(props: { section: string; data: WorkDesk
           onAccept={(item: WorkFact, evidence) => data.reviewMutation.mutate({ factId: item.id, status: "confirmed", version: item.version, evidence })}
           onDismiss={(item: WorkFact) => data.reviewMutation.mutate({ factId: item.id, status: "rejected", version: item.version })}
           onPromote={(item: WorkFact) => data.promoteMutation.mutate(item.id)}
+          onArchive={(item: WorkFact) => data.reviewMutation.mutate({ factId: item.id, status: "archived", version: item.version })}
         />) : <Empty description={tr("noChanges")} />}
       </div>
     );

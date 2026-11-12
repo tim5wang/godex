@@ -51,6 +51,7 @@ func (a *Agent) prepareToolExecution(ctx context.Context, name string, input map
 		result, err := execute(runCtx)
 		if err != nil {
 			execution := conversation.ToolExecutionResult{
+				ExitCode:      toolExitCode(result),
 				ArtifactPaths: append([]string{}, result.ArtifactPaths...),
 			}
 			if toolResultHasModelOutput(result) {
@@ -81,6 +82,7 @@ func (a *Agent) prepareToolExecution(ctx context.Context, name string, input map
 		}
 		return conversation.ToolExecutionResult{
 			Output:        output,
+			ExitCode:      toolExitCode(result),
 			ArtifactPaths: append([]string{}, result.ArtifactPaths...),
 		}, nil
 	}, prepareErr
@@ -98,4 +100,11 @@ func (a *Agent) RunPackageSmokeCommand(ctx context.Context, runtimeCtx automatio
 
 func toolResultHasModelOutput(result tools.ToolResult) bool {
 	return result.Text != "" || result.Structured != nil
+}
+
+func toolExitCode(result tools.ToolResult) *int {
+	if code, ok := result.Metadata["exit_code"].(int); ok {
+		return &code
+	}
+	return nil
 }

@@ -113,6 +113,7 @@ type ModelRequestPayload struct {
 
 // ToolCallPayload carries one tool invocation lifecycle event.
 type ToolCallPayload struct {
+	ExitCode      *int                   `json:"exit_code,omitempty"`
 	ID            string                 `json:"id,omitempty"`
 	Name          string                 `json:"name"`
 	Input         map[string]interface{} `json:"input,omitempty"`

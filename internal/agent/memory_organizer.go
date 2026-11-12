@@ -24,9 +24,9 @@ func (s *SharedDependencies) OrganizeMemory(ctx context.Context, cfg *config.Con
 		return "", fmt.Errorf("memory organizer model unavailable")
 	}
 	// Reasoning providers share the output budget between thinking and JSON.
-	// The candidate-inbox helper's 2048 cap can exhaust it before any JSON is
-	// emitted. Keep Dream bounded while respecting the configured user limit.
-	budget := min(cfg.MaxTokens, 4096)
+	// A diverse batch can exhaust 4096 tokens before JSON is complete. Keep
+	// Dream bounded while respecting the configured user limit and effort.
+	budget := min(cfg.MaxTokens, 8192)
 	request := conversation.NewRequest(cfg.Model, budget, cfg.ReasoningEffort, "", []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, prompt+"\n\n"+input)}, nil)
 	response, err := caller.Call(ctx, request)
 	if err != nil {

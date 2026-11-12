@@ -106,7 +106,7 @@ func (s *Service) configureSessionMemory(session *sessionState, store *workconte
 
 func desktopRecord(f workcontext.Fact) memory.StoredMemory {
 	status := memory.StatusActive
-	if f.Status == "rejected" || f.Status == "superseded" {
+	if f.Status == "rejected" || f.Status == "superseded" || f.Status == "archived" {
 		status = memory.StatusArchived
 	}
 	return memory.StoredMemory{Entry: memory.Entry{ID: f.ID, File: "fact:" + f.ID, Title: f.Title, Summary: textutil.TruncateRunes(f.Content, 180), Type: memory.TypeWorkFact, Source: f.Source, Status: status, Tags: []string{f.Status, f.Kind}, RecallPolicy: "manual", Origin: &memory.Origin{ContextID: f.ContextID, FactID: f.ID, FactVersion: f.Version, Applicability: f.Scope, SourceRevision: f.SourceRevision, ValidUntil: f.ValidUntil, ObservedAt: f.ObservedAt, VerifiedAt: f.VerifiedAt}}, Content: fmt.Sprintf("Verification status: %s\nApplicability: %s\nObserved: %s\nSource: %s\n\n%s", f.Status, f.Scope, f.ObservedAt, f.Source, f.Content)}
@@ -201,7 +201,7 @@ func (w *desktopMemory) Remember(input memory.SaveInput) (*memory.Entry, error) 
 		return nil, err
 	}
 	for _, f := range facts {
-		if f.Status != "rejected" && f.Status != "superseded" && f.Title == input.Title && f.Content == input.Content {
+		if f.Status != "rejected" && f.Status != "superseded" && f.Status != "archived" && f.Title == input.Title && f.Content == input.Content {
 			r := desktopRecord(f)
 			return &r.Entry, nil
 		}

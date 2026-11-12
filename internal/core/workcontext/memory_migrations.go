@@ -95,4 +95,13 @@ func init() {
  BEGIN UPDATE wc_memory_state SET source_seq=source_seq+1 WHERE tenant_id=NEW.tenant_id AND context_id=NEW.id;
  INSERT INTO wc_memory_changes SELECT tenant_id,context_id,source_seq,'context',NEW.id FROM wc_memory_state WHERE tenant_id=NEW.tenant_id AND context_id=NEW.id; END`)
 	migrations[7] = statements
+	migrations[8] = []string{
+		`ALTER TABLE wc_memory_state ADD COLUMN timeout_seconds INTEGER NOT NULL DEFAULT 180`,
+		`CREATE TABLE wc_memory_issues(id TEXT PRIMARY KEY,tenant_id TEXT NOT NULL,context_id TEXT NOT NULL,run_id TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'open',evidence_json TEXT NOT NULL,created_at TEXT NOT NULL,resolution_json TEXT NOT NULL DEFAULT '{}')`,
+		`CREATE INDEX wc_memory_issues_context ON wc_memory_issues(tenant_id,context_id,status)`,
+	}
+	migrations[9] = []string{
+		`CREATE TABLE wc_memory_verifications(id TEXT PRIMARY KEY,tenant_id TEXT NOT NULL,context_id TEXT NOT NULL,session_id TEXT NOT NULL,turn_id TEXT NOT NULL,created_at TEXT NOT NULL,result_json TEXT NOT NULL)`,
+		`CREATE INDEX wc_memory_verifications_task ON wc_memory_verifications(tenant_id,context_id,session_id,turn_id)`,
+	}
 }

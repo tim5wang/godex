@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeLineDiff } from "./diffLines";
+import { computeLineDiff, MAX_LCS_CELLS } from "./diffLines";
 
 describe("computeLineDiff", () => {
   it("returns empty for identical inputs", () => {
@@ -48,6 +48,44 @@ describe("computeLineDiff", () => {
     expect(lines).toContain("-old1");
     expect(lines).toContain("-old2");
     expect(lines).toContain("+new1");
+  });
+
+  it("trims the common prefix and suffix before diffing", () => {
+    // A one-line edit in a long file must still produce just that one change,
+    // with the untouched context fully preserved.
+    const head = Array.from({ length: 200 }, (_, i) => `line ${i}`);
+    const oldText = [...head, "middle old", "tail a", "tail b"].join("\n");
+    const newText = [...head, "middle new", "tail a", "tail b"].join("\n");
+    const lines = computeLineDiff(oldText, newText).split("\n");
+    expect(lines).toContain("-middle old");
+    expect(lines).toContain("+middle new");
+    // Context survives on both sides of the change.
+    expect(lines).toContain(" line 199");
+    expect(lines).toContain(" tail a");
+  });
+
+  it("degrades to a replacement block instead of an O(n*m) table for huge changes", () => {
+    // Every line differs, so prefix/suffix trimming cannot help. The panel used
+    // to build a lines x lines table here and freeze the UI thread; it must now
+    // return a rendered (untruncated) diff without the quadratic work.
+    const size = Math.ceil(Math.sqrt(MAX_LCS_CELLS)) + 200;
+    const oldText = Array.from({ length: size }, (_, i) => `old ${i}`).join("\n");
+    const newText = Array.from({ length: size }, (_, i) => `new ${i}`).join("\n");
+
+    const started = Date.now();
+    const lines = computeLineDiff(oldText, newText).split("\n");
+    const elapsed = Date.now() - started;
+
+    // Every old line reported as removed, every new line as added.
+    expect(lines).toContain("-old 0");
+    expect(lines).toContain("-old " + (size - 1));
+    expect(lines).toContain("+new 0");
+    expect(lines).toContain("+new " + (size - 1));
+    expect(lines.filter((line) => line.startsWith("-")).length).toBe(size);
+    expect(lines.filter((line) => line.startsWith("+")).length).toBe(size);
+
+    // Generous bound: the point is "linear, not quadratic", not a benchmark.
+    expect(elapsed).toBeLessThan(2000);
   });
 });
 

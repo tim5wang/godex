@@ -1,22 +1,28 @@
-import { useCallback, useState, useRef, useEffect } from "react";
-import { Input, Button, Modal, message, Tag, Select } from "antd";
+import { useCallback, useState, useRef, useEffect, useMemo } from "react";
+import { Input, Button, Modal, message, Tag, Select, Segmented, Spin } from "antd";
 import { SaveOutlined, FolderOpenOutlined, MenuFoldOutlined, MenuUnfoldOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useSettingsStore } from "../../store/settings";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { readFile, writeFile, deleteFile, mkdirFile, renameFile } from "../../lib/api";
 import FileTree from "./FileTree";
 import CodeEditor from "./CodeEditor";
+import { FilesGitChanges, GitDiffPane } from "./FilesGitChanges";
+import { classifyGitChange, useGitStatus } from "./gitChanges";
+import { useI18n } from "../../i18n";
+import type { GitDiffBase } from "../../lib/api";
 import type { MetaResponse } from "../../lib/types";
 import { getMeta } from "../../lib/api";
+import { useNodeContextStore } from "../../store/nodeContext";
+import { filesViewKey, readFilesView, useRememberFilesView } from "./filesViewState";
 
 const MAX_FILE_SIZE = 500 * 1024;
 const DEFAULT_SIDEBAR_WIDTH = 280;
 const MIN_SIDEBAR_WIDTH = 150;
 const MAX_SIDEBAR_WIDTH = 600;
 
-function useWorkspaceMeta() {
+function useWorkspaceMeta(node: string | null) {
   return useQuery({
-    queryKey: ["workspaceMeta"],
+    queryKey: ["workspaceMeta", node],
     queryFn: () => getMeta(),
     staleTime: Infinity,
   });
@@ -38,18 +44,67 @@ function saveRecentWorkspace(root: string) {
 }
 
 export default function FilesPage() {
+  const node = useNodeContextStore((s) => s.nodeID);
+  return <FilesPageHost key={node ?? "local"} node={node} />;
+}
+
+function FilesPageHost({ node }: { node: string | null }) {
+  const { data: meta } = useWorkspaceMeta(node);
+  const workspaceKey = filesViewKey("workspace", "", node);
+  const [workspaceOverride, setWorkspaceRoot] = useState<string | null>(() => readFilesView(workspaceKey).workspaceRoot ?? null);
+  // Async metadata remains the default until a workspace is explicitly chosen.
+  const workspaceRoot = workspaceOverride ?? meta?.workspace_dir ?? "";
+  useRememberFilesView(workspaceKey, { workspaceRoot: workspaceOverride ?? undefined });
+  const viewKey = filesViewKey("page", workspaceRoot, node);
+  // Do not expose a selectable tree for an unresolved root; its selection would
+  // otherwise be lost when metadata remounts the actual workspace.
+  if (!workspaceRoot) return <Spin />;
+  return <FilesWorkspace key={viewKey} viewKey={viewKey} workspaceRoot={workspaceRoot} setWorkspaceRoot={setWorkspaceRoot} />;
+}
+
+function FilesWorkspace({ viewKey, workspaceRoot, setWorkspaceRoot }: {
+  viewKey: string;
+  workspaceRoot: string;
+  setWorkspaceRoot: (root: string) => void;
+}) {
   const token = useSettingsStore((s) => s.token);
   const queryClient = useQueryClient();
-  const { data: meta } = useWorkspaceMeta();
-
-  const [workspaceRoot, setWorkspaceRoot] = useState(meta?.workspace_dir ?? "");
+  const restored = useRef(readFilesView(viewKey)).current;
   const [rootInput, setRootInput] = useState("");
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [editorContent, setEditorContent] = useState("");
+  const [selectedFile, setSelectedFile] = useState<string | null>(restored.selectedPath ?? null);
+  const [editorContent, setEditorContent] = useState(restored.draft ?? "");
   const [originalContent, setOriginalContent] = useState("");
-  const [isDirty, setIsDirty] = useState(false);
+  const [isDirty, setIsDirty] = useState(restored.draft !== undefined);
   const [refreshKey, setRefreshKey] = useState(0);
   const [isLargeFile, setIsLargeFile] = useState(false);
+
+  // Sidebar shows either the file tree or the Git change list; the editor area
+  // shows either the editor or the changed file's Git diff. Both are explicit
+  // so a Git diff is never confused with the unsaved-edits comparison.
+  const { t } = useI18n();
+  const [sidebarView, setSidebarView] = useState<"files" | "changes">(restored.sidebarView ?? "files");
+  const [editorView, setEditorView] = useState<"editor" | "git">(restored.editorView ?? "editor");
+  const [gitBase, setGitBase] = useState<GitDiffBase>(restored.gitBase ?? "head");
+  useRememberFilesView(viewKey, {
+    selectedPath: selectedFile ?? undefined,
+    draft: isDirty ? editorContent : undefined,
+    sidebarView, editorView, gitBase,
+  });
+  // FilesPage has no relay target, so an empty root only means meta has not
+  // loaded yet; skip the request rather than reading the default workspace's
+  // status and showing its changes for a path the user has not opened.
+  const gitStatus = useGitStatus({ token, root: workspaceRoot, refreshKey, enabled: !!workspaceRoot });
+  const changedPaths = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof classifyGitChange>>();
+    for (const file of gitStatus.data?.files ?? []) {
+      map.set(file.path, classifyGitChange(file));
+    }
+    return map;
+  }, [gitStatus.data]);
+  const selectedChangeKind = selectedFile ? changedPaths.get(selectedFile) : undefined;
+  // A deleted file has no content to read: opening it must show its Git diff
+  // instead of a 404 from /files/read.
+  const isDeletedSelection = selectedChangeKind === "deleted";
 
   // Sidebar layout state
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
@@ -58,7 +113,7 @@ export default function FilesPage() {
   const prevWidthRef = useRef(DEFAULT_SIDEBAR_WIDTH);
 
   const readFileQuery = useQuery({
-    queryKey: ["readFile", workspaceRoot, selectedFile],
+    queryKey: ["readFile", viewKey, selectedFile],
     queryFn: async () => {
       if (!selectedFile) return null;
       const res = await readFile(token, selectedFile, workspaceRoot);
@@ -66,7 +121,7 @@ export default function FilesPage() {
       setIsLargeFile(isLarge);
       return res;
     },
-    enabled: !!selectedFile && !!workspaceRoot,
+    enabled: !!selectedFile && !!workspaceRoot && !isDeletedSelection,
   });
 
   // Sync editor content when file is loaded via useEffect instead of during-render setState
@@ -135,9 +190,12 @@ export default function FilesPage() {
   });
 
   const handleSelectFile = useCallback((path: string) => {
+    // Tree selection means source, even if this same file was open as a diff.
+    setEditorView("editor");
+    if (path === selectedFile) return; // Reselecting must not discard this buffer.
     setSelectedFile(path);
     setIsDirty(false);
-  }, []);
+  }, [selectedFile]);
 
   const handleUnsavedPrompt = useCallback(
     async (nextPath: string): Promise<"save" | "discard" | "cancel"> => {
@@ -264,10 +322,8 @@ export default function FilesPage() {
     if (!trimmed) return;
     setWorkspaceRoot(trimmed);
     saveRecentWorkspace(trimmed);
-    setSelectedFile(null);
-    setIsDirty(false);
     setRootInput("");
-  }, [rootInput]);
+  }, [rootInput, setWorkspaceRoot]);
 
   // Sidebar resize via drag
   const handleDragStart = useCallback((e: React.MouseEvent) => {
@@ -343,11 +399,8 @@ export default function FilesPage() {
             value={undefined}
             onChange={(v) => {
               if (!v) return;
-              setRootInput(v);
               setWorkspaceRoot(v);
               saveRecentWorkspace(v);
-              setSelectedFile(null);
-              setIsDirty(false);
             }}
             options={recentWorkspaces.map((r) => ({ value: r, label: r }))}
             style={{ minWidth: 120 }}
@@ -358,11 +411,28 @@ export default function FilesPage() {
 
       {/* File header */}
       {selectedFile && (
-        <div style={{ padding: "4px 12px", borderBottom: "1px solid #30363d", display: "flex", alignItems: "center", gap: 8, flexShrink: 0, fontSize: 13 }}>
-          <span style={{ color: "#e6edf3", flex: 1 }}>{selectedFile}</span>
+        <div style={{ padding: "4px 12px", borderBottom: "1px solid #30363d", display: "flex", alignItems: "center", gap: 8, flexShrink: 0, fontSize: 13, flexWrap: "wrap" }}>
+          <span style={{ color: "#e6edf3", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{selectedFile}</span>
+          {selectedChangeKind && (
+            <Tag color={selectedChangeKind === "deleted" ? "red" : selectedChangeKind === "untracked" ? "default" : "gold"}>
+              {selectedChangeKind}
+            </Tag>
+          )}
           {isDirty && <Tag color="warning">Unsaved</Tag>}
           {isLargeFile && <Tag color="warning">Large File (Read Only)</Tag>}
-          {!isLargeFile && (
+          {/* Switching to the Git diff must not lose unsaved edits: the editor
+              stays mounted with its content, this only changes what is shown. */}
+          <Segmented
+            size="small"
+            value={editorView}
+            onChange={(value) => setEditorView(value as "editor" | "git")}
+            options={[
+              { value: "editor", label: t("files.viewEditor") || "Editor" },
+              { value: "git", label: t("files.viewGitDiff") || "Git diff" },
+            ]}
+            data-testid="files-page-view-mode"
+          />
+          {!isLargeFile && !isDeletedSelection && (
             <Button size="small" icon={<SaveOutlined />} disabled={!isDirty} onClick={handleSave}>
               Save
             </Button>
@@ -375,19 +445,55 @@ export default function FilesPage() {
         {/* Sidebar */}
         {!sidebarCollapsed && (
           <div style={{ width: sidebarWidth, minWidth: MIN_SIDEBAR_WIDTH, maxWidth: MAX_SIDEBAR_WIDTH, borderRight: "1px solid #30363d", overflow: "hidden", display: "flex", flexShrink: 0 }}>
-            <div style={{ flex: 1, overflow: "hidden" }}>
-              <FileTree
-                workspaceRoot={workspaceRoot}
-                selectedPath={selectedFile}
-                onSelectFile={handleSelectFile}
-                onUnsavedPrompt={handleUnsavedPrompt}
-                onNewFile={handleNewFile}
-                onNewFolder={handleNewFolder}
-                onDelete={handleDelete}
-                onRename={handleRename}
-                refreshKey={refreshKey}
-                searchQuery=""
+            <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", minWidth: 0 }}>
+              {/* File tree ↔ Git changes. The change list is the discoverable
+                  entry point for Git state; the tree stays the file browser. */}
+              <Segmented
+                size="small"
+                block
+                value={sidebarView}
+                onChange={(value) => setSidebarView(value as "files" | "changes")}
+                options={[
+                  { value: "files", label: t("files.fileTree") || "Files" },
+                  { value: "changes", label: `${t("files.gitChanges") || "Changes"}${changedPaths.size ? ` (${changedPaths.size})` : ""}` },
+                ]}
+                data-testid="files-page-sidebar-mode"
+                style={{ margin: "4px 6px" }}
               />
+              <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+                {sidebarView === "changes" ? (
+                  <FilesGitChanges
+                    token={token}
+                    cwd={workspaceRoot}
+                    refreshKey={refreshKey}
+                    selectedPath={selectedFile ?? undefined}
+                    onSelectPath={async (path) => {
+                      // Same guard as the tree: opening a change must not silently
+                      // discard the edited buffer.
+                      const action = await handleUnsavedPrompt(path);
+                      if (action === "cancel") return;
+                      handleSelectFile(path);
+                      setEditorView("git");
+                    }}
+                    onRefresh={() => setRefreshKey((k) => k + 1)}
+                    t={t}
+                  />
+                ) : (
+                  <FileTree
+                    workspaceRoot={workspaceRoot}
+                    selectedPath={selectedFile}
+                    focusPath={selectedFile}
+                    onSelectFile={handleSelectFile}
+                    onUnsavedPrompt={handleUnsavedPrompt}
+                    onNewFile={handleNewFile}
+                    onNewFolder={handleNewFolder}
+                    onDelete={handleDelete}
+                    onRename={handleRename}
+                    refreshKey={refreshKey}
+                    searchQuery=""
+                  />
+                )}
+              </div>
             </div>
             {/* Drag handle */}
             <div
@@ -406,16 +512,28 @@ export default function FilesPage() {
           </div>
         )}
 
-        {/* Editor */}
-        <div style={{ flex: 1, overflow: "hidden" }}>
+        {/* Editor / Git diff */}
+        <div style={{ flex: 1, overflow: "hidden", minWidth: 0 }}>
           {selectedFile ? (
-            <CodeEditor
-              content={editorContent}
-              filePath={selectedFile}
-              readOnly={isLargeFile}
-              onSave={handleSave}
-              onChange={handleEditorChange}
-            />
+            editorView === "git" || isDeletedSelection ? (
+              <GitDiffPane
+                token={token}
+                path={selectedFile}
+                cwd={workspaceRoot}
+                base={gitBase}
+                onBaseChange={setGitBase}
+                refreshKey={refreshKey}
+                t={t}
+              />
+            ) : (
+              <CodeEditor
+                content={editorContent}
+                filePath={selectedFile}
+                readOnly={isLargeFile}
+                onSave={handleSave}
+                onChange={handleEditorChange}
+              />
+            )
           ) : (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#8b949e" }}>
               Select a file from the tree to edit

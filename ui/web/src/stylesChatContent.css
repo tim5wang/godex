@@ -265,6 +265,19 @@
   font-size: 11px;
 }
 
+/* Baseline / notice caption: makes the comparison explicit so a diff can never
+   be mistaken for something it is not (working tree vs HEAD vs index). */
+.diff-view-baseline {
+  padding: 2px 6px;
+  color: var(--godex-muted);
+  font-size: 11px;
+  border-bottom: 1px solid var(--godex-border);
+  background: color-mix(in oklab, var(--godex-panel) 80%, transparent);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
 .diff-view-pre {
   margin: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -273,6 +286,25 @@
 
 .diff-line {
   padding: 0 6px;
+  display: flex;
+  gap: 8px;
+}
+
+/* Old/new line-number gutters. Fixed width keeps the text columns aligned
+   across hunks; aria-hidden because the numbers are decorative for
+   screen readers (the text already carries the +/- prefix). */
+.diff-line-no {
+  flex: 0 0 auto;
+  min-width: 3ch;
+  text-align: right;
+  color: var(--godex-muted);
+  user-select: none;
+  opacity: 0.75;
+}
+
+.diff-line-text {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .diff-line-meta {

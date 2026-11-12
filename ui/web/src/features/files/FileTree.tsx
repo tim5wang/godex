@@ -135,7 +135,9 @@ export default function FileTree({
 
   // Auto-expand the ancestor chain when the parent asks us to focus a file.
   useEffect(() => {
-    if (!focusPath) return;
+    // Restored selections may live in a nested folder. Wait for the root before
+    // loading ancestors, otherwise a fast child response is lost in an empty tree.
+    if (!focusPath || !loadedDirs.has(".")) return;
     const ancestors = ancestorDirs(focusPath);
     if (ancestors.length === 0) return;
     let cancelled = false;
@@ -153,8 +155,7 @@ export default function FileTree({
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusPath]);
+  }, [focusPath, loadedDirs, loadDir]);
 
   const onLoadData = async (node: DataNode) => {
     const key = node.key as string;
@@ -162,16 +163,22 @@ export default function FileTree({
     await loadDir(key);
   };
 
+  // One switch path for every entry point (tree node and search result), so a
+  // file picked from the search list cannot skip the unsaved-edits prompt.
+  const selectFileWithPrompt = async (path: string) => {
+    if (selectedPath && selectedPath !== path) {
+      const action = await onUnsavedPrompt(path);
+      if (action === "cancel") return;
+    }
+    onSelectFile(path);
+  };
+
   const handleSelect = async (keys: React.Key[]) => {
     if (keys.length === 0) return;
     const path = keys[0] as string;
     const node = findNode(treeData, path);
     if (node?.isLeaf) {
-      if (selectedPath && selectedPath !== path) {
-        const action = await onUnsavedPrompt(path);
-        if (action === "cancel") return;
-      }
-      onSelectFile(path);
+      await selectFileWithPrompt(path);
     }
   };
 
@@ -247,7 +254,7 @@ export default function FileTree({
           results={searchResults}
           loading={searchLoading ?? false}
           selectedPath={selectedPath}
-          onSelect={onSelectFile}
+          onSelect={(path) => { void selectFileWithPrompt(path); }}
           workspaceRoot={workspaceRoot}
           onContextMenu={(path, title, isLeaf, x, y) => setContextMenu({ open: true, x, y, path, title, isLeaf })}
         />

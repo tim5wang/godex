@@ -3,6 +3,12 @@ import { Alert, Button, Input, Segmented, Space, Spin, Typography, message, Moda
 import { MenuFoldOutlined, MenuUnfoldOutlined, PlusOutlined, UploadOutlined, FolderOpenOutlined, SaveOutlined, ReloadOutlined } from "@ant-design/icons";
 import FileTree from "./FileTree";
 import CodeEditor from "./CodeEditor";
+import BinaryPreview, { type BinaryPreviewKind } from "./BinaryPreview";
+import { useNodeContextStore } from "../../store/nodeContext";
+import { filesViewKey, readFilesView, useRememberFilesView } from "./filesViewState";
+import { FilesGitChanges, GitDiffPane } from "./FilesGitChanges";
+import { classifyGitChange, useGitStatus } from "./gitChanges";
+import type { GitDiffBase } from "../../lib/api";
 import { DiffView } from "../../components/DiffView";
 import { computeLineDiff } from "./diffLines";
 import { MarkdownContent } from "../../components/MarkdownContent";
@@ -72,6 +78,15 @@ function FilesPanelPageHost({ children }: { children?: React.ReactNode }) {
 }
 
 function FilesPanelDock(props: FilesPanelProps) {
+  const node = useNodeContextStore((s) => s.nodeID);
+  const viewKey = filesViewKey("dock", props.relayNode ? "" : (props.cwd ?? "."), node, props.relayNode);
+  return <FilesPanelDockWorkspace key={viewKey} {...props} viewKey={viewKey} />;
+}
+
+function FilesPanelDockWorkspace(props: FilesPanelProps & { viewKey: string }) {
+  const restored = useRef(readFilesView(props.viewKey)).current;
+  const initialPath = props.focusPath || props.selectedPath || restored.selectedPath;
+  const restoredDraft = useRef(initialPath === restored.selectedPath ? { path: initialPath, content: restored.draft } : null);
   const { t } = useI18n();
   const token = useSettingsStore((state) => state.token);
   const relayNode = props.relayNode;
@@ -89,16 +104,23 @@ function FilesPanelDock(props: FilesPanelProps) {
   const [searchResults, setSearchResults] = useState<FileSearchResult[] | null>(null);
   const [searchLoading, setSearchLoading] = useState(false);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [selectedPath, setSelectedPath] = useState<string | undefined>(props.selectedPath);
+  const [selectedPath, setSelectedPath] = useState<string | undefined>(initialPath);
   const [previewContent, setPreviewContent] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState("");
   const [treeCollapsed, setTreeCollapsed] = useState(false);
   const [treeWidth, setTreeWidth] = useState(() => Math.max(180, Math.round((layoutWidth ?? 320) * 0.28)));
-  const [editedContent, setEditedContent] = useState<string | null>(null);
+  const [editedContent, setEditedContent] = useState<string | null>(restoredDraft.current?.content ?? null);
   const [saving, setSaving] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [previewReloadKey, setPreviewReloadKey] = useState(0);
+  // Sidebar surface: the file tree or the Git change list. Both dock and page
+  // expose the same pair so the experience matches in either place.
+  const [sidebarView, setSidebarView] = useState<"files" | "changes">(restored.sidebarView ?? "files");
+  const [gitBase, setGitBase] = useState<GitDiffBase>(restored.gitBase ?? "head");
+  useRememberFilesView(props.viewKey, {
+    selectedPath, draft: editedContent ?? undefined, sidebarView, gitBase,
+  });
   const uploadRef = useRef<HTMLInputElement | null>(null);
   const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
@@ -107,6 +129,21 @@ function FilesPanelDock(props: FilesPanelProps) {
   const iconOnlyWidth = 40;
 
   const hasUnsavedChanges = editedContent !== null && editedContent !== previewContent;
+
+  // Read-only Git state for this workspace root. `cwd` is "" in relay sessions,
+  // which is exactly what /git/status wants there (the node resolves its own
+  // workspace), so the relay boundary needs no special case.
+  const gitStatus = useGitStatus({ token, root: cwd, relayNode, refreshKey });
+  const changedPaths = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof classifyGitChange>>();
+    for (const file of gitStatus.data?.files ?? []) {
+      map.set(file.path, classifyGitChange(file));
+    }
+    return map;
+  }, [gitStatus.data]);
+  const selectedChangeKind = selectedPath ? changedPaths.get(selectedPath) : undefined;
+  // A deleted file cannot be read; the diff is the only thing left to show.
+  const selectedIsDeleted = selectedChangeKind === "deleted";
 
   // Half-controlled selection: external focusPath (e.g. “open in Files” from a
   // Changes card) drives the internal selectedPath when it changes.
@@ -146,14 +183,25 @@ function FilesPanelDock(props: FilesPanelProps) {
       setEditedContent(null);
       return;
     }
+    // A file git reports as deleted no longer exists on disk, so reading it
+    // would only produce a 404. Its diff is the content left to show.
+    if (selectedIsDeleted) {
+      setPreviewLoading(false);
+      setPreviewContent("");
+      setPreviewError("");
+      setEditedContent(null);
+      return;
+    }
     let cancelled = false;
     setPreviewLoading(true);
     setPreviewError("");
-    setEditedContent(null);
+    if (restoredDraft.current?.path !== selectedPath) restoredDraft.current = null;
+    setEditedContent(restoredDraft.current?.content ?? null);
     readFile(token || null, selectedPath, cwd, relayNode)
       .then((result) => {
         if (cancelled) return;
         setPreviewContent(result.content);
+        restoredDraft.current = null;
       })
       .catch((error) => {
         if (cancelled) return;
@@ -166,7 +214,7 @@ function FilesPanelDock(props: FilesPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [cwd, selectedPath, token, previewReloadKey, relayNode]);
+  }, [cwd, selectedPath, token, previewReloadKey, relayNode, selectedIsDeleted]);
 
   const attachSelected = () => {
     if (!selectedPath || !props.onAttachFile) return;
@@ -238,14 +286,43 @@ function FilesPanelDock(props: FilesPanelProps) {
     setSaving(true);
     try {
       await writeFile(token || null, selectedPath, editedContent, cwd, relayNode);
+      restoredDraft.current = null;
       setPreviewContent(editedContent);
       setEditedContent(null);
       message.success(t("files.saved") || "Saved");
+      // The file's Git state just changed on disk, so the change list and any
+      // open diff would otherwise keep showing the pre-save tree.
+      setRefreshKey((k) => k + 1);
     } catch (e: any) {
       message.error(e?.message || "Failed to save");
     } finally {
       setSaving(false);
     }
+  };
+
+  /**
+   * Ask before a file switch throws away unsaved edits.
+   *
+   * The dock previously passed `async () => "discard"`, so picking another file
+   * in the tree silently dropped the buffer. Returns true when the caller may
+   * proceed, false when the user cancelled.
+   */
+  const confirmDiscardIfDirty = async (): Promise<boolean> => {
+    if (editedContent === null || editedContent === previewContent) return true;
+    return new Promise((resolve) => {
+      Modal.warning({
+        title: t("files.unsavedSwitchTitle") || "Unsaved changes",
+        content: t("files.unsavedSwitchBody", { path: selectedPath ?? "" }) ||
+          `"${selectedPath}" has unsaved changes. Switching will discard them.`,
+        okText: t("files.switchDiscard") || "Discard and switch",
+        okButtonProps: { danger: true },
+        cancelText: t("files.cancel") || "Cancel",
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false),
+        // Covers the X button and Esc, which fire neither onOk nor onCancel.
+        afterClose: () => resolve(false),
+      });
+    });
   };
 
   const handleDelete = async (path: string) => {
@@ -410,6 +487,10 @@ function FilesPanelDock(props: FilesPanelProps) {
               token={token}
               cwd={cwd}
               relayNode={relayNode}
+              gitChangeKind={selectedChangeKind}
+              gitBase={gitBase}
+              onGitBaseChange={setGitBase}
+              refreshKey={refreshKey}
               t={t}
             />
           </div>
@@ -425,30 +506,69 @@ function FilesPanelDock(props: FilesPanelProps) {
           >
             <div
               data-testid="files-panel-tree"
-              style={{ height: "100%", width: treeWidth, minWidth: 80, overflow: "auto", borderRight: "1px solid var(--border)", flexShrink: 0 }}
+              style={{ height: "100%", width: treeWidth, minWidth: 80, borderRight: "1px solid var(--border)", flexShrink: 0, display: "flex", flexDirection: "column", minHeight: 0 }}
             >
-              <FileTree
-                workspaceRoot={cwd}
-                relayNode={relayNode}
-                selectedPath={selectedPath ?? null}
-                searchQuery={search}
-                searchResults={searchResults}
-                searchLoading={searchLoading}
-                refreshKey={refreshKey}
-                focusPath={props.focusPath ?? null}
-                onSelectFile={(path) => {
-                  setSelectedPath(path);
-                  props.onSelect?.(path);
-                  // Clear search when selecting from results.
-                  if (searchResults) { setSearch(""); setSearchResults(null); }
-                }}
-                onUnsavedPrompt={async () => "discard" as const}
-                onNewFile={handleNewFile}
-                onNewFolder={handleNewFolder}
-                onUploadTo={handleUploadTo}
-                onDelete={handleDelete}
-                onRename={handleRename}
+              {/* Files ↔ Changes, same pair as FilesPage so the two surfaces match. */}
+              <Segmented
+                size="small"
+                block
+                value={sidebarView}
+                onChange={(value) => setSidebarView(value as "files" | "changes")}
+                options={[
+                  { value: "files", label: t("files.fileTree") || "Files" },
+                  { value: "changes", label: `${t("files.gitChanges") || "Changes"}${changedPaths.size ? ` (${changedPaths.size})` : ""}` },
+                ]}
+                data-testid="files-panel-sidebar-mode"
+                style={{ margin: 4 }}
               />
+              <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+                {sidebarView === "changes" ? (
+                  <FilesGitChanges
+                    token={token}
+                    cwd={cwd}
+                    relayNode={relayNode}
+                    refreshKey={refreshKey}
+                    selectedPath={selectedPath}
+                    onSelectPath={async (path) => {
+                      // Same protection as the tree: a switch must not silently
+                      // drop the edited buffer.
+                      if (!(await confirmDiscardIfDirty())) return;
+                      setEditedContent(null);
+                      setSelectedPath(path);
+                      props.onSelect?.(path);
+                    }}
+                    onRefresh={handleRefresh}
+                    t={t}
+                  />
+                ) : (
+                  <FileTree
+                    workspaceRoot={cwd}
+                    relayNode={relayNode}
+                    selectedPath={selectedPath ?? null}
+                    searchQuery={search}
+                    searchResults={searchResults}
+                    searchLoading={searchLoading}
+                    refreshKey={refreshKey}
+                    focusPath={selectedPath ?? null}
+                    onSelectFile={(path) => {
+                      // No prompt here: FileTree already asked through
+                      // onUnsavedPrompt just above, and prompting again would
+                      // show the dialog twice for one switch.
+                      setEditedContent(null);
+                      setSelectedPath(path);
+                      props.onSelect?.(path);
+                      // Clear search when selecting from results.
+                      if (searchResults) { setSearch(""); setSearchResults(null); }
+                    }}
+                    onUnsavedPrompt={async () => ((await confirmDiscardIfDirty()) ? ("discard" as const) : ("cancel" as const))}
+                    onNewFile={handleNewFile}
+                    onNewFolder={handleNewFolder}
+                    onUploadTo={handleUploadTo}
+                    onDelete={handleDelete}
+                    onRename={handleRename}
+                  />
+                )}
+              </div>
             </div>
             {/* Resize handle */}
             <div
@@ -498,6 +618,10 @@ function FilesPanelDock(props: FilesPanelProps) {
               token={token}
               cwd={cwd}
               relayNode={relayNode}
+              gitChangeKind={selectedChangeKind}
+              gitBase={gitBase}
+              onGitBaseChange={setGitBase}
+              refreshKey={refreshKey}
               t={t}
             />
             </div>
@@ -534,10 +658,25 @@ function FilePreview(props: {
   token?: string | null;
   cwd?: string;
   relayNode?: string;
-  t: (key: string) => string;
+  /** Git status of the selected path, when it has one. */
+  gitChangeKind?: string;
+  gitBase: GitDiffBase;
+  onGitBaseChange: (base: GitDiffBase) => void;
+  refreshKey: number;
+  t: (key: string, vars?: Record<string, string | number>) => string;
 }) {
   const isMarkdown = isMarkdownPath(props.selectedPath);
-  const [viewMode, setViewMode] = useState<"source" | "render" | "diff">("source");
+  // "diff" is the UNSAVED-edits comparison; "git" is the real Git diff. They
+  // are separate modes on purpose and each states its baseline, so an unsaved
+  // buffer can never be read as repository history.
+  const [viewMode, setViewMode] = useState<"source" | "render" | "diff" | "git">("source");
+  const isDeleted = props.gitChangeKind === "deleted";
+  const hasGitChange = !!props.gitChangeKind;
+
+  // Opening a deleted file has nothing to source-render: jump to its diff.
+  useEffect(() => {
+    setViewMode(isDeleted ? "git" : "source");
+  }, [props.selectedPath, isDeleted]);
   // Rewrite relative image srcs to the preview static route so workspace
   // images render with auth (img tags cannot attach an Authorization header,
   // so the token is passed as a query param). Relay sessions route through
@@ -592,24 +731,28 @@ function FilePreview(props: {
             <Segmented
               size="small"
               value={viewMode}
-              onChange={(value) => setViewMode(value as "source" | "render" | "diff")}
+              onChange={(value) => setViewMode(value as "source" | "render" | "diff" | "git")}
               options={[
                 { value: "source", label: props.t("files.viewSource") || "Source" },
                 { value: "render", label: props.t("files.viewRender") || "Render" },
+                ...(hasGitChange ? [{ value: "git", label: props.t("files.viewGitDiff") || "Git diff" }] : []),
                 ...(props.hasUnsavedChanges
-                  ? [{ value: "diff", label: props.t("files.viewDiff") || "Diff" }]
+                  ? [{ value: "diff", label: props.t("files.unsavedDiff") || "Unsaved" }]
                   : []),
               ]}
               data-testid="files-panel-preview-mode"
             />
-          ) : props.hasUnsavedChanges ? (
+          ) : hasGitChange || props.hasUnsavedChanges || isDeleted ? (
             <Segmented
               size="small"
               value={viewMode}
-              onChange={(value) => setViewMode(value as "source" | "render" | "diff")}
+              onChange={(value) => setViewMode(value as "source" | "render" | "diff" | "git")}
               options={[
-                { value: "source", label: props.t("files.viewSource") || "Source" },
-                { value: "diff", label: props.t("files.viewDiff") || "Diff" },
+                ...(isDeleted ? [] : [{ value: "source", label: props.t("files.viewSource") || "Source" }]),
+                ...(hasGitChange ? [{ value: "git", label: props.t("files.viewGitDiff") || "Git diff" }] : []),
+                ...(props.hasUnsavedChanges
+                  ? [{ value: "diff", label: props.t("files.unsavedDiff") || "Unsaved" }]
+                  : []),
               ]}
               data-testid="files-panel-preview-mode"
             />
@@ -639,14 +782,33 @@ function FilePreview(props: {
         </Space>
       </div>
       <div data-testid="files-panel-preview" style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-        {props.previewLoading ? (
+        {viewMode === "git" ? (
+          // The real Git diff: fetched from /git/diff, baseline stated in the pane.
+          <GitDiffPane
+            token={props.token ?? null}
+            path={props.selectedPath ?? ""}
+            cwd={props.cwd ?? "."}
+            relayNode={props.relayNode}
+            base={props.gitBase}
+            onBaseChange={props.onGitBaseChange}
+            refreshKey={props.refreshKey}
+            t={props.t}
+          />
+        ) : props.previewLoading ? (
           <div style={{ display: "grid", height: "100%", placeItems: "center" }}>
             <Spin size="small" />
           </div>
         ) : props.previewError ? (
           <Alert type="error" showIcon message={props.previewError} />
         ) : viewMode === "diff" ? (
-          <DiffView diff={diffText} />
+          // Unsaved-edits comparison against the on-disk file. Labelled so it is
+          // never mistaken for repository history.
+          <div data-testid="files-panel-unsaved-diff">
+            <div className="diff-view-baseline">
+              {props.t("files.unsavedDiffBaseline") || "Unsaved edits vs file on disk (not a Git diff)"}
+            </div>
+            <DiffView diff={diffText} />
+          </div>
         ) : isMarkdown && viewMode === "render" ? (
           <div className="files-markdown-render">
             <MarkdownContent content={props.previewContent} forceMarkdown resolveImageUrl={resolveImageUrl} />
@@ -662,7 +824,7 @@ function FilePreview(props: {
           />
         ) : (
           <CodeEditor
-            content={props.previewContent}
+            content={props.editedContent ?? props.previewContent}
             filePath={props.selectedPath ?? "(no file)"}
             readOnly={false}
             onChange={props.onContentChange}
@@ -678,8 +840,6 @@ function isMarkdownPath(path?: string): boolean {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   return ext === "md" || ext === "mdx" || ext === "markdown";
 }
-
-type BinaryPreviewKind = "image" | "video" | "audio" | "pdf";
 
 // File extensions that map to a browser-native preview element. Text-like
 // formats are intentionally absent: they keep using the CodeEditor path.
@@ -720,61 +880,4 @@ function buildPreviewStaticUrl(path: string, cwd: string, token?: string | null,
   if (cwd && cwd !== ".") params.set("root", cwd);
   const qs = params.toString();
   return `${relayProxyPrefix(relayNode)}/preview/static/${rel}${qs ? `?${qs}` : ""}`;
-}
-
-function BinaryPreview(props: {
-  kind: BinaryPreviewKind;
-  url: string;
-  fileName: string;
-  failed: boolean;
-  onFailed: () => void;
-  t: (key: string) => string;
-}) {
-  // Degrade gracefully when the browser cannot decode the format.
-  if (props.failed) {
-    return (
-      <div style={{ padding: 16 }}>
-        <Alert
-          type="warning"
-          showIcon
-          message={props.t("files.previewUnsupported") || "This format cannot be previewed in your browser."}
-          action={
-            <Button size="small" href={props.url} target="_blank" rel="noreferrer">
-              {props.t("files.openInBrowser") || "Open in browser"}
-            </Button>
-          }
-        />
-      </div>
-    );
-  }
-  if (props.kind === "image") {
-    return (
-      <div style={{ display: "grid", placeItems: "center", padding: 16, minHeight: "100%", boxSizing: "border-box" }}>
-        <img
-          src={props.url}
-          alt={props.fileName}
-          style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
-          onError={props.onFailed}
-        />
-      </div>
-    );
-  }
-  if (props.kind === "video") {
-    return <video src={props.url} controls style={{ width: "100%", maxHeight: "100%" }} onError={props.onFailed} />;
-  }
-  if (props.kind === "audio") {
-    return <audio src={props.url} controls style={{ width: "100%" }} onError={props.onFailed} />;
-  }
-  // pdf: browser-native viewer inside an iframe, with an external-open
-  // fallback for browsers without a built-in PDF plugin.
-  return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <div style={{ padding: "4px 8px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "flex-end" }}>
-        <Button type="link" size="small" href={props.url} target="_blank" rel="noreferrer">
-          {props.t("files.openInBrowser") || "Open in browser"}
-        </Button>
-      </div>
-      <iframe src={props.url} title={props.fileName} style={{ flex: 1, width: "100%", border: "none" }} />
-    </div>
-  );
 }

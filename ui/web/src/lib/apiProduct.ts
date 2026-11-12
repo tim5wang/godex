@@ -275,8 +275,12 @@ export function readFile(token: string | null, path: string, root?: string, rela
 
 export interface GitDiffResponse {
   repo: boolean;
+  /** Comparison baseline the diff was taken against. */
+  base?: "worktree" | "staged" | "head";
   diff?: string;
   truncated?: boolean;
+  /** The path has no index entry yet, so the diff came from --no-index. */
+  untracked?: boolean;
   error?: string;
 }
 
@@ -292,8 +296,38 @@ export interface GitDiffStatsResponse {
   error?: string;
 }
 
+/** Comparison baseline for gitDiff. "worktree" = index↔worktree (unstaged
+ *  only, the historical default), "staged" = HEAD↔index, "head" = HEAD↔worktree. */
+export type GitDiffBase = "worktree" | "staged" | "head";
+
+/** One changed path as reported by `git status --porcelain=v1`. */
+export interface GitStatusFile {
+  path: string;
+  /** Previous path for a rename/copy. */
+  origPath?: string;
+  /** Index (staged) column: " ", "M", "A", "D", "R", "C", "U", "?". */
+  index: string;
+  /** Working-tree column, same alphabet. */
+  worktree: string;
+  untracked?: boolean;
+}
+
+export interface GitStatusResponse {
+  repo: boolean;
+  branch?: string;
+  files?: GitStatusFile[];
+  error?: string;
+}
+
 /** Working-tree diff for a local git repository (one file or whole tree). */
-export function gitDiff(token: string | null, path: string, root?: string, signal?: AbortSignal) {
+export function gitDiff(
+  token: string | null,
+  path: string,
+  root?: string,
+  signal?: AbortSignal,
+  base?: GitDiffBase,
+  relayNode?: string,
+) {
   const search = new URLSearchParams();
   if (path) {
     search.set("path", path);
@@ -301,7 +335,38 @@ export function gitDiff(token: string | null, path: string, root?: string, signa
   if (root?.trim()) {
     search.set("root", root.trim());
   }
-  return request<GitDiffResponse>(`/git/diff?${search.toString()}`, { method: "GET", signal }, token);
+  if (base && base !== "worktree") {
+    search.set("base", base);
+  }
+  const query = search.toString();
+  // relayNode keeps the diff on the same node as the file reads that produced
+  // it. Without it a relay session would ask the local center for a diff of a
+  // path that only exists on the remote node.
+  return request<GitDiffResponse>(
+    `${relayPrefix(relayNode)}/git/diff${query ? `?${query}` : ""}`,
+    { method: "GET", signal },
+    token,
+  );
+}
+
+/** Read-only `git status` for the workspace: which files changed and on which
+ *  side (index vs working tree). Never stages anything. */
+export function gitStatus(
+  token: string | null,
+  root?: string,
+  signal?: AbortSignal,
+  relayNode?: string,
+) {
+  const search = new URLSearchParams();
+  if (root?.trim()) {
+    search.set("root", root.trim());
+  }
+  const query = search.toString();
+  return request<GitStatusResponse>(
+    `${relayPrefix(relayNode)}/git/status${query ? `?${query}` : ""}`,
+    { method: "GET", signal },
+    token,
+  );
 }
 
 /** Batched line counts for the specified changed paths in the working tree. */

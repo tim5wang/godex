@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os/exec"
 	"path/filepath"
@@ -16,10 +17,35 @@ import (
 const maxGitDiffBytes = 256 * 1024
 
 type gitDiffResponse struct {
-	Repo      bool   `json:"repo"`
+	Repo bool `json:"repo"`
+	// Base names the comparison the diff was taken against so the UI never
+	// has to guess: "worktree" = index↔working tree, "staged" = HEAD↔index,
+	// "head" = HEAD↔working tree (staged + unstaged combined).
+	Base      string `json:"base,omitempty"`
 	Diff      string `json:"diff,omitempty"`
 	Truncated bool   `json:"truncated,omitempty"`
+	// Untracked marks a path git does not know yet: it has no index entry, so
+	// the diff is produced with --no-index against /dev/null.
+	Untracked bool   `json:"untracked,omitempty"`
 	Error     string `json:"error,omitempty"`
+}
+
+// gitStatusFile is one entry of `git status --porcelain=v1 -z`. Index and
+// Worktree are the raw porcelain columns (" " means "no change on that side"),
+// so the UI can distinguish staged from unstaged without another request.
+type gitStatusFile struct {
+	Path      string `json:"path"`
+	OrigPath  string `json:"origPath,omitempty"`
+	Index     string `json:"index"`
+	Worktree  string `json:"worktree"`
+	Untracked bool   `json:"untracked,omitempty"`
+}
+
+type gitStatusResponse struct {
+	Repo   bool            `json:"repo"`
+	Branch string          `json:"branch,omitempty"`
+	Files  []gitStatusFile `json:"files,omitempty"`
+	Error  string          `json:"error,omitempty"`
 }
 
 type gitDiffFileStats struct {
@@ -49,6 +75,12 @@ func registerGitRoutes(mux *http.ServeMux, protected func(http.Handler) http.Han
 	})))
 	mux.Handle("GET /git/diff-stats", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleGitDiffStats(w, r, manager)
+	})))
+	// Read-only status list: which files changed and on which side (index vs
+	// working tree). This is what lets the Files surface show added / modified /
+	// deleted / renamed / untracked badges. It never writes to the repository.
+	mux.Handle("GET /git/status", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handleGitStatus(w, r, manager)
 	})))
 }
 
@@ -89,7 +121,24 @@ func handleGitDiff(w http.ResponseWriter, r *http.Request, manager *config.Manag
 		}
 	}
 
-	args := []string{"diff", "--no-color", "--"}
+	// base selects the comparison the caller wants; the default keeps the
+	// historical behaviour (unstaged changes only) so existing callers such as
+	// the chat Changes card are unaffected.
+	base := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("base")))
+	var args []string
+	switch base {
+	case "", "worktree":
+		base = "worktree"
+		args = []string{"diff", "--no-color", "--"}
+	case "staged":
+		args = []string{"diff", "--cached", "--no-color", "--"}
+	case "head":
+		// HEAD↔working tree: staged and unstaged changes in one baseline.
+		args = []string{"diff", "HEAD", "--no-color", "--"}
+	default:
+		writeError(w, http.StatusBadRequest, &httpError{Status: http.StatusBadRequest, Message: "base must be worktree, staged or head: " + base})
+		return
+	}
 	if path != "" {
 		args = append(args, path)
 	}
@@ -98,15 +147,27 @@ func handleGitDiff(w http.ResponseWriter, r *http.Request, manager *config.Manag
 		if r.Context().Err() != nil {
 			return
 		}
-		writeJSON(w, http.StatusOK, gitDiffResponse{Repo: true, Error: err.Error()})
+		writeJSON(w, http.StatusOK, gitDiffResponse{Repo: true, Base: base, Error: err.Error()})
 		return
+	}
+
+	// An untracked file has no index entry, so `git diff` is empty for it even
+	// though the file is new. Compare against /dev/null instead; --no-index exits
+	// 1 whenever the inputs differ, which is the normal case here.
+	untracked := false
+	if path != "" && out == "" && base != "staged" && gitPathUntracked(r.Context(), absRoot, path) {
+		untracked = true
+		noIndexArgs := []string{"diff", "--no-color", "--no-index", "--", "/dev/null", path}
+		if raw, rawErr := runGitRaw(r.Context(), absRoot, noIndexArgs...); raw != "" && (rawErr == nil || gitExitCodeOne(rawErr)) {
+			out = strings.TrimSpace(raw)
+		}
 	}
 
 	truncated := len(out) > maxGitDiffBytes
 	if truncated {
 		out = out[:maxGitDiffBytes] + "\n… (diff truncated)"
 	}
-	writeJSON(w, http.StatusOK, gitDiffResponse{Repo: true, Diff: out, Truncated: truncated})
+	writeJSON(w, http.StatusOK, gitDiffResponse{Repo: true, Base: base, Diff: out, Truncated: truncated, Untracked: untracked})
 }
 
 func handleGitDiffStats(w http.ResponseWriter, r *http.Request, manager *config.Manager) {
@@ -191,6 +252,97 @@ func parseGitDiffNumstat(output string) []gitDiffFileStats {
 	return files
 }
 
+func handleGitStatus(w http.ResponseWriter, r *http.Request, manager *config.Manager) {
+	cfg := manager.Current()
+	execConfig := cfg.Tools.Execution
+	if mode := strings.ToLower(strings.TrimSpace(execConfig.Mode)); mode == "ssh" && strings.TrimSpace(execConfig.SSHTarget) != "" {
+		writeJSON(w, http.StatusOK, gitStatusResponse{Repo: false})
+		return
+	}
+
+	root := strings.TrimSpace(r.URL.Query().Get("root"))
+	if root == "" {
+		root = cfg.WorkspaceDir
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !gitRepo(r.Context(), absRoot) {
+		if r.Context().Err() != nil {
+			return
+		}
+		writeJSON(w, http.StatusOK, gitStatusResponse{Repo: false})
+		return
+	}
+
+	// -z keeps paths unquoted and NUL-separated, which is the only form that
+	// survives newlines and non-ASCII names. Untracked files are listed
+	// individually (--untracked-files=all) so a new directory expands.
+	out, err := runGitRaw(r.Context(), absRoot, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	if err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
+		writeJSON(w, http.StatusOK, gitStatusResponse{Repo: true, Error: err.Error()})
+		return
+	}
+	// A repository without commits has no resolvable branch; the status list is
+	// still meaningful, so an empty branch name is not an error.
+	branch, _ := runGit(r.Context(), absRoot, "rev-parse", "--abbrev-ref", "HEAD")
+	writeJSON(w, http.StatusOK, gitStatusResponse{Repo: true, Branch: branch, Files: parseGitStatus(out)})
+}
+
+// parseGitStatus decodes `git status --porcelain=v1 -z` output.
+//
+// Each record is "XY <path>", NUL-terminated. The first column is the index
+// (staged) state and the second the working-tree state, and either may be a
+// space — which is why this must not be run through a space-trimming helper.
+// Rename/copy records are followed by a second record holding the original path.
+func parseGitStatus(output string) []gitStatusFile {
+	records := strings.Split(output, "\x00")
+	files := make([]gitStatusFile, 0, len(records))
+	for i := 0; i < len(records); i++ {
+		record := records[i]
+		if len(record) < 4 {
+			continue
+		}
+		file := gitStatusFile{
+			Path:     record[3:],
+			Index:    string(record[0]),
+			Worktree: string(record[1]),
+		}
+		if record[0] == '?' && record[1] == '?' {
+			file.Untracked = true
+		}
+		// With -z the original path of a rename/copy arrives as its own record.
+		if (record[0] == 'R' || record[0] == 'C' || record[1] == 'R' || record[1] == 'C') && i+1 < len(records) {
+			file.OrigPath = records[i+1]
+			i++
+		}
+		files = append(files, file)
+	}
+	return files
+}
+
+// gitPathUntracked reports whether path is untracked (known to git on disk but
+// not in the index). ls-files --error-unmatch exits non-zero in that case.
+func gitPathUntracked(ctx context.Context, dir, path string) bool {
+	_, err := runGit(ctx, dir, "ls-files", "--error-unmatch", "--", path)
+	return err != nil
+}
+
+// gitExitCodeOne reports whether err is git's "differences found" exit status,
+// which --no-index uses as a normal result rather than a failure.
+func gitExitCodeOne(err error) bool {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+	return exitErr.ExitCode() == 1
+}
+
 // gitRepo reports whether dir is inside a git working tree.
 func gitRepo(ctx context.Context, dir string) bool {
 	_, err := runGit(ctx, dir, "rev-parse", "--is-inside-work-tree")
@@ -203,6 +355,16 @@ func runGit(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
+}
+
+// runGitRaw returns stdout untrimmed. Porcelain -z output starts with the two
+// status columns and the first one is a space for an unstaged-only change, so
+// trimming it would silently turn " M file" into "M file" (i.e. staged).
+func runGitRaw(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	return string(out), err
 }
 
 func errPathOutsideWorkspace(path string) error {

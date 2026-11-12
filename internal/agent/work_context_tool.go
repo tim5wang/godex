@@ -17,6 +17,11 @@ func (a *Agent) SetWorkContextTool(tool tools.Tool) {
 	if a == nil || tool == nil {
 		return
 	}
+	alreadyMounted := a.workContextTool != nil
+	names := []string{}
+	if alreadyMounted && a.toolHandler != nil {
+		names = a.toolHandler.ActiveToolNames()
+	}
 	a.workContextTool = tool
 	if a.toolHandler == nil {
 		return
@@ -32,5 +37,11 @@ func (a *Agent) SetWorkContextTool(tool tools.Tool) {
 	// without the capability. A resumed session's persisted tool set, or a later
 	// template/session-mode apply, still wins — so this only sets the default and
 	// a user's tool_exchange disable is not clobbered.
-	a.toolHandler.ActivateBundles(bundleWorkContext)
+	if alreadyMounted {
+		a.toolHandler.SetActiveToolsExact(names...)
+	} else {
+		a.toolHandler.ActivateBundles(bundleWorkContext)
+	}
 }
+
+func (a *Agent) WorkContextToolMounted() bool { return a.workContextTool != nil }

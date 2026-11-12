@@ -14,7 +14,7 @@ import (
 )
 
 func (s *Service) executeMemory(a *agent.Agent, cmd Command) (Result, error) {
-	mgr := a.MemoryMgr()
+	mgr := a.MemoryWriter()
 	if mgr == nil {
 		return Result{Name: "memory", Output: "Memory runtime is unavailable in this process."}, nil
 	}

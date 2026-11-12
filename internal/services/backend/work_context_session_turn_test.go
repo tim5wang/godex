@@ -47,6 +47,7 @@ func TestSessionTurnRecordsWorkContextEvent(t *testing.T) {
 		t.Fatalf("a stream with no finished turn must report none, got %+v", turns)
 	}
 
+	service.refreshWorkContextFeedback(session)
 	service.recordWorkContextSessionTurn(session, "turn-1", "completed")
 
 	detail, err := store.Get(ctx, scope, stream.ID)

@@ -13,8 +13,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/tim5wang/godex/internal/core/insights"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"github.com/tim5wang/godex/internal/core/insights"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/platform/fsutil"
 )
@@ -45,6 +45,7 @@ var ErrInvalidCandidate = errors.New("memory: invalid candidate")
 
 // Candidate is a suggested durable memory extracted from a completed turn.
 type Candidate struct {
+	Origin      *Origin   `json:"origin,omitempty"`
 	Fingerprint string    `json:"fingerprint"`
 	Title       string    `json:"title"`
 	Summary     string    `json:"summary"`
@@ -247,6 +248,11 @@ func normalizeProposedCandidate(candidate Candidate) (Candidate, error) {
 	// newCandidate derives a stable sha1 fingerprint from
 	// type+title+summary+content, so identical retries collapse into one entry.
 	normalized := newCandidate(title, summary, content, candidate.Type, source)
+	normalized.Origin = candidate.Origin
+	if candidate.Origin != nil {
+		sum := sha1.Sum([]byte(normalized.Fingerprint + "|" + originCandidateKey(candidate.Origin)))
+		normalized.Fingerprint = hex.EncodeToString(sum[:])
+	}
 	if !candidate.CreatedAt.IsZero() {
 		normalized.CreatedAt = candidate.CreatedAt.UTC()
 	}
@@ -266,6 +272,8 @@ func (e *Extractor) captureCandidates(candidates []Candidate) ([]Candidate, erro
 	if e == nil || e.manager == nil {
 		return nil, nil
 	}
+	unlock := e.manager.lockCandidates()
+	defer unlock()
 	if err := e.manager.ensureStore(); err != nil {
 		return nil, err
 	}
@@ -280,6 +288,10 @@ func (e *Extractor) captureCandidates(candidates []Candidate) ([]Candidate, erro
 	existingTitles := make(map[string]struct{}, len(entries))
 	existingKeys := make(map[string]struct{}, len(entries))
 	for _, entry := range entries {
+		if entry.Origin != nil {
+			existingKeys[originCandidateKey(entry.Origin)] = struct{}{}
+			continue
+		}
 		existingTitles[strings.ToLower(entry.Title)] = struct{}{}
 		if key := candidateSemanticKey(entry.Type, entry.Title, entry.Summary, ""); key != "" {
 			existingKeys[key] = struct{}{}
@@ -293,7 +305,7 @@ func (e *Extractor) captureCandidates(candidates []Candidate) ([]Candidate, erro
 	existingFingerprints := make(map[string]struct{}, len(stored))
 	for _, candidate := range stored {
 		existingFingerprints[candidate.Fingerprint] = struct{}{}
-		if key := candidateSemanticKey(candidate.Type, candidate.Title, candidate.Summary, candidate.Content); key != "" {
+		if key := candidateDedupeKey(candidate); key != "" {
 			existingKeys[key] = struct{}{}
 		}
 	}
@@ -315,8 +327,8 @@ func (e *Extractor) captureCandidates(candidates []Candidate) ([]Candidate, erro
 
 	added := make([]Candidate, 0, len(candidates))
 	for _, candidate := range candidates {
-		key := candidateSemanticKey(candidate.Type, candidate.Title, candidate.Summary, candidate.Content)
-		if _, exists := existingTitles[strings.ToLower(candidate.Title)]; exists {
+		key := candidateDedupeKey(candidate)
+		if _, exists := existingTitles[strings.ToLower(candidate.Title)]; exists && candidate.Origin == nil {
 			continue
 		}
 		if _, exists := existingFingerprints[candidate.Fingerprint]; exists {
@@ -522,6 +534,16 @@ func candidateSemanticKey(candidateType Type, title, summary, content string) st
 	return string(candidateType) + "|" + text
 }
 
+func originCandidateKey(origin *Origin) string {
+	return fmt.Sprintf("evidence:%s:%s:%d", origin.ContextID, origin.FactID, origin.FactVersion)
+}
+func candidateDedupeKey(candidate Candidate) string {
+	if candidate.Origin != nil {
+		return originCandidateKey(candidate.Origin)
+	}
+	return candidateSemanticKey(candidate.Type, candidate.Title, candidate.Summary, candidate.Content)
+}
+
 func normalizeCandidateText(text string) string {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -648,6 +670,8 @@ func (m *Manager) AcceptCandidate(fingerprint string) (*Entry, error) {
 // AcceptCandidateWithOptions stores one candidate as durable memory and allows
 // additional promotion options such as pinning it into the stable core layer.
 func (m *Manager) AcceptCandidateWithOptions(input AcceptCandidateInput) (*Entry, error) {
+	unlock := m.lockCandidates()
+	defer unlock()
 	fingerprint := strings.TrimSpace(input.Fingerprint)
 	if fingerprint == "" {
 		return nil, fmt.Errorf("missing fingerprint")
@@ -671,15 +695,11 @@ func (m *Manager) AcceptCandidateWithOptions(input AcceptCandidateInput) (*Entry
 	if match == nil {
 		return nil, fmt.Errorf("candidate not found")
 	}
+	if match.Origin != nil && m.originValidator != nil && !m.originValidator(*match.Origin) {
+		return nil, fmt.Errorf("candidate source changed or is no longer confirmed; review the current desktop fact")
+	}
 
-	entry, err := m.Remember(SaveInput{
-		Title:   match.Title,
-		Summary: match.Summary,
-		Content: match.Content,
-		Type:    match.Type,
-		Source:  match.Source,
-		Tags:    candidateAcceptTags(input.AlwaysInclude),
-	})
+	entry, err := m.acceptCandidateRecord(*match, input.AlwaysInclude)
 	if err != nil {
 		return nil, err
 	}
@@ -711,6 +731,8 @@ func candidateAcceptTags(alwaysInclude bool) []string {
 
 // DismissCandidate removes one candidate from the inbox without storing it.
 func (m *Manager) DismissCandidate(fingerprint string) (*Candidate, error) {
+	unlock := m.lockCandidates()
+	defer unlock()
 	fingerprint = strings.TrimSpace(fingerprint)
 	if fingerprint == "" {
 		return nil, fmt.Errorf("missing fingerprint")
@@ -778,7 +800,7 @@ func (m *Manager) recordCandidateSuppression(candidate Candidate) error {
 	now := time.Now().UTC()
 	suppression := CandidateSuppression{
 		Fingerprint: candidate.Fingerprint,
-		Key:         candidateSemanticKey(candidate.Type, candidate.Title, candidate.Summary, candidate.Content),
+		Key:         candidateDedupeKey(candidate),
 		Source:      candidate.Source,
 		CreatedAt:   now,
 		ExpiresAt:   now.Add(candidateSuppressionTTL),
@@ -888,4 +910,38 @@ func FormatCandidates(candidates []Candidate) string {
 		lines = append(lines, fmt.Sprintf("- [%s] %s — %s", candidate.Type, candidate.Title, candidate.Summary))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// Promotion updates its own evidence lineage and never folds a replacement into
+// stale prose or overwrites a different desktop's same-titled knowledge.
+func (m *Manager) acceptCandidateRecord(candidate Candidate, always bool) (*Entry, error) {
+	expiry := time.Time{}
+	if candidate.Origin != nil && candidate.Origin.ValidUntil != "" {
+		expiry, _ = time.Parse(time.RFC3339, candidate.Origin.ValidUntil)
+	}
+	tags := candidateAcceptTags(always)
+	if candidate.Origin != nil {
+		entries, err := m.readEntries()
+		if err != nil {
+			return nil, err
+		}
+		for _, old := range entries {
+			if old.Origin != nil && old.Origin.ContextID == candidate.Origin.ContextID && old.Origin.FactID == candidate.Origin.FactID {
+				for _, other := range entries {
+					if other.ID != old.ID && strings.EqualFold(other.Title, candidate.Title) {
+						candidate.Title = old.Title
+						break
+					}
+				}
+				return m.Update(UpdateInput{Match: ForgetInput{File: old.File}, Title: candidate.Title, Summary: candidate.Summary, Content: candidate.Content, Type: candidate.Type, Source: candidate.Source, Origin: candidate.Origin, Tags: tags, ExpiresAt: &expiry})
+			}
+		}
+		for _, old := range entries {
+			if strings.EqualFold(old.Title, candidate.Title) {
+				candidate.Title += " [" + candidate.Origin.FactID + "]"
+				break
+			}
+		}
+	}
+	return m.Remember(SaveInput{Title: candidate.Title, Summary: candidate.Summary, Content: candidate.Content, Type: candidate.Type, Source: candidate.Source, Origin: candidate.Origin, Tags: tags, ExpiresAt: expiry})
 }

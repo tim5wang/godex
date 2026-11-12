@@ -18,7 +18,7 @@ import (
 )
 
 // schemaVersion is the current ordered migration version.
-const schemaVersion = 6
+const schemaVersion = 7
 
 // statusArkid is the terminal read-only status.
 const statusArchived = "archived"
@@ -171,7 +171,7 @@ func (s *Store) rebuildSearchIndexes() error {
 	rows, err := s.db.Query(`
 		SELECT tenant_id, id, context_id, title, content, kind, status, scope, subject, predicate,
 		       source, source_excerpt, source_revision, observed_at, verified_at,
-		       provenance, supersedes_id, memory_candidate_id, version, created_at
+		       provenance, supersedes_id, memory_candidate_id, version, created_at, valid_until
 		FROM wc_facts`)
 	if err != nil {
 		return err
@@ -186,7 +186,7 @@ func (s *Store) rebuildSearchIndexes() error {
 		err := rows.Scan(&tenantID, &item.ID, &item.ContextID, &item.Title, &item.Content, &item.Kind, &item.Status,
 			&item.Scope, &item.Subject, &item.Predicate, &item.Source, &item.SourceExcerpt, &item.SourceRevision,
 			&item.ObservedAt, &item.VerifiedAt, &item.Provenance, &item.SupersedesID, &item.MemoryCandidateID,
-			&item.Version, &item.CreatedAt)
+			&item.Version, &item.CreatedAt, &item.ValidUntil)
 		if err != nil {
 			rows.Close()
 			return err

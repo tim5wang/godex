@@ -426,7 +426,7 @@ func TestContextInspectorAggregatesMemoryPreviewAndHistoryRecall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("require session: %v", err)
 	}
-	if _, err := service.memoryManager().Remember(memory.SaveInput{
+	if _, err := service.personalMemory(memory.Owner{UserID: "local-operator"}).Remember(memory.SaveInput{
 		Title:   "Project Identity",
 		Summary: "Shared backend for web, TUI, and IM.",
 		Content: "This workspace centers on a shared Godex backend that serves Web, TUI, and IM channels.",
@@ -435,7 +435,7 @@ func TestContextInspectorAggregatesMemoryPreviewAndHistoryRecall(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("remember identity: %v", err)
 	}
-	if _, err := service.memoryManager().Remember(memory.SaveInput{
+	if _, err := service.personalMemory(memory.Owner{UserID: "local-operator"}).Remember(memory.SaveInput{
 		Title:   "Weixin attachments",
 		Summary: "Weixin attachment delivery needs careful protocol handling.",
 		Content: "When debugging weixin attachment delivery, prioritize artifact persistence and channel payload branches.",
@@ -3877,7 +3877,7 @@ func TestOpenSessionRelaySkipsLocalWorkspaceDirCheck(t *testing.T) {
 		Channel: "web",
 		Key:     "relay-session",
 		Metadata: map[string]string{
-			sessionProjectDirMetadataKey:   missing,
+			sessionProjectDirMetadataKey:    missing,
 			sessionExecutionModeMetadataKey: "relay:node-remote",
 		},
 	})
@@ -4025,17 +4025,25 @@ func TestSteeringMessageInjectedIntoRunningTurn(t *testing.T) {
 		t.Fatal("timed out waiting for second model call after injection")
 	}
 
+	// started signals entry before the stub records the request. Wait for that
+	// record as well; observing the signal alone races the assertion below.
 	var secondReq protocol.Request
-	func() {
+	var recorded int
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
 		caller.mu.Lock()
-		defer caller.mu.Unlock()
-		if len(caller.requests) < 2 {
-			return
+		recorded = len(caller.requests)
+		if recorded >= 2 {
+			secondReq = caller.requests[1]
 		}
-		secondReq = caller.requests[1]
-	}()
+		caller.mu.Unlock()
+		if recorded >= 2 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 	if len(secondReq.Messages) == 0 {
-		t.Fatalf("expected second model request, got %d requests", len(caller.requests))
+		t.Fatalf("expected second model request, got %d requests", recorded)
 	}
 	found := false
 	for _, m := range secondReq.Messages {

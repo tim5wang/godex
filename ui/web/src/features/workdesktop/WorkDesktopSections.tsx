@@ -17,6 +17,7 @@ import { AcceptancePanel } from "./AcceptancePanel";
 import { AttentionInbox } from "./AttentionInbox";
 import { AttentionLedger } from "./AttentionLedger";
 import { KnowledgeCard } from "./KnowledgeCard";
+import { WorkMemoryPanel } from "./WorkMemoryPanel";
 import { InlineEdit } from "./workDesktopInline";
 import { LinkSessionPicker } from "./LinkSessionPicker";
 import { OverviewPanel } from "./OverviewPanel";
@@ -104,6 +105,7 @@ export function WorkDesktopSectionBoard(props: { section: string; data: WorkDesk
   if (props.section === "knowledge") {
     return (
       <div className="wd-stack">
+        <WorkMemoryPanel contextId={contextId!} readOnly={readOnly} onChanged={data.invalidateDetail} facts={facts} />
         <SectionHead
           icon={<FileTextOutlined aria-hidden="true" />}
           title={tr("knowledge")}
@@ -125,7 +127,7 @@ export function WorkDesktopSectionBoard(props: { section: string; data: WorkDesk
           readOnly={readOnly}
           tr={tr}
           trLabel={trLabel}
-          onAccept={(item: WorkFact) => data.reviewMutation.mutate({ factId: item.id, status: "confirmed", version: item.version })}
+          onAccept={(item: WorkFact, evidence) => data.reviewMutation.mutate({ factId: item.id, status: "confirmed", version: item.version, evidence })}
           onDismiss={(item: WorkFact) => data.reviewMutation.mutate({ factId: item.id, status: "rejected", version: item.version })}
           onPromote={(item: WorkFact) => data.promoteMutation.mutate(item.id)}
         />) : <Empty description={tr("noChanges")} />}

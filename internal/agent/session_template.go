@@ -42,7 +42,7 @@ func (a *Agent) ApplyTemplate(t templates.AgentTemplate) {
 	// Scoped template memory pins the session's durable memory to its own
 	// partition (even when the global memory.session_scope is disabled).
 	// Shared (default) keeps whatever the global config produced.
-	if memoryMode == templates.MemoryScoped {
+	if memoryMode == templates.MemoryScoped && a.memoryScopeKey == "" {
 		a.applyScopedMemory()
 	}
 

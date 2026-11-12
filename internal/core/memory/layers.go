@@ -85,7 +85,15 @@ func (m *Manager) buildContextLayers(query string, trackReferences bool) (Contex
 			excluded["manual_only"]++
 		}
 	}
-	entries = activeEntries(entries)
+	filtered := entries[:0]
+	for _, entry := range entries {
+		if entry.Origin != nil && m.originValidator != nil && !m.originValidator(*entry.Origin) {
+			excluded["source_invalid"]++
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	entries = activeEntries(filtered)
 	if len(entries) == 0 {
 		return ContextLayers{Excluded: excluded}, nil
 	}
@@ -355,6 +363,9 @@ func prioritizeRelevantByScope(memories []RelevantMemory, scopes []string, limit
 	}
 
 	sort.SliceStable(matched, func(i, j int) bool {
+		if matched[i].memory.Score != matched[j].memory.Score {
+			return matched[i].memory.Score > matched[j].memory.Score
+		}
 		if matched[i].affinity == matched[j].affinity {
 			return matched[i].index < matched[j].index
 		}
@@ -579,4 +590,27 @@ func truncateTextToTokenBudget(text string, maxTokens int) string {
 		return "..."
 	}
 	return ""
+}
+
+// MergeContextLayers shares only already-authorized stores. Scope selection
+// happens before ranking; budgets cover the combined result, not each store.
+func MergeContextLayers(primary, shared ContextLayers) ContextLayers {
+	merge := func(a, b []RelevantMemory, limit int) []RelevantMemory {
+		seen := map[string]bool{}
+		var out []RelevantMemory
+		for _, v := range append(append([]RelevantMemory{}, a...), b...) {
+			if !seen[v.ID] {
+				seen[v.ID] = true
+				out = append(out, v)
+			}
+		}
+		return trimMemoriesToTokenBudget(out, limit)
+	}
+	out := ContextLayers{Identity: merge(primary.Identity, shared.Identity, maxIdentityContextTokens), Core: merge(primary.Core, shared.Core, maxCoreContextTokens), Relevant: merge(primary.Relevant, shared.Relevant, maxRelevantContextTokens), Excluded: map[string]int{}}
+	for _, m := range []map[string]int{primary.Excluded, shared.Excluded} {
+		for k, v := range m {
+			out.Excluded[k] += v
+		}
+	}
+	return out
 }

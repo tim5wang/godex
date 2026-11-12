@@ -68,6 +68,7 @@ export type EditorValues = {
   source?: string;
   sourceExcerpt?: string;
   observedAt?: string;
+  validUntil?: string;
   provenance?: string;
   supersedes?: string;
   factKind?: string;

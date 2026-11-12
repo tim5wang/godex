@@ -43,7 +43,11 @@ type memoryToolArgs struct {
 }
 
 func NewMemoryTool(writer MemoryWriter) Tool {
-	return NewTypedTool(NewToolSpec("memory", "Manage durable cross-session memory. Use action to select operation:", map[string]interface{}{
+	description := "Manage durable cross-session memory. Use action to select operation:"
+	if scoped, ok := writer.(interface{ MemoryDescription() string }); ok {
+		description = scoped.MemoryDescription()
+	}
+	return NewTypedTool(NewToolSpec("memory", description, map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
 			"action":        map[string]interface{}{"type": "string", "enum": []string{"list", "get", "search", "candidates", "accept", "dismiss", "remember", "update", "forget"}},
@@ -140,51 +144,7 @@ func NewMemoryTool(writer MemoryWriter) Tool {
 			}}, nil
 
 		case "update":
-			updater, ok := writer.(interface {
-				Update(memory.UpdateInput) (*memory.Entry, error)
-			})
-			if !ok {
-				return ToolResult{}, fmt.Errorf("memory update is unavailable")
-			}
-			match := strings.TrimSpace(args.IDOrTitle)
-			if match == "" {
-				match = args.Title
-			}
-			if match == "" {
-				return ToolResult{}, fmt.Errorf("missing id_or_title for update action")
-			}
-			old, err := writer.Get(match)
-			if err != nil {
-				return ToolResult{}, err
-			}
-			expires, err := parseMemoryExpiry(args.ExpiresAt)
-			if err != nil {
-				return ToolResult{}, err
-			}
-			input := memory.UpdateInput{Match: memory.ForgetInput{File: old.File}, Title: old.Title, Summary: old.Summary, Content: old.Content, Type: old.Type, Source: old.Source, Tags: old.Tags, ExpiresAt: expires, SupersededBy: args.SupersededBy, RecallPolicy: args.RecallPolicy}
-			if args.Title != "" {
-				input.Title = args.Title
-			}
-			if args.Summary != "" {
-				input.Summary = args.Summary
-			}
-			if args.Content != "" {
-				input.Content = args.Content
-			}
-			if args.MemoryType != "" {
-				input.Type = memory.Type(args.MemoryType)
-			}
-			if args.Source != "" {
-				input.Source = args.Source
-			}
-			if args.Tags != nil {
-				input.Tags = args.Tags
-			}
-			entry, err := updater.Update(input)
-			if err != nil {
-				return ToolResult{}, err
-			}
-			return ToolResult{Structured: entry}, nil
+			return updateMemoryTool(writer, args)
 
 		case "remember":
 			if args.SupersededBy != nil {
@@ -274,4 +234,53 @@ func parseMemoryExpiry(value *string) (*time.Time, error) {
 		return nil, fmt.Errorf("invalid expires_at: use RFC3339")
 	}
 	return &ts, nil
+}
+
+func updateMemoryTool(writer MemoryWriter, args memoryToolArgs) (ToolResult, error) {
+	updater, ok := writer.(interface {
+		Update(memory.UpdateInput) (*memory.Entry, error)
+	})
+	if !ok {
+		return ToolResult{}, fmt.Errorf("memory update is unavailable")
+	}
+	match := strings.TrimSpace(args.IDOrTitle)
+	if match == "" {
+		match = args.Title
+	}
+	if match == "" {
+		return ToolResult{}, fmt.Errorf("missing id_or_title for update action")
+	}
+	old, err := writer.Get(match)
+	if err != nil {
+		return ToolResult{}, err
+	}
+	expires, err := parseMemoryExpiry(args.ExpiresAt)
+	if err != nil {
+		return ToolResult{}, err
+	}
+	input := memory.UpdateInput{Match: memory.ForgetInput{File: old.File}, Title: old.Title, Summary: old.Summary, Content: old.Content, Type: old.Type, Source: old.Source, Tags: old.Tags, ExpiresAt: expires, SupersededBy: args.SupersededBy, RecallPolicy: args.RecallPolicy}
+	if args.Title != "" {
+		input.Title = args.Title
+	}
+	if args.Summary != "" {
+		input.Summary = args.Summary
+	}
+	if args.Content != "" {
+		input.Content = args.Content
+	}
+	if args.MemoryType != "" {
+		input.Type = memory.Type(args.MemoryType)
+	}
+	if args.Source != "" {
+		input.Source = args.Source
+	}
+	if args.Tags != nil {
+		input.Tags = args.Tags
+	}
+	entry, err := updater.Update(input)
+	if err != nil {
+		return ToolResult{}, err
+	}
+	return ToolResult{Structured: entry}, nil
+
 }

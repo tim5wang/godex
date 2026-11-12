@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/tim5wang/godex/internal/core/workcontext"
 	"github.com/tim5wang/godex/internal/plugins/taskboard"
@@ -185,7 +186,30 @@ func registerWorkContextRoutes(mux *http.ServeMux, service *backend.Service, pro
 		return service.CaptureWorkResult(r.Context(), scope, id(r), r.PathValue("delegationID"))
 	})
 	handle("POST /v1/work-contexts/{id}/organize", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
-		return service.OrganizeWorkContext(r.Context(), scope, id(r))
+		var options backend.DreamOptions
+		if err := decodeJSONAllowEmpty(r, &options); err != nil {
+			return nil, invalidJSON(err)
+		}
+		return service.OrganizeWorkContext(r.Context(), scope, id(r), options)
+	})
+	handle("GET /v1/work-contexts/{id}/memory", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
+		return s.MemoryState(r.Context(), scope, id(r))
+	})
+	handle("PATCH /v1/work-contexts/{id}/memory", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
+		var input struct {
+			Enabled         bool `json:"enabled"`
+			IntervalSeconds int  `json:"interval_seconds"`
+		}
+		if err := decodeJSON(r, &input); err != nil {
+			return nil, invalidJSON(err)
+		}
+		return s.ConfigureDream(r.Context(), scope, id(r), input.Enabled, input.IntervalSeconds, time.Now())
+	})
+	handle("POST /v1/work-contexts/{id}/memory/runs/{runID}/revert", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
+		return s.RevertDream(r.Context(), scope, id(r), r.PathValue("runID"))
+	})
+	handle("GET /v1/work-contexts/{id}/memory/runs", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
+		return s.DreamRuns(r.Context(), scope, id(r))
 	})
 	handle("GET /v1/work-contexts/{id}/events", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
 		detail, err := s.Get(r.Context(), scope, id(r))

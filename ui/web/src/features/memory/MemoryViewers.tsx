@@ -10,6 +10,13 @@ export function MemoryViewer({ item }: { item: MemoryRecord | MemoryCandidate })
         { key: "type", label: "Type", children: type },
         { key: "source", label: "Source", children: item.source || "-" },
         { key: "summary", label: "Summary", children: item.summary },
+        ...(item.origin ? [
+          { key: "desktop", label: "Source desktop / fact", children: `${item.origin.context_id} / ${item.origin.fact_id} v${item.origin.fact_version}` },
+          { key: "scope", label: "Applicability", children: item.origin.applicability },
+          { key: "revision", label: "Source revision", children: item.origin.source_revision || "-" },
+          { key: "observed", label: "Observed / verified", children: `${item.origin.observed_at || "-"} / ${item.origin.verified_at || "-"}` },
+          { key: "valid", label: "Valid until", children: item.origin.valid_until || "-" },
+        ] : []),
       ]} />
       <MarkdownContent content={item.content} />
     </Space>

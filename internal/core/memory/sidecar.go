@@ -75,6 +75,7 @@ func (m *Manager) searchWithSidecar(opts SearchOptions) ([]StoredMemory, error) 
 			return nil, err
 		}
 		if entry, ok := metadata[record.ID]; ok {
+			record.Origin = entry.Origin
 			record.ExpiresAt = entry.ExpiresAt
 			record.SupersededBy = entry.SupersededBy
 			record.RecallPolicy = entry.RecallPolicy
@@ -85,7 +86,7 @@ func (m *Manager) searchWithSidecar(opts SearchOptions) ([]StoredMemory, error) 
 		if !entryStatusMatches(record.Entry, opts.Status) {
 			continue
 		}
-		if opts.Automatic && !entryAutoRecallEligible(record.Entry, time.Now()) {
+		if opts.Automatic && !m.autoRecallEligible(record.Entry, time.Now()) {
 			continue
 		}
 		if tagFilter != "" && !entryHasTag(record.Entry, tagFilter) {
@@ -99,12 +100,8 @@ func (m *Manager) searchWithSidecar(opts SearchOptions) ([]StoredMemory, error) 
 		if queryLower == "" && len(terms) == 0 {
 			score = 1
 		}
-		if _, ok := ftsMatchedIDs[record.ID]; ok {
-			if score == 0 {
-				score = 5
-			} else {
-				score += 5
-			}
+		if _, ok := ftsMatchedIDs[record.ID]; ok && score > 0 {
+			score += 5
 		}
 		if score == 0 {
 			continue

@@ -46,7 +46,7 @@ type SessionContextInspector struct {
 // transcript archive state, latest recall query, memory preview, and most
 // recent history-search policy decision for one session.
 func (s *Service) ContextInspector(ctx context.Context, sessionID string) (SessionContextInspector, error) {
-	session, err := s.requireSession(sessionID)
+	session, err := s.requireSessionFor(ctx, sessionID)
 	if err != nil {
 		return SessionContextInspector{}, err
 	}
@@ -77,8 +77,8 @@ func (s *Service) ContextInspector(ctx context.Context, sessionID string) (Sessi
 
 // ContextUsage returns live provider usage counters without constructing the
 // larger context/memory Inspector snapshot.
-func (s *Service) ContextUsage(_ context.Context, sessionID string) (tools.ContextUsageInspection, error) {
-	session, err := s.requireSession(sessionID)
+func (s *Service) ContextUsage(ctx context.Context, sessionID string) (tools.ContextUsageInspection, error) {
+	session, err := s.requireSessionFor(ctx, sessionID)
 	if err != nil {
 		return tools.ContextUsageInspection{}, err
 	}

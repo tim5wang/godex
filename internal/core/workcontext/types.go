@@ -133,6 +133,7 @@ type Delegation struct {
 	CreatedAt string `json:"created_at"`
 }
 type Fact struct {
+	ValidUntil        string `json:"valid_until,omitempty"`
 	ID                string `json:"id"`
 	ContextID         string `json:"context_id"`
 	Title             string `json:"title"`
@@ -154,6 +155,7 @@ type Fact struct {
 	MemoryCandidateID string `json:"memory_candidate_id"`
 }
 type FactInput struct {
+	ValidUntil     string `json:"valid_until,omitempty"`
 	Title          string `json:"title"`
 	Content        string `json:"content"`
 	Kind           string `json:"kind"`
@@ -168,8 +170,12 @@ type FactInput struct {
 	SupersedesID   string `json:"supersedes_id"`
 }
 type FactReview struct {
-	Status    string `json:"status"`
-	IfVersion int    `json:"if_version"`
+	ObservedAt     *string `json:"observed_at,omitempty"`
+	Source         *string `json:"source,omitempty"`
+	SourceRevision *string `json:"source_revision,omitempty"`
+	ValidUntil     *string `json:"valid_until,omitempty"`
+	Status         string  `json:"status"`
+	IfVersion      int     `json:"if_version"`
 }
 type Relation struct {
 	ID        string `json:"id"`

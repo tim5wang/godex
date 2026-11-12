@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/tim5wang/godex/internal/platform/retrieval"
 	"strings"
+	"time"
 )
 
 // CreateFact records a new fact. Facts always start as candidates; confirmation
@@ -33,6 +35,9 @@ func (s *Store) CreateFact(ctx context.Context, scope Scope, contextID string, i
 	if err := validateFactSource(input.Source, false); err != nil {
 		return Fact{}, err
 	}
+	if err := validateObservedAt(input.ValidUntil); err != nil {
+		return Fact{}, err
+	}
 	if err := validateObservedAt(input.ObservedAt); err != nil {
 		return Fact{}, err
 	}
@@ -58,6 +63,7 @@ func (s *Store) CreateFact(ctx context.Context, scope Scope, contextID string, i
 		}
 	}
 	item := Fact{
+		ValidUntil:     input.ValidUntil,
 		ID:             newID(),
 		ContextID:      contextID,
 		Title:          strings.TrimSpace(input.Title),
@@ -120,7 +126,26 @@ func (s *Store) ReviewFact(ctx context.Context, scope Scope, contextID, factID s
 	if item.Version != review.IfVersion {
 		return Fact{}, ErrConflict
 	}
+	if review.Source != nil {
+		item.Source = strings.TrimSpace(*review.Source)
+	}
+	if review.ObservedAt != nil {
+		item.ObservedAt = strings.TrimSpace(*review.ObservedAt)
+	}
+	if review.SourceRevision != nil {
+		item.SourceRevision = strings.TrimSpace(*review.SourceRevision)
+	}
+	if review.ValidUntil != nil {
+		item.ValidUntil = strings.TrimSpace(*review.ValidUntil)
+	}
+	if err := validateObservedAt(item.ValidUntil); err != nil {
+		return Fact{}, err
+	}
+
 	if status == "confirmed" {
+		if strings.HasPrefix(item.Source, "dream://") {
+			return Fact{}, fmt.Errorf("%w: a Dream digest is not source evidence; supply the reviewed original source and observation time", ErrInvalid)
+		}
 		if err := validateScopeJSON(item.Scope); err != nil {
 			return Fact{}, fmt.Errorf("%w: cannot confirm a fact without a valid scope", ErrInvalid)
 		}
@@ -140,12 +165,12 @@ func (s *Store) ReviewFact(ctx context.Context, scope Scope, contextID, factID s
 	now := nowRFC3339()
 	item.Status = status
 	item.Version++
-	if status == "confirmed" && item.VerifiedAt == "" {
+	if status == "confirmed" {
 		item.VerifiedAt = now
 	}
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE wc_facts SET status=?, verified_at=?, version=? WHERE tenant_id=? AND id=? AND context_id=? AND version=?`,
-		item.Status, item.VerifiedAt, item.Version, tenantID, factID, contextID, review.IfVersion); err != nil {
+		UPDATE wc_facts SET status=?, verified_at=?, version=?,source=?,observed_at=?,source_revision=?,valid_until=? WHERE tenant_id=? AND id=? AND context_id=? AND version=?`,
+		item.Status, item.VerifiedAt, item.Version, item.Source, item.ObservedAt, item.SourceRevision, item.ValidUntil, tenantID, factID, contextID, review.IfVersion); err != nil {
 		return Fact{}, err
 	}
 	var count int
@@ -211,12 +236,11 @@ func (s *Store) SetFactCandidate(ctx context.Context, scope Scope, contextID, fa
 		return Fact{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE wc_facts SET memory_candidate_id=?, version=version+1 WHERE tenant_id=? AND id=? AND context_id=?`,
+		UPDATE wc_facts SET memory_candidate_id=? WHERE tenant_id=? AND id=? AND context_id=?`,
 		candidateID, tenantID, factID, contextID); err != nil {
 		return Fact{}, err
 	}
 	item.MemoryCandidateID = candidateID
-	item.Version++
 	now := nowRFC3339()
 	if err := recordEventTx(ctx, tx, tenantID, contextID, "fact_candidate_proposed",
 		"提交记忆候选", "store", fmt.Sprintf("fact_candidate:%s:%s", factID, candidateID), now); err != nil {
@@ -244,7 +268,10 @@ func (s *Store) Recall(ctx context.Context, scope Scope, contextID, rangeScope, 
 	if len(contextIDs) == 0 {
 		return []Fact{}, nil
 	}
-	terms := recallTerms(query)
+	terms := retrieval.Terms(query)
+	if strings.TrimSpace(query) != "" && len(terms) == 0 {
+		return []Fact{}, nil
+	}
 	if len(terms) == 0 {
 		return s.factsForContexts(ctx, tenantID, contextIDs)
 	}
@@ -442,7 +469,7 @@ func (s *Store) factsByIDs(ctx context.Context, tenantID string, ids map[string]
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, context_id, title, content, kind, status, scope, subject, predicate,
 		       source, source_excerpt, source_revision, observed_at, verified_at,
-		       provenance, supersedes_id, memory_candidate_id, version, created_at
+		       provenance, supersedes_id, memory_candidate_id, version, created_at, valid_until
 		FROM wc_facts
 		WHERE tenant_id=? AND id IN (`+strings.Join(placeholders, ",")+`)
 		  AND `+recallStatusFilterSQL+`
@@ -520,11 +547,11 @@ func insertFactTx(ctx context.Context, tx *sql.Tx, tenantID, ownerID string, ite
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO wc_facts(tenant_id, id, context_id, owner_id, title, content, kind, status, scope,
 			subject, predicate, source, source_excerpt, source_revision, observed_at, verified_at,
-			provenance, supersedes_id, memory_candidate_id, version, created_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			provenance, supersedes_id, memory_candidate_id, version, created_at, valid_until)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		tenantID, item.ID, item.ContextID, ownerID, item.Title, item.Content, item.Kind, item.Status, item.Scope,
 		item.Subject, item.Predicate, item.Source, item.SourceExcerpt, item.SourceRevision, item.ObservedAt, item.VerifiedAt,
-		item.Provenance, item.SupersedesID, item.MemoryCandidateID, item.Version, item.CreatedAt)
+		item.Provenance, item.SupersedesID, item.MemoryCandidateID, item.Version, item.CreatedAt, item.ValidUntil)
 	return err
 }
 
@@ -592,7 +619,7 @@ func getFactTx(ctx context.Context, tx *sql.Tx, tenantID, contextID, factID stri
 	row := tx.QueryRowContext(ctx, `
 		SELECT id, context_id, title, content, kind, status, scope, subject, predicate,
 		       source, source_excerpt, source_revision, observed_at, verified_at,
-		       provenance, supersedes_id, memory_candidate_id, version, created_at
+		       provenance, supersedes_id, memory_candidate_id, version, created_at, valid_until
 		FROM wc_facts WHERE tenant_id=? AND context_id=? AND id=?`, tenantID, contextID, factID)
 	item, err := scanFactRow(row)
 	if err != nil {
@@ -606,7 +633,7 @@ func (s *Store) listFacts(ctx context.Context, tenantID, contextID string) ([]Fa
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, context_id, title, content, kind, status, scope, subject, predicate,
 		       source, source_excerpt, source_revision, observed_at, verified_at,
-		       provenance, supersedes_id, memory_candidate_id, version, created_at
+		       provenance, supersedes_id, memory_candidate_id, version, created_at, valid_until
 		FROM wc_facts WHERE tenant_id=? AND context_id=?
 		ORDER BY created_at DESC, id`, tenantID, contextID)
 	if err != nil {
@@ -630,9 +657,28 @@ func scanFactRow(scanner interface{ Scan(...any) error }) (Fact, error) {
 	err := scanner.Scan(&item.ID, &item.ContextID, &item.Title, &item.Content, &item.Kind, &item.Status,
 		&item.Scope, &item.Subject, &item.Predicate, &item.Source, &item.SourceExcerpt, &item.SourceRevision,
 		&item.ObservedAt, &item.VerifiedAt, &item.Provenance, &item.SupersedesID, &item.MemoryCandidateID,
-		&item.Version, &item.CreatedAt)
+		&item.Version, &item.CreatedAt, &item.ValidUntil)
 	if err != nil {
 		return Fact{}, err
 	}
 	return item, nil
+}
+
+// Current distinguishes a past confirmed observation from a presently valid fact.
+func (f Fact) Current(now time.Time) bool {
+	if f.Status != "confirmed" {
+		return false
+	}
+	if f.ValidUntil == "" {
+		return true
+	}
+	until, err := time.Parse(time.RFC3339, f.ValidUntil)
+	return err == nil && now.Before(until)
+}
+
+// ExpireFacts marks declared deadlines once. Reading/recalling does not move
+// these deadlines or count as new source evidence.
+func (s *Store) ExpireFacts(ctx context.Context, now time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE wc_facts SET status='stale',version=version+1 WHERE status='confirmed' AND valid_until<>'' AND julianday(valid_until)<=julianday(?)`, now.UTC().Format(time.RFC3339Nano))
+	return err
 }

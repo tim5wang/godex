@@ -153,7 +153,11 @@ func apiRequestTimeout(cfg *config.Config) time.Duration {
 // It is shared by the default workspace-wide wiring and the per-session scoped
 // wiring (roadmap 6.2) so both paths get identical extraction/consolidation.
 func buildMemoryStack(cfg *config.Config, client conversation.Caller, memoryMgr *memory.Manager) (*memory.Extractor, memory.Strategy) {
-	memoryExt := memory.NewExtractor(memoryMgr, cfg.TempDir)
+	tempDir := cfg.TempDir
+	if memoryMgr.Scope() != "" {
+		tempDir = ""
+	}
+	memoryExt := memory.NewExtractor(memoryMgr, tempDir)
 	memoryStrategy := memory.NewStrategy(memory.StrategyOptions{
 		Kind:    memory.ParseStrategyKind(cfg.Memory.Strategy),
 		Extract: memoryExt,

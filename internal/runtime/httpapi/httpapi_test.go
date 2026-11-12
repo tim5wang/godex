@@ -2143,7 +2143,7 @@ func TestSessionContextInspectorEndpoint(t *testing.T) {
 		{Content: []protocol.Block{protocol.TextBlock("done")}},
 		{Content: []protocol.Block{protocol.TextBlock("done")}},
 	}}), commands.NewService(cfg))
-	if _, err := service.RememberMemory(context.Background(), memory.SaveInput{
+	if _, err := service.RememberMemory(memory.WithOwner(context.Background(), memory.Owner{UserID: "local-operator"}), memory.SaveInput{
 		Title:   "Project Identity",
 		Summary: "Shared backend workspace.",
 		Content: "This workspace routes chat, automation, and IM through a shared Godex backend.",
@@ -2152,7 +2152,7 @@ func TestSessionContextInspectorEndpoint(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("remember identity memory: %v", err)
 	}
-	if _, err := service.RememberMemory(context.Background(), memory.SaveInput{
+	if _, err := service.RememberMemory(memory.WithOwner(context.Background(), memory.Owner{UserID: "local-operator"}), memory.SaveInput{
 		Title:   "Weixin screenshots",
 		Summary: "Weixin screenshot delivery needs browser artifact handling.",
 		Content: "When the user asks about weixin screenshots, prioritize browser artifact persistence and channel delivery branches.",

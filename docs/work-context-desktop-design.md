@@ -1,9 +1,11 @@
 # 工作桌面与工作委派设计（Work Context Desktop）
 
 > 状态：Implemented（WD1–WD3 已落地：个人 SQLite 持久化 + 真实委派/知识回流联动；团队共享与 PG 迁移仍为 WD4 待评估）。
-> 日期：2026-10-29（WD0 草案）/ 2026-10-30（WD1–WD3 实现）
+> 日期：2026-10-29（WD0 草案）/ 2026-10-30（WD1–WD3 实现）/ 2026-11-12（桌面记忆边界与 Dream）
 > 关联：[taskboard-plugin-design.md](./taskboard-plugin-design.md)、[taskboard-collaboration-design.md](./taskboard-collaboration-design.md)、[memory-design-principles.md](./memory-design-principles.md)、[scope-isolation-design.md](./scope-isolation-design.md)
 > 定位：长期工作主线是对象，工作桌面是视图，任务看板是委派执行器，记忆是可治理的知识，不引入第二套 Agent Runtime。
+
+当前记忆归属、有效性、迁移和 Dream 接口以 [Memory Design Principles](./memory-design-principles.md) 的 2026-11-12 章节为准；下文 WD0/WD1 历史实现记录不覆盖该契约。
 
 ## 1. 需求与已确认约束
 
@@ -19,7 +21,7 @@
 
 1. 新增一级入口「工作桌面」，现有「任务看板」保留并逐步补齐工作委派入口，暂不全局改名。
 2. 工作上下文 WorkContext 与 Taskboard Project、Session、运行节点、知识条目分别建模。
-3. 工作桌面是关注焦点，不是权限隔离边界；跨桌面共享不得绕过租户、用户和资源权限。
+3. 工作桌面同时限定默认工作记忆范围；同一桌面的多个会话共享工作状态与知识，跨桌面自动复用须显式提炼审阅。资源关联不扩大租户、用户、记忆或执行权限。
 4. 首版正式存储只使用已有 `database/sql` + `modernc.org/sqlite`。不引入 ORM、图数据库、向量服务、Redis、消息队列。
 5. PostgreSQL 是后续迁移目标，不在首版增加驱动、双写、通用 SQL 方言框架。
 6. Pieces 不可用；Screenpipe 不是前置依赖。后续如获安全及许可批准，只作为可选痕迹来源。
@@ -273,8 +275,8 @@ FTS5 是可重建投影，只索引允许检索的标题/背景/检查点/授权
 Agent 的 `work_context` 工具（桌面联动会话默认激活）：actions = list_streams/get/brief/recall/checkpoint/propose_fact/supersede。`list_streams` 按关键词检索本人其它主线（含检查点文本、排除归档），不需要当前会话已绑定；其余 action 都作用于已绑定主线。`propose_fact` 只在有 scope/source/observed_at 时写入候选事实；`supersede` 通过 `supersedes_id` 引用旧事实提出替代（前任只在替代被确认后才作废，不静默覆盖）。工作记忆由 Agent 随工作过程主动维护，而不是靠人逐项填表单：
 
 - **工具层（Agent 主动维护）**：会话与主线绑定时注入维护规约提示（何时更新检查点、何时沉淀事实、冲突时如何替代、何类内容标为未核实），Agent 在轮次边界调用 `work_context` 完成更新。
-- **按需整理**：`POST /v1/work-contexts/{id}/organize` 在主线已绑定的会话上排入一个**仅维护**轮次（`source=background`，提示明确要求不执行、不查生产），由 Agent 巡检并报告；无绑定会话或已归档时拒绝，不静默新建会话。
-- **定期整理/冲突解决**：由既有 cron/heartbeat 周期性触发同一 organize 入口，不在桌面里另造定时器。
+- **按需整理**：`POST /v1/work-contexts/{id}/organize` 创建独立、无工具的 Dream 后台任务，不依赖绑定会话。无变化直接跳过；`force:true` 显式全量重整。归档桌面拒绝写入。
+- **定期整理/冲突建议**：服务级每分钟检查已到期且有语义增量的桌面，与手动共用 Dream 入口。每桌面持久化间隔、开关、source/processed 水位与 lease；无变化零模型调用。Dream 仅产出派生摘要、建议和待审阅候选，不能替代人工确认。
 
 `work_context` 不会因为知道 context ID 就获得文件或生产权限；已有 taskboard 工具仍是执行状态的权威入口。
 

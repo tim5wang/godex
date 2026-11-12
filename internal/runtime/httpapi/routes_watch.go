@@ -72,6 +72,7 @@ func withWatchScope(auth *watchauth.Service, scope string) func(http.Handler) ht
 			// Attach the device's identity (P0 §7): these routes authenticated but
 			// carried no Principal, so identity-based decisions saw nobody.
 			ctx = WithPrincipal(ctx, watchDevicePrincipal(device))
+			ctx = withWatchMemoryOwner(ctx, device)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

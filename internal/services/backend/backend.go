@@ -12,6 +12,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/insights"
 	"github.com/tim5wang/godex/internal/core/mcp"
+	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/core/teammate"
 	"github.com/tim5wang/godex/internal/core/workcontext"
 	"github.com/tim5wang/godex/internal/domain/events"
@@ -84,6 +85,7 @@ type SessionLocator struct {
 
 // SessionManifest is the persisted session metadata file.
 type SessionManifest struct {
+	MemoryOwner            memory.Owner        `json:"memory_owner,omitempty"`
 	SessionID              string              `json:"session_id"`
 	Locator                SessionLocator      `json:"locator"`
 	Identity               agent.AgentIdentity `json:"identity,omitempty"`
@@ -371,6 +373,14 @@ type Service struct {
 	workContextStore    *workcontext.Store
 	workContextErr      error
 	workContextBridgeMu sync.Mutex
+	dreamMu             sync.Mutex
+	dreamCtx            context.Context
+	dreamCancel         context.CancelFunc
+	dreamLoopCancel     context.CancelFunc
+	dreamClosing        bool
+	dreamWG             sync.WaitGroup
+	dreamLoopWG         sync.WaitGroup
+	dreamOrganize       func(context.Context, string, string) (string, error)
 
 	// Attention sweep: records delegated-card progress as events even when nobody
 	// is looking at the desktop, and pushes the subset that needs a human. The
@@ -401,6 +411,9 @@ type sessionLoad struct {
 }
 
 type sessionState struct {
+	memoryOwner            memory.Owner
+	workContextScope       workcontext.Scope
+	workContextID          string
 	id                     string
 	locator                SessionLocator
 	title                  string

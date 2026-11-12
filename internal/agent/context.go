@@ -162,11 +162,14 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 			if len(injectedMemory.Identity)+len(injectedMemory.Core)+len(injectedMemory.Relevant) == 0 {
 				return
 			}
-			before := memoryManager.ContextRevision()
+			before := a.memoryContextRevision()
 			memoryManager.RecordInjection(injectedMemory)
+			if a.memorySharedMgr != nil {
+				a.memorySharedMgr.RecordInjection(injectedMemory)
+			}
 			a.mu.Lock()
 			if a.memoryRecallManager == memoryManager && a.memoryRecallRevision == before {
-				a.memoryRecallRevision = memoryManager.ContextRevision()
+				a.memoryRecallRevision = a.memoryContextRevision()
 			}
 			a.mu.Unlock()
 		},
@@ -470,7 +473,7 @@ func (a *Agent) collectMemoryMessagesThrottled(history []protocol.Message) ([]pr
 		return nil, memory.ContextLayers{}, nil
 	}
 	query := protocol.LatestPersistentUserText(history)
-	revision := a.memoryMgr.ContextRevision()
+	revision := a.memoryContextRevision()
 	a.mu.Lock()
 	if query != a.memoryRecallQuery || a.memoryRecallManager != a.memoryMgr || a.memoryRecallRevision != revision {
 		a.memoryRecallQuery = query
@@ -489,7 +492,7 @@ func (a *Agent) collectMemoryMessagesThrottled(history []protocol.Message) ([]pr
 	a.mu.Lock()
 	if err == nil {
 		a.memoryRecallLayers = layers
-		a.memoryRecallRevision = a.memoryMgr.ContextRevision()
+		a.memoryRecallRevision = a.memoryContextRevision()
 	} else {
 		a.memoryRecallInjectCount = 0
 	}
@@ -604,6 +607,13 @@ func (a *Agent) collectMemoryMessagesReadOnly(history []protocol.Message) ([]pro
 	if err != nil {
 		return nil, memory.ContextLayers{}, err
 	}
+	if a.memorySharedMgr != nil {
+		shared, e := a.memorySharedMgr.PreviewContextLayers(query)
+		if e != nil {
+			return nil, memory.ContextLayers{}, e
+		}
+		layers = memory.MergeContextLayers(layers, shared)
+	}
 	if len(layers.Identity) == 0 && len(layers.Core) == 0 && len(layers.Relevant) == 0 {
 		return nil, layers, nil
 	}
@@ -614,7 +624,7 @@ func (a *Agent) collectMemoryMessagesReadOnly(history []protocol.Message) ([]pro
 	}
 
 	// Append relevant note references if notes manager is available.
-	if a.notesMgr != nil && strings.TrimSpace(query) != "" {
+	if a.memoryScopeKey == "" && a.notesMgr != nil && strings.TrimSpace(query) != "" {
 		notes, listErr := a.notesMgr.List(notes.SearchOptions{Query: query})
 		if listErr == nil && len(notes) > 0 {
 			var noteRefs strings.Builder
@@ -1076,6 +1086,9 @@ const maxRelevantMemoryContentRunes = 800
 func appendMemorySection(builder *strings.Builder, memories []memory.RelevantMemory, includeContent bool) {
 	for _, mem := range memories {
 		builder.WriteString(fmt.Sprintf("- %s [%s] (%s): %s\n", mem.Title, mem.Type, mem.File, mem.Summary))
+		if mem.Origin != nil {
+			fmt.Fprintf(builder, "  Applicability: %s; observed=%s; valid_until=%s\n", textutil.TruncateRunes(mem.Origin.Applicability, 120), mem.Origin.ObservedAt, mem.Origin.ValidUntil)
+		}
 		content := textutil.TruncateRunes(strings.TrimSpace(mem.Content), maxRelevantMemoryContentRunes)
 		if mem.SourceDocument != "" && (!includeContent || !strings.Contains(content, "Source document: "+mem.SourceDocument)) {
 			builder.WriteString(fmt.Sprintf("  Source document: %s\n", mem.SourceDocument))

@@ -44,11 +44,11 @@ func TestMemoryValidityEndpoints(t *testing.T) {
 		t.Fatalf("replacement relation lost: %+v", updated)
 	}
 	post("/memory/update", map[string]any{"match_file": current.File, "title": current.Title, "summary": current.Summary, "content": "new OCR command", "memory_type": "workflow", "expires_at": time.Now().Add(-time.Hour)})
-	rows, err := service.ListMemory(context.Background(), memory.SearchOptions{Query: "OCR"})
+	rows, err := service.ListMemory(memory.WithOwner(context.Background(), memory.Owner{UserID: "local-operator"}), memory.SearchOptions{Query: "OCR"})
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("invalid memories recalled: %+v %v", rows, err)
 	}
-	rows, err = service.ListMemory(context.Background(), memory.SearchOptions{Status: memory.StatusAll})
+	rows, err = service.ListMemory(memory.WithOwner(context.Background(), memory.Owner{UserID: "local-operator"}), memory.SearchOptions{Status: memory.StatusAll})
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("management history lost: %+v %v", rows, err)
 	}

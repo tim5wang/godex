@@ -4,9 +4,14 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"github.com/tim5wang/godex/internal/platform/fsutil"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -176,6 +181,7 @@ func candidateFingerprint(candidateType Type, title, summary, content string) st
 // It degrades to capture-only (no-op) when the model call fails or the store
 // does not support rewrites, mirroring the reference implementation.
 type Consolidator struct {
+	mu       sync.Mutex
 	manager  *Manager
 	oneShot  func(ctx context.Context, prompt, input string) (string, error)
 	afterN   int
@@ -189,10 +195,10 @@ type ConsolidatorOptions struct {
 	Manager *Manager
 	// OneShot performs a single model call returning plain text. Required for
 	// consolidation; nil disables consolidation (capture-only).
-	OneShot  func(ctx context.Context, prompt, input string) (string, error)
-	AfterN   int
-	Now      func() time.Time
-	Log      func(msg string)
+	OneShot func(ctx context.Context, prompt, input string) (string, error)
+	AfterN  int
+	Now     func() time.Time
+	Log     func(msg string)
 }
 
 // NewConsolidator builds a Consolidator. AfterN <= 0 disables consolidation.
@@ -218,6 +224,11 @@ func NewConsolidator(opts ConsolidatorOptions) *Consolidator {
 // MaybeMaintain runs consolidation when the pending inbox has grown past the
 // threshold. It is a no-op when consolidation is unavailable or degraded.
 func (c *Consolidator) MaybeMaintain(ctx context.Context) error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c == nil || c.degraded || c.manager == nil || c.oneShot == nil {
 		return nil
 	}
@@ -228,11 +239,19 @@ func (c *Consolidator) MaybeMaintain(ctx context.Context) error {
 	if len(candidates) < c.afterN {
 		return nil
 	}
+	if raw, e := os.ReadFile(filepath.Join(c.manager.dir, "consolidation-watermark.json")); e == nil && string(raw) == candidateRevision(candidates) {
+		return nil
+	}
 	return c.maintain(ctx, candidates)
 }
 
 // Maintain forces a consolidation pass regardless of threshold.
 func (c *Consolidator) Maintain(ctx context.Context) error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c == nil || c.degraded || c.manager == nil || c.oneShot == nil {
 		return nil
 	}
@@ -257,13 +276,22 @@ func (c *Consolidator) maintain(ctx context.Context, candidates []Candidate) err
 		c.degraded = true
 		return nil
 	}
+	unlock := c.manager.lockCandidates()
+	defer unlock()
+	current, err := c.manager.ListCandidates()
+	if err != nil {
+		return err
+	}
+	if candidateRevision(current) != candidateRevision(candidates) {
+		return fmt.Errorf("memory candidates changed during consolidation; retained for the next pass")
+	}
 	actions := parseConsolidationActions(out)
 	if len(actions) == 0 {
-		return nil
+		return c.recordWatermark(candidates)
 	}
 	next, mutations := applyConsolidationActions(candidates, actions)
 	if mutations == 0 {
-		return nil
+		return c.recordWatermark(candidates)
 	}
 	if err := c.manager.writeCandidates(next); err != nil {
 		c.log(fmt.Sprintf("[memory] consolidation write failed: %v; capture-only", err))
@@ -271,5 +299,17 @@ func (c *Consolidator) maintain(ctx context.Context, candidates []Candidate) err
 		return nil
 	}
 	c.log(fmt.Sprintf("[memory] consolidation applied %d mutation(s)", mutations))
-	return nil
+	return c.recordWatermark(next)
+}
+
+func candidateRevision(candidates []Candidate) string {
+	snapshot := append([]Candidate(nil), candidates...)
+	for i := range snapshot {
+		snapshot[i].CreatedAt = time.Time{}
+	}
+	raw, _ := json.Marshal(snapshot)
+	return fmt.Sprintf("%x", sha1.Sum(raw))
+}
+func (c *Consolidator) recordWatermark(candidates []Candidate) error {
+	return fsutil.WriteFileAtomic(filepath.Join(c.manager.dir, "consolidation-watermark.json"), []byte(candidateRevision(candidates)), 0600)
 }

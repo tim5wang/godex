@@ -11,6 +11,14 @@ import (
 )
 
 func registerMemoryRoutes(mux *http.ServeMux, service *backend.Service, protected func(http.Handler) http.Handler) {
+	mux.Handle("GET /memory/legacy", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rows, err := service.ListLegacyMemory(r.Context(), memory.SearchOptions{Query: r.URL.Query().Get("q"), Status: memory.StatusAll})
+		if err != nil {
+			writeError(w, http.StatusForbidden, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, rows)
+	})))
 	mux.Handle("GET /memory", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		opts := memory.SearchOptions{
 			Query:  strings.TrimSpace(r.URL.Query().Get("q")),

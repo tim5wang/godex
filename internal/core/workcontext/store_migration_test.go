@@ -107,4 +107,17 @@ func TestOpenUpgradesAnExistingV4Database(t *testing.T) {
 	if items[0].CompletedAt != "" {
 		t.Fatalf("legacy item must not be backfilled with a completion time, got %q", items[0].CompletedAt)
 	}
+	input, _, err := store.BeginDream(context.Background(), testScope(), "ctx-1", false, false, time.Now())
+	if err != nil || input == nil {
+		t.Fatal("legacy Dream inventory missing", err)
+	}
+	found := false
+	for _, record := range input.Records {
+		if record.Kind == "todo" && record.EntityID == "todo-legacy" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("pre-migration plan was omitted from initial Dream input")
+	}
 }

@@ -35,6 +35,8 @@ func (m *Manager) Restore(input ForgetInput) (*Entry, error) {
 }
 
 func (m *Manager) setEntryStatus(input ForgetInput, status Status, action AuditAction) (*Entry, error) {
+	unlock := m.lockMutation()
+	defer unlock()
 	if strings.TrimSpace(input.Title) == "" && strings.TrimSpace(input.File) == "" {
 		return nil, fmt.Errorf("missing title or file")
 	}
@@ -101,6 +103,8 @@ func (m *Manager) setEntryStatus(input ForgetInput, status Status, action AuditA
 // have not been referenced recently, then persists the change. It is
 // best-effort: recall failures never block the turn, so errors are swallowed.
 func (m *Manager) markReferenced(ids map[string]struct{}) {
+	unlock := m.lockMutation()
+	defer unlock()
 	if len(ids) == 0 {
 		return
 	}

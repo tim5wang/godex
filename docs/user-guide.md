@@ -2,6 +2,7 @@
 
 > 状态：Active（用户手册）
 > 修订日志：
+> - 2026-11-12 桌面/个人记忆隔离、来源有效性、Dream 增量整理与历史只读入口。
 > - 2026-10-13 启动与会话切换：MCP 后台发现、按需会话修复、轻量队列恢复扫描。
 > - 2026-08-15 全量 review 后重写：修正 CLI 命令面（移除不存在的 `repl`）、补充完整命令行参考、配置参考、工具清单、Slash Command 清单、HTTP API 路由表、自动化（cron/heartbeat）、安全模型与故障排查；对齐 Agent Profile 真实语义（提示词策略而非工具过滤）。
 
@@ -811,9 +812,9 @@ Session 存储：JSON（`~/.godex/sessions/`）始终作为主存储写入；`st
 
 ### Durable memory
 
-- 真源：`~/.godex/memory/` 下的 markdown 文件；索引 `index.json` + SQLite + FTS5 sidecar（`memory.db`）
+- 桌面工作知识以 WorkContext SQLite 为真源；个人可复用知识在 `~/.godex/memory/` 的 tenant + owner 分区下使用 Markdown、`index.json` 与 FTS sidecar。未绑定桌面的工作记忆默认留在会话分区。
 - 类型：`identity`、`user`、`workflow`、`project`、`warning`、`work_method`（工作方法）、`work_fact`（结构化事实）
-- 分层注入：`L0 identity`（单独预算）> `core` > `relevant recall`（scope 优先 + 全局高分补齐）
+- 分层注入：`L0 identity`、`core` 与 `relevant recall` 各有限额；先相关性，再适用范围，不用其他桌面的原始工作记忆兜底。
 - 自动来源（turn-end extractor、insights bridge、timeline bridge、project miner）不直接写 durable memory，先进入 candidate inbox，等待 accept / dismiss；dismiss 会生成 suppression，防止同类候选反复出现
 - 同 title `Remember` 走 foldCapture 增量去重（重复跳过、新内容追加），上下文截断保留尾部最新（capTail）
 
@@ -823,12 +824,20 @@ Session 存储：JSON（`~/.godex/sessions/`）始终作为主存储写入；`st
 memory:
   strategy: per-turn        # per-turn（默认）| agent-only | consolidated
   consolidate_after: 10     # consolidated 模式下候选数阈值，触发 LLM 合并
-  session_scope: false      # true 时每 session 一套 memory 目录（scope 隔离）
+  session_scope: false      # 兼容旧配置；有身份的会话仍按桌面/会话边界隔离
 ```
 
 - `per-turn`：默认行为，每轮自动提取候选
 - `agent-only`：关闭自动提取
 - `consolidated`：per-turn 捕获 + 候选达到阈值后 LLM 一次性 UPDATE/DELETE/ADD 合并
+
+### 桌面记忆与 Dream
+
+同桌面的多个对话共享目标、检查点、计划与工作知识，其他桌面默认不能自动召回这些原始记录。事实从候选开始，确认须有真实来源与观测时间；缺少时审阅弹窗会要求补齐。可设置 `valid_until`，过期或来源版本改变后，记录退出当前事实与自动召回，历史保留。跨桌面复用需要明确「提交记忆候选」，再到个人记忆页采纳。
+
+在桌面「知识 → 记忆整理」里，可以开关定时整理、选择每小时/6 小时/每天，也可手动点「整理」。没有语义变化时跳过，不创建任务或模型请求；读取、已读回执及整理本身不会触发下一次整理。「重新整理全部」才会强制重新处理未变化的输入。普通增量每批最多 16 条变化，全量通过有界批次继续处理。
+
+Dream 不需要关联对话，不会执行工具或替用户确认事实。结果包括参考摘要、疑似重复/冲突建议与待审阅候选，可查看历史并安全撤销最近一次派生结果。失败不丢失增量，会退避重试；后续人工证据和审阅过的候选会阻止撤销。旧版工作记忆在个人记忆页「历史记忆（只读）」中保留，仅本机操作者可查看，默认不自动注入。
 
 ### 常用命令
 

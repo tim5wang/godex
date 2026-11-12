@@ -83,7 +83,22 @@ export interface TimelinePage {
 
 export type MemoryType = "identity" | "user" | "workflow" | "project" | "warning" | "work_method" | "work_fact";
 
+export interface MemoryOrigin {
+  context_id: string;
+  fact_id: string;
+  fact_version: number;
+  applicability: string;
+  source_revision?: string;
+  observed_at?: string;
+  verified_at?: string;
+  valid_until?: string;
+}
+
 export interface MemoryRecord {
+  origin?: MemoryOrigin;
+  expires_at?: string;
+  superseded_by?: string;
+  recall_policy?: string;
   id: string;
   title: string;
   file: string;
@@ -100,6 +115,7 @@ export interface MemoryRecord {
 }
 
 export interface MemoryCandidate {
+  origin?: MemoryOrigin;
   fingerprint: string;
   title: string;
   summary: string;

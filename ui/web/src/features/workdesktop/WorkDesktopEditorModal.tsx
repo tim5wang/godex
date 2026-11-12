@@ -72,13 +72,14 @@ export function WorkDesktopEditorModal({ data }: { data: WorkDesktopData }) {
         {editor === "fact" && <>
           <Form.Item label={tr("factTitle")} name="title" rules={[{ ...nonBlank, message: tr("required") }]}><Input maxLength={200} autoFocus /></Form.Item>
           <Form.Item label={tr("factContent")} name="content" rules={[{ ...nonBlank, message: tr("required") }]}><Input.TextArea rows={3} maxLength={4000} /></Form.Item>
-          <Form.Item label={tr("factKindLabel")} name="factKind" initialValue="fact"><Select options={[{ value: "fact", label: tr("factKind.fact") }, { value: "decision", label: tr("factKind.decision") }, { value: "trace", label: tr("factKind.trace") }]} /></Form.Item>
+          <Form.Item label={tr("factKindLabel")} name="factKind" initialValue="fact"><Select options={["fact", "decision", "trace", "method", "warning", "preference"].map((value) => ({ value, label: tr(`factKind.${value}`) }))} /></Form.Item>
           <Form.Item label={tr("factScopeLabel")} name="scope" extra={tr("governanceHint")}><Input maxLength={200} /></Form.Item>
           <Form.Item label={tr("factSubjectRef")} name="subject"><Input maxLength={200} /></Form.Item>
           <Form.Item label={tr("factPredicate")} name="predicate"><Input maxLength={200} /></Form.Item>
           <Form.Item label={tr("factSource")} name="source" rules={[{ ...nonBlank, message: tr("required") }]}><Input maxLength={600} /></Form.Item>
           <Form.Item label={tr("factSourceExcerpt")} name="sourceExcerpt"><Input.TextArea rows={2} maxLength={2000} /></Form.Item>
           <Form.Item label={tr("factObserved")} name="observedAt" rules={[{ ...nonBlank, message: tr("required") }]}><Input maxLength={60} placeholder="2026-10-30T09:00:00Z" /></Form.Item>
+          <Form.Item label={tr("factValidUntil")} name="validUntil"><Input maxLength={60} placeholder="2026-12-01T09:00:00Z" /></Form.Item>
           <Form.Item label={tr("factProvenance")} name="provenance"><Input maxLength={200} /></Form.Item>
           <Form.Item label={tr("factSupersedes")} name="supersedes"><Input maxLength={200} /></Form.Item>
         </>}

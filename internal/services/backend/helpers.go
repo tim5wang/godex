@@ -242,6 +242,7 @@ func (s *Service) writeManifestForSession(session *sessionState) {
 	}
 	session.mu.RLock()
 	manifest := SessionManifest{
+		MemoryOwner:            session.memoryOwner,
 		SessionID:              session.id,
 		Locator:                session.locator,
 		Identity:               session.identity,

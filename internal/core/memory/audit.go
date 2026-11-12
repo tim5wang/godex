@@ -89,6 +89,8 @@ func (m *Manager) ListAudit(limit int) ([]AuditLogEntry, error) {
 // RestoreAudit rolls durable memory back to the before snapshot for one audit
 // entry. Passing target "after" reapplies the recorded after snapshot.
 func (m *Manager) RestoreAudit(auditID, target string) (*AuditLogEntry, error) {
+	unlock := m.lockMutation()
+	defer unlock()
 	auditID = strings.TrimSpace(auditID)
 	if auditID == "" {
 		return nil, fmt.Errorf("missing audit id")

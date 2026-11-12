@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"github.com/tim5wang/godex/internal/core/memory"
 	"strings"
 	"testing"
 
@@ -93,7 +94,7 @@ func TestWorkContextDelegationRecoveryAndKnowledgeLoop(t *testing.T) {
 	if fact.MemoryCandidateID == "" {
 		t.Fatal("memory proposal absent")
 	}
-	pending, err := service.ListMemoryCandidates(ctx)
+	pending, err := service.ListMemoryCandidates(memory.WithOwner(ctx, memory.Owner{TenantID: scope.TenantID, UserID: scope.OwnerID}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,9 +175,10 @@ func TestWorkContextSessionFeedbackRefreshesWithoutChangingIdentity(t *testing.T
 	}
 }
 
-func TestOrganizeWorkContextRefusesUnlinkedStream(t *testing.T) {
+func TestOrganizeWorkContextRunsWithoutConversation(t *testing.T) {
 	cfg := newTestConfig(t)
 	service := newTestService(cfg, &stubCaller{})
+	service.dreamOrganize = func(context.Context, string, string) (string, error) { return `{ "summary":"organized" }`, nil }
 	store, err := service.WorkContexts()
 	if err != nil {
 		t.Fatal(err)
@@ -188,11 +190,11 @@ func TestOrganizeWorkContextRefusesUnlinkedStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// On-demand maintenance runs ON the linked conversation; a stream without one
-	// must be refused rather than silently creating or picking a session.
-	if _, err := service.OrganizeWorkContext(ctx, scope, stream.ID); err == nil {
-		t.Fatal("organize accepted a stream with no linked session")
+	result, err := service.OrganizeWorkContext(ctx, scope, stream.ID)
+	if err != nil || result["queued"] != true {
+		t.Fatalf("independent maintenance not queued: %v %v", result, err)
 	}
+	service.stopMemoryDreams()
 	archivedStatus := "archived"
 	archived, err := store.Patch(ctx, scope, stream.ID, workcontext.ContextPatch{IfVersion: stream.Version, Status: &archivedStatus})
 	if err != nil {

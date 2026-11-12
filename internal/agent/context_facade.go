@@ -191,6 +191,9 @@ func (a *Agent) captureMemoryCandidates() error {
 
 // CaptureInsightMemoryCandidates stores durable memory suggestions derived from an insights report.
 func (a *Agent) CaptureInsightMemoryCandidates(report *insights.Report) error {
+	if sink, ok := a.memoryStrategy.(interface{ CaptureInsightCandidates(*insights.Report) error }); ok {
+		return sink.CaptureInsightCandidates(report)
+	}
 	if a.memoryMode() == templates.MemoryNone || a.memoryExt == nil {
 		return nil
 	}
@@ -200,6 +203,12 @@ func (a *Agent) CaptureInsightMemoryCandidates(report *insights.Report) error {
 
 // CaptureTimelineMemoryCandidates stores durable memory suggestions derived from runtime timeline events.
 func (a *Agent) CaptureTimelineMemoryCandidates(items []events.Event) error {
+	if a.memoryMode() == templates.MemoryNone {
+		return nil
+	}
+	if sink, ok := a.memoryStrategy.(interface{ CaptureTimelineCandidates([]events.Event) error }); ok {
+		return sink.CaptureTimelineCandidates(items)
+	}
 	if a.memoryExt == nil {
 		return nil
 	}

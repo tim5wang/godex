@@ -363,6 +363,7 @@ func withWatchOrWebRead(auth *watchauth.Service, protected func(http.Handler) ht
 				// Attach the device's identity (P0 §7). The web-token branch below is
 				// covered by `protected`, which attaches the operator itself.
 				ctx = WithPrincipal(ctx, watchDevicePrincipal(device))
+				ctx = withWatchMemoryOwner(ctx, device)
 				// The push queue is derived from THIS instance's own workspace, so it gets
 				// the same tenant comparison as the read bodies. Without it this route was a
 				// way around that check: a tenant's wrist could read the operator's stream

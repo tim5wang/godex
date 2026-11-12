@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/tim5wang/godex/internal/agent"
+	"github.com/tim5wang/godex/internal/core/memory"
 	coresec "github.com/tim5wang/godex/internal/core/security"
 	"github.com/tim5wang/godex/internal/core/templates"
 	"github.com/tim5wang/godex/internal/domain/events"
@@ -45,7 +46,7 @@ func (s *Service) workContextToolEnabled(sessionID, templateID string) bool {
 	return err == nil && id != ""
 }
 
-func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessionState, error) {
+func (s *Service) loadSession(sessionID string, locator SessionLocator, owners ...memory.Owner) (*sessionState, error) {
 	now := s.now()
 	session := &sessionState{
 		id:         sessionID,
@@ -64,6 +65,10 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 		return nil, err
 	}
 	manifest, state := snapshot.Manifest, snapshot.State
+	session.memoryOwner, err = resolveSessionMemoryOwner(sessionID, manifest, owners)
+	if err != nil {
+		return nil, err
+	}
 	session.graph = snapshot.Graph
 	session.timeline.Seed(snapshot.Timeline)
 	session.seedTurns(snapshot.Turns)
@@ -71,6 +76,7 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 	session.journal = newSessionEventBatcher(s, session)
 	session.events.Attach(persistentTimelineSink{service: s, session: session})
 	if manifest != nil {
+
 		session.locator = normalizeLocator(manifest.Locator)
 		session.identity = manifest.Identity
 		session.title = strings.TrimSpace(manifest.Title)
@@ -184,6 +190,7 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 		}
 	}
 	session.agent = a
+	s.refreshWorkContextFeedback(session)
 
 	// Roadmap 6.1: route screener verdicts into the security audit trail.
 	s.wireScreenAudit(a, sessionID)
@@ -1166,4 +1173,23 @@ func flowDesignerContext(a *agent.Agent, flowID string) string {
 	}
 	fmt.Fprintf(&b, " 可用 flow_design action=read (flow_id=%s) 读取已保存完整定义，或 generate/amend/validate 继续设计；Flow 默认 request，B 类 HTTP/JSON 服务请求不拆帧；C/D 长会话使用 session_workflow triggers/lanes 和语义事件。画布每次发送会附带当前工作快照（含未保存修改），快照优先于旧草稿且只对当前轮有效。先给出变更预览并取得明确确认，再用 create_flow 保存新草稿版本（flow_id 固定为 %s；优先沿用快照中的下一版本号）。需要操作和运行时说明时先调用 godex_docs get flow-spec，再用 read_file 阅读返回的 docs/business-flow-canvas-guide.md 或 docs/business-flow-runtime-design.md。", flowID, flowID)
 	return b.String()
+}
+
+func resolveSessionMemoryOwner(sessionID string, manifest *SessionManifest, owners []memory.Owner) (memory.Owner, error) {
+	owner := memory.Owner{UserID: "local-operator"}
+	authenticated := len(owners) > 0 && owners[0].UserID != ""
+	if authenticated {
+		owner = owners[0]
+	}
+	if manifest == nil {
+		return owner, nil
+	}
+	persisted := manifest.MemoryOwner
+	if persisted.UserID == "" {
+		persisted = memory.Owner{UserID: "local-operator"}
+	}
+	if authenticated && persisted != owner {
+		return memory.Owner{}, newSessionNotFoundError(sessionID)
+	}
+	return persisted, nil
 }

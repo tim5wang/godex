@@ -13,8 +13,8 @@ import (
 // A session identity must not collapse two owners into one. If the same
 // session_id is linked to contexts owned by different principals the lookup
 // fails with ErrConflict rather than guessing, which would leak one principal's
-// desktop into another's turn. When several contexts of the one owner are found,
-// the most recently updated context is returned deterministically.
+// desktop into another's turn. The primary binding is persisted independently
+// from context timestamps; additional links are references, not a new owner.
 func (s *Store) SessionBinding(ctx context.Context, sessionID string) (Scope, string, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
@@ -25,7 +25,7 @@ func (s *Store) SessionBinding(ctx context.Context, sessionID string) (Scope, st
 		FROM wc_context_sessions s
 		JOIN wc_contexts c ON c.tenant_id = s.tenant_id AND c.id = s.context_id
 		WHERE s.session_id=?
-		ORDER BY c.updated_at DESC, c.id`, sessionID)
+		ORDER BY s.created_at, s.id`, sessionID)
 	if err != nil {
 		return Scope{}, "", err
 	}
@@ -57,7 +57,17 @@ func (s *Store) SessionBinding(ctx context.Context, sessionID string) (Scope, st
 			return Scope{}, "", fmt.Errorf("%w: session %s is bound to multiple owners", ErrConflict, sessionID)
 		}
 	}
-	return first, bindings[0].contextID, nil
+	var primary string
+	err = s.db.QueryRowContext(ctx, `SELECT context_id FROM wc_session_bindings WHERE session_id=? AND tenant_id=? AND owner_id=?`, sessionID, first.TenantID, first.OwnerID).Scan(&primary)
+	if err != nil {
+		return Scope{}, "", fmt.Errorf("%w: session has no unambiguous primary desktop", ErrConflict)
+	}
+	for _, b := range bindings {
+		if b.contextID == primary {
+			return first, primary, nil
+		}
+	}
+	return Scope{}, "", fmt.Errorf("%w: primary desktop link is missing", ErrConflict)
 }
 
 // SessionTurnEventKind is the wc_events kind recorded when a conversation linked to a

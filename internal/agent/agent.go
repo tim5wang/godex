@@ -44,6 +44,9 @@ type Agent struct {
 	skillLoader     *skill.Loader
 	instrLoader     *instructions.Loader
 	memoryMgr       *memory.Manager
+	memoryWriter    tools.MemoryWriter
+	memorySharedMgr *memory.Manager
+	memoryScopeKey  string
 	memoryExt       *memory.Extractor
 	memoryStrategy  memory.Strategy
 	notesMgr        *notes.Manager

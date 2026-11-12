@@ -8,6 +8,7 @@ import (
 	"github.com/tim5wang/godex/internal/agent"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/config"
+	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/security"
 	"github.com/tim5wang/godex/internal/platform/stringutil"
@@ -261,6 +262,10 @@ func (s *Service) OpenSession(ctx context.Context, locator SessionLocator) (*Ope
 		return nil, newSessionBusyError(sessionID)
 	}
 	if existing := s.sessions[sessionID]; existing != nil {
+		if !sessionMemoryOwnerMatches(ctx, existing) {
+			s.mu.Unlock()
+			return nil, newSessionNotFoundError(sessionID)
+		}
 		if profile := strings.TrimSpace(normalized.Metadata["agent_profile"]); profile != "" {
 			existing.mu.Lock()
 			if existing.locator.Metadata == nil {
@@ -281,6 +286,9 @@ func (s *Service) OpenSession(ctx context.Context, locator SessionLocator) (*Ope
 			if pending.err != nil {
 				return nil, pending.err
 			}
+			if !sessionMemoryOwnerMatches(ctx, pending.session) {
+				return nil, newSessionNotFoundError(sessionID)
+			}
 			return s.describeSession(pending.session), nil
 		}
 	}
@@ -291,11 +299,12 @@ func (s *Service) OpenSession(ctx context.Context, locator SessionLocator) (*Ope
 	s.loading[sessionID] = pending
 	s.mu.Unlock()
 
-	loaded, err := s.loadSession(sessionID, normalized)
+	owner, _ := memory.OwnerFromContext(ctx)
+	loaded, err := s.loadSession(sessionID, normalized, owner)
 	if err != nil {
 		if s.cfg != nil && s.cfg.Runtime.Recovery.AutoRepairSessions {
 			if report, repairErr := s.RepairSessions(ctx, sessionrepair.Request{SessionID: sessionID}); repairErr == nil && report.Changed {
-				loaded, err = s.loadSession(sessionID, normalized)
+				loaded, err = s.loadSession(sessionID, normalized, owner)
 			}
 		}
 	}
@@ -587,7 +596,7 @@ func (s *Service) findExistingOnDiskSessionIDForLocator(locator SessionLocator) 
 // ForkSession creates a new linked session from the current transcript.
 func (s *Service) ForkSession(ctx context.Context, sessionID string, req ForkRequest) (*OpenedSession, error) {
 	_ = ctx
-	source, err := s.requireSession(sessionID)
+	source, err := s.requireSessionFor(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -732,6 +741,11 @@ func (s *Service) ListSessions(ctx context.Context, filter SessionListFilter) ([
 		}
 		if manifest == nil {
 			continue
+		}
+		if owner, ok := memory.OwnerFromContext(ctx); ok {
+			if _, err := resolveSessionMemoryOwner(sessionID, manifest, []memory.Owner{owner}); err != nil {
+				continue
+			}
 		}
 		manifest.Locator = normalizeLocator(manifest.Locator)
 		if filter.Channel != "" && manifest.Locator.Channel != filter.Channel {
@@ -1017,7 +1031,7 @@ func (s *Service) Subscribe(ctx context.Context, sessionID string, sink events.S
 // events before streaming new events. Live events that arrive during replay are
 // buffered and delivered after replay, so reconnects do not miss the current turn.
 func (s *Service) SubscribeReplay(ctx context.Context, sessionID string, sink events.Sink, replay EventReplayOptions) error {
-	session, err := s.requireSession(sessionID)
+	session, err := s.requireSessionFor(ctx, sessionID)
 	if err != nil {
 		return err
 	}

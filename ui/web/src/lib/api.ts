@@ -123,6 +123,10 @@ export function listMemoryCandidates(token: string | null) {
   return request<MemoryCandidate[]>("/memory/candidates", { method: "GET" }, token);
 }
 
+export function listLegacyMemory(token: string | null, query = "") {
+  return request<MemoryRecord[]>(`/memory/legacy?q=${encodeURIComponent(query)}`, { method: "GET" }, token);
+}
+
 export function mineProjectMemory(token: string | null) {
   return request<MemoryCandidate[]>("/memory/mine/project", { method: "POST" }, token);
 }

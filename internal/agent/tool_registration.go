@@ -291,9 +291,9 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 		Summary: "teammate inbox, messaging, and approval workflows",
 	})
 
-	a.registerToolTo(handler, tools.NewMemoryTool(a.memoryMgr), tools.ToolMeta{AlwaysActive: true})
+	a.registerToolTo(handler, tools.NewMemoryTool(a.memoryToolWriter()), tools.ToolMeta{AlwaysActive: true})
 	if a.workContextTool != nil {
-		a.registerToolTo(handler, a.workContextTool, tools.ToolMeta{AlwaysActive: true})
+		a.registerToolTo(handler, a.workContextTool, tools.ToolMeta{Bundle: bundleWorkContext, DefaultActive: true, Summary: "current desktop work state and evidence-backed memory"})
 	}
 	a.registerToolTo(handler, tools.NewSkillTool(a), tools.ToolMeta{AlwaysActive: true})
 	a.registerToolTo(handler, tools.NewListPackagesTool(a), tools.ToolMeta{Bundle: bundlePackages, Summary: "declaration-only package and prompt ecosystem"})

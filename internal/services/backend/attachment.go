@@ -60,7 +60,7 @@ func (s *Service) storeArtifactPath(sessionID, path string) (message.AttachmentR
 // StoreAttachment persists one uploaded file inside the session attachment directory.
 func (s *Service) StoreAttachment(ctx context.Context, sessionID string, upload AttachmentUpload) (message.AttachmentRef, error) {
 	_ = ctx
-	if _, err := s.requireSession(sessionID); err != nil {
+	if _, err := s.requireSessionFor(ctx, sessionID); err != nil {
 		return message.AttachmentRef{}, err
 	}
 	if upload.Reader == nil {
@@ -168,7 +168,7 @@ func (s *Service) ResolveAttachment(sessionID, attachmentID string) (message.Att
 // Snapshot returns the unified current session view.
 func (s *Service) Snapshot(ctx context.Context, sessionID string) (Snapshot, error) {
 	_ = ctx
-	session, err := s.requireSession(sessionID)
+	session, err := s.requireSessionFor(ctx, sessionID)
 	if err != nil {
 		return Snapshot{}, err
 	}

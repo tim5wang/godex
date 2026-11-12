@@ -137,6 +137,13 @@ func (a *Agent) buildMemoryIndexPromptMessage() (protocol.Message, int, error) {
 	if a.memoryMode() == templates.MemoryNone {
 		return protocol.Message{}, 0, nil
 	}
+	if a.memoryScopeKey != "" {
+		text := "# Memory\nOnly a bounded selected subset is injected, not the full store. Default writes belong to this session; reviewed personal knowledge is a read-only overlay. Desktop working memory is shared only inside its host-bound desktop. Historical observations are not proof of current state. Cross-desktop reuse requires explicit promotion and review."
+		if writer, ok := a.memoryWriter.(interface{ MemoryDescription() string }); ok {
+			text += "\n" + writer.MemoryDescription()
+		}
+		return protocol.NewEphemeralTextMessage(protocol.KindMemory, text), compress.CountTokens(text), nil
+	}
 	memoryPrompt, err := a.memoryMgr.BuildPromptSection()
 	if err != nil {
 		return protocol.Message{}, 0, err

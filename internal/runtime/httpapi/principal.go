@@ -8,6 +8,7 @@ import (
 
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/identity"
+	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/platform/logger"
 	"github.com/tim5wang/godex/internal/services/accounts"
 	"github.com/tim5wang/godex/internal/services/relay"
@@ -100,7 +101,9 @@ func PrincipalFromContext(ctx context.Context) (identity.Principal, bool) {
 func withPrincipalAuth(next func(http.Handler) http.Handler, principalFor func(*http.Request) identity.Principal) func(http.Handler) http.Handler {
 	return func(handler http.Handler) http.Handler {
 		return next(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			handler.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), principalFor(r))))
+			principal := principalFor(r)
+			ctx := memory.WithOwner(WithPrincipal(r.Context(), principal), memory.Owner{TenantID: principal.TenantID, UserID: principal.UserID})
+			handler.ServeHTTP(w, r.WithContext(ctx))
 		}))
 	}
 }

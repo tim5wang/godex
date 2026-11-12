@@ -1924,3 +1924,62 @@ test("a finished turn keeps its report visible when ledger calls follow it", asy
   // And the ledger bookkeeping calls are not rendered as tool rows.
   await expect(turn).not.toContainText("work_context");
 });
+
+test("organizes desktop memory manually, skips unchanged input and keeps full rescan explicit", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  await install(page, seededStore());
+  let state = { source_seq: 2, processed_seq: 2, summary: "已整理的参考摘要", enabled: true, interval_seconds: 21600, next_run_at: NOW, status: "completed", run_id: "", rescan_cursor: -1 };
+  const organizes: boolean[] = [];
+  const schedules: unknown[] = [];
+  await page.route("**/api/v1/work-contexts/ctx-1/memory", async (route) => {
+    if (route.request().method() === "PATCH") {
+      schedules.push(route.request().postDataJSON());
+      state = { ...state, ...route.request().postDataJSON() };
+    }
+    await route.fulfill({ json: state });
+  });
+  await page.route("**/api/v1/work-contexts/ctx-1/memory/runs", async (route) => route.fulfill({ json: [] }));
+  await page.route("**/api/v1/work-contexts/ctx-1/organize", async (route) => {
+    const force = route.request().postDataJSON().force as boolean;
+    organizes.push(force);
+    await route.fulfill({ json: force ? { queued: true, status: "running", job_id: "forced" } : { queued: false, status: "completed", reason: "unchanged" } });
+  });
+  await openSection(page, "知识");
+  const panel = boards(page).locator(".ant-card").filter({ has: page.getByText("记忆整理", { exact: true }) }).first();
+  await expect(panel.getByText("已整理的参考摘要", { exact: true })).toBeVisible();
+  // State polling and rendering must not invoke the model-facing organize route.
+  expect(organizes).toEqual([]);
+  await panel.getByRole("button", { name: /^整\s*理$/ }).click();
+  await expect(page.getByText("没有新增变化，已跳过整理", { exact: true })).toBeVisible();
+  expect(organizes).toEqual([false]);
+  await panel.getByRole("button", { name: rx("重新整理全部") }).click();
+  await expect.poll(() => organizes).toEqual([false, true]);
+  await panel.getByRole("switch", { name: "定时整理" }).click();
+  await expect.poll(() => schedules).toEqual([{ enabled: false, interval_seconds: 21600 }]);
+  await expect(panel.getByRole("switch", { name: "定时整理" })).not.toBeChecked();
+});
+
+test("requires original source evidence before confirming a Dream proposal", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 1024);
+  const seed = seededStore();
+  seed.facts = [{ ...seed.facts![0], source: "dream://derived-run", provenance: "derived", observed_at: NOW }];
+  const store = await install(page, seed);
+  let review: Record<string, unknown> | undefined;
+  await page.route("**/api/v1/work-contexts/ctx-1/facts/fact-1", async (route) => {
+    review = route.request().postDataJSON();
+    store.facts[0] = { ...store.facts[0], ...review, version: 2 } as Fact;
+    await route.fulfill({ json: store.facts[0] });
+  });
+  await openSection(page, "知识");
+  const card = boards(page).locator(".wd-knowledge").first();
+  await card.locator(".wd-knowledge-head").click();
+  await card.getByRole("button", { name: rx("确认") }).click();
+  const dialog = page.getByRole("dialog", { name: "补充核验依据" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel("来源", { exact: true })).toHaveValue("");
+  expect(review).toBeUndefined();
+  await dialog.getByLabel("来源", { exact: true }).fill("report://human/verified");
+  await dialog.getByRole("button", { name: /^(确\s*定|OK)$/ }).click();
+  await expect.poll(() => review?.source).toBe("report://human/verified");
+  expect(review?.observed_at).toBe("2026-10-30T09:00:00.000Z");
+});

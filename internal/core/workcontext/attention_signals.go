@@ -42,7 +42,7 @@ func (s *Store) ListCandidateFacts(ctx context.Context, scope Scope, limit int) 
 		SELECT f.id, f.context_id, f.title, f.content, f.kind, f.status, f.scope, f.subject,
 		       f.predicate, f.source, f.source_excerpt, f.source_revision, f.observed_at,
 		       f.verified_at, f.provenance, f.supersedes_id, f.memory_candidate_id, f.version,
-		       f.created_at, c.title
+		       f.created_at, f.valid_until, c.title
 		FROM wc_facts f
 		JOIN wc_contexts c ON c.tenant_id = f.tenant_id AND c.id = f.context_id
 		WHERE f.tenant_id = ? AND c.owner_id = ? AND c.status <> 'archived'
@@ -60,7 +60,7 @@ func (s *Store) ListCandidateFacts(ctx context.Context, scope Scope, limit int) 
 			&item.Status, &item.Scope, &item.Subject, &item.Predicate, &item.Source,
 			&item.SourceExcerpt, &item.SourceRevision, &item.ObservedAt, &item.VerifiedAt,
 			&item.Provenance, &item.SupersedesID, &item.MemoryCandidateID, &item.Version,
-			&item.CreatedAt, &item.ContextTitle); err != nil {
+			&item.CreatedAt, &item.ValidUntil, &item.ContextTitle); err != nil {
 			return nil, err
 		}
 		out = append(out, item)

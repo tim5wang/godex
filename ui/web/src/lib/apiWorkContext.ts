@@ -61,6 +61,7 @@ export interface WorkRelation {
 }
 
 export interface WorkFact {
+  valid_until?: string;
   id: string;
   context_id: string;
   title: string;
@@ -209,6 +210,7 @@ export interface WorkRelationInput {
 }
 
 export interface WorkFactInput {
+  valid_until?: string;
   title: string;
   content: string;
   kind?: string;
@@ -375,10 +377,11 @@ export function reviewWorkFact(
   factId: string,
   status: string,
   ifVersion: number,
+  evidence?: { observed_at: string; source: string },
 ) {
   return request<WorkFact>(
     `/v1/work-contexts/${encodeURIComponent(contextId)}/facts/${encodeURIComponent(factId)}`,
-    { method: "PATCH", body: JSON.stringify({ status, if_version: ifVersion }) },
+    { method: "PATCH", body: JSON.stringify({ status, if_version: ifVersion, ...evidence }) },
     token,
   );
 }
@@ -433,16 +436,46 @@ export function createWorkDelegation(token: string | null, contextId: string, in
   );
 }
 
-// organizeWorkContext asks the Agent to sweep the stream now (update the
-// checkpoint, consolidate facts, flag stale/conflicting items). It enqueues one
-// turn on the stream's linked session; the maintenance itself is real Agent work,
-// not a client-side button that pretends to reorganize.
-export function organizeWorkContext(token: string | null, contextId: string) {
-  return request<{ queued: boolean; session_id?: string }>(
+export interface WorkMemoryState {
+  source_seq: number;
+  processed_seq: number;
+  summary: string;
+  enabled: boolean;
+  interval_seconds: number;
+  next_run_at: string;
+  status: string;
+  last_error?: string;
+  run_id: string;
+  lease_until?: string;
+  rescan_cursor: number;
+}
+
+export interface WorkMemoryRun {
+  id: string;
+  status: string;
+  created_at: string;
+  error?: string;
+  result?: { summary?: string; duplicates?: string[][]; conflicts?: string[][]; candidates?: Array<{ title: string; content: string }>; generated_fact_ids?: string[] };
+}
+
+// Maintenance is a scoped background job; it never creates a user chat turn.
+export function organizeWorkContext(token: string | null, contextId: string, force = false) {
+  return request<{ queued: boolean; reason?: string; job_id?: string; status: string }>(
     `/v1/work-contexts/${encodeURIComponent(contextId)}/organize`,
-    { method: "POST" },
-    token,
+    { method: "POST", body: JSON.stringify({ force }) }, token,
   );
+}
+export function getWorkMemory(token: string | null, contextId: string) {
+  return request<WorkMemoryState>(`/v1/work-contexts/${encodeURIComponent(contextId)}/memory`, { method: "GET" }, token);
+}
+export function updateWorkMemorySchedule(token: string | null, contextId: string, enabled: boolean, interval_seconds: number) {
+  return request<WorkMemoryState>(`/v1/work-contexts/${encodeURIComponent(contextId)}/memory`, { method: "PATCH", body: JSON.stringify({ enabled, interval_seconds }) }, token);
+}
+export function getWorkMemoryRuns(token: string | null, contextId: string) {
+  return request<WorkMemoryRun[]>(`/v1/work-contexts/${encodeURIComponent(contextId)}/memory/runs`, { method: "GET" }, token);
+}
+export function revertWorkMemoryRun(token: string | null, contextId: string, runId: string) {
+  return request<WorkMemoryState>(`/v1/work-contexts/${encodeURIComponent(contextId)}/memory/runs/${encodeURIComponent(runId)}/revert`, { method: "POST" }, token);
 }
 
 // --- plan items (todos) ---

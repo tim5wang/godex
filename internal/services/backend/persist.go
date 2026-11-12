@@ -84,6 +84,7 @@ func (s *Service) persistSession(session *sessionState, updatedAt time.Time) err
 	identity.UpdatedAt = updatedAt
 	session.identity = identity
 	manifest := SessionManifest{
+		MemoryOwner:            session.memoryOwner,
 		SessionID:              session.id,
 		Locator:                session.locator,
 		Identity:               identity,

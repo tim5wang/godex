@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Button, Card, Space, Tag, Typography } from "antd";
+import dayjs, { type Dayjs } from "dayjs";
+import { Alert, Button, Card, DatePicker, Form, Input, Modal, Space, Tag, Typography } from "antd";
 import { DownOutlined, RightOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { MarkdownContent } from "../../components/MarkdownContent";
 import { formatTimestamp } from "./workDesktopView";
@@ -26,11 +27,13 @@ export function KnowledgeCard(props: {
   readOnly: boolean;
   tr: (key: string, vars?: Record<string, string | number>) => string;
   trLabel: (prefix: string, value: string) => string;
-  onAccept: (fact: WorkFact) => void;
+  onAccept: (fact: WorkFact, evidence?: { observed_at: string; source: string }) => void;
   onDismiss: (fact: WorkFact) => void;
   onPromote: (fact: WorkFact) => void;
 }) {
   const { fact, contextTitle, statusColor, readOnly, tr, trLabel, onAccept, onDismiss, onPromote } = props;
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewForm] = Form.useForm<{ observed: Dayjs; source: string }>();
   const [open, setOpen] = useState(false);
 
   // Label describes what the NEXT click does, which is the disclosure convention.
@@ -70,6 +73,7 @@ export function KnowledgeCard(props: {
 
         <div className="wd-muted">{tr("factScopeLabel")} · {fact.scope || tr("noItems")}</div>
         <div className="wd-muted">{tr("factObserved")} · {formatTimestamp(fact.observed_at) || tr("noItems")}</div>
+        {fact.valid_until && <div className="wd-muted">{tr("factValidUntil")} · {formatTimestamp(fact.valid_until)}</div>}
         {fact.verified_at && <div className="wd-muted">{tr("verifiedAt")} · {formatTimestamp(fact.verified_at)}</div>}
         {fact.source && <div className="wd-muted">{tr("factSource")} · <Typography.Text code className="wd-wrap">{fact.source}</Typography.Text></div>}
         {/* Evidence keeps its own line breaks: excerpts are quoted from logs/reports
@@ -80,13 +84,20 @@ export function KnowledgeCard(props: {
         <Space wrap style={{ marginTop: 12 }}>
           {contextTitle && <Tag>{contextTitle}</Tag>}
           {fact.status === "candidate" && !readOnly && <>
-            <Button size="small" type="primary" onClick={() => onAccept(fact)}>{tr("accept")}</Button>
+            <Button size="small" type="primary" onClick={() => { if (!fact.observed_at || !fact.source || fact.source.startsWith("dream://")) { reviewForm.setFieldsValue({ source: fact.source.startsWith("dream://") ? "" : fact.source, observed: fact.observed_at ? dayjs(fact.observed_at) : undefined }); setReviewOpen(true); } else onAccept(fact); }}>{tr("accept")}</Button>
             <Button size="small" danger onClick={() => onDismiss(fact)}>{tr("dismiss")}</Button>
           </>}
           {!fact.memory_candidate_id && fact.status === "confirmed" && !readOnly && <Button size="small" icon={<ThunderboltOutlined aria-hidden="true" />} onClick={() => onPromote(fact)}>{tr("promoteMemory")}</Button>}
           {fact.memory_candidate_id && <Tag color="purple">{tr("memoryCandidate")}</Tag>}
         </Space>
       </> : null}
+      <Modal open={reviewOpen} title={tr("reviewEvidence")} onCancel={() => setReviewOpen(false)} onOk={() => { void reviewForm.validateFields().then((values) => { onAccept(fact, { observed_at: values.observed.toISOString(), source: values.source }); setReviewOpen(false); }); }}>
+        <Alert type="info" title={tr("reviewEvidenceHint")} />
+        <Form form={reviewForm} layout="vertical" style={{ marginTop: 12 }}>
+          <Form.Item name="observed" label={tr("factObserved")} rules={[{ required: true }]}><DatePicker showTime /></Form.Item>
+          <Form.Item name="source" label={tr("factSource")} rules={[{ required: true }]}><Input /></Form.Item>
+        </Form>
+      </Modal>
     </Card>
   );
 }

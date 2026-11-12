@@ -20,7 +20,7 @@ import (
 )
 
 func (s *Service) Submit(ctx context.Context, sessionID string, envelope message.Envelope) (*SubmitResult, error) {
-	session, err := s.requireSession(sessionID)
+	session, err := s.requireSessionFor(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +45,7 @@ func (s *Service) Submit(ctx context.Context, sessionID string, envelope message
 // and continues the agent turn on a service-owned background context.
 func (s *Service) SubmitAsync(ctx context.Context, sessionID string, envelope message.Envelope, options ...SubmitOptions) (*SubmitResult, error) {
 	_ = ctx
-	session, err := s.requireSession(sessionID)
+	session, err := s.requireSessionFor(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +300,7 @@ func normalizeQueueMode(mode QueueMode) QueueMode {
 // whole session snapshot.
 func (s *Service) GetTurn(ctx context.Context, sessionID, turnID string) (*TurnRecord, error) {
 	_ = ctx
-	session, err := s.requireSession(sessionID)
+	session, err := s.requireSessionFor(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -314,7 +314,7 @@ func (s *Service) GetTurn(ctx context.Context, sessionID, turnID string) (*TurnR
 // CancelTurn requests cancellation of the active asynchronous turn.
 func (s *Service) CancelTurn(ctx context.Context, sessionID, turnID string) (*CancelTurnResult, error) {
 	_ = ctx
-	session, err := s.requireSession(sessionID)
+	session, err := s.requireSessionFor(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -345,8 +345,8 @@ func (s *Service) CancelTurn(ctx context.Context, sessionID, turnID string) (*Ca
 // CancelQueuedTurn removes a still-waiting queued turn from the session queue
 // and returns its original envelope (text + attachments) so clients can offer
 // edit-and-resend. Fails when the queue is empty or the id is not queued.
-func (s *Service) CancelQueuedTurn(_ context.Context, sessionID, queueID string) (*CancelQueuedTurnResult, error) {
-	session, err := s.requireSession(sessionID)
+func (s *Service) CancelQueuedTurn(ctx context.Context, sessionID, queueID string) (*CancelQueuedTurnResult, error) {
+	session, err := s.requireSessionFor(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -382,7 +382,7 @@ func (s *Service) CancelQueuedTurn(_ context.Context, sessionID, queueID string)
 // normal turn (re-queuing is avoided so the message is not lost).
 func (s *Service) SteerQueuedTurn(ctx context.Context, sessionID, queueID string) (*SubmitResult, error) {
 	_ = ctx
-	session, err := s.requireSession(sessionID)
+	session, err := s.requireSessionFor(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -416,7 +416,7 @@ func (s *Service) SteerQueuedTurn(ctx context.Context, sessionID, queueID string
 // continues execution on a service-owned background context.
 func (s *Service) RetryTurnAsync(ctx context.Context, sessionID, turnID string) (*SubmitResult, error) {
 	_ = ctx
-	session, err := s.requireSession(sessionID)
+	session, err := s.requireSessionFor(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -474,7 +474,7 @@ func (s *Service) RetryTurnAsync(ctx context.Context, sessionID, turnID string) 
 // transcript checkpoint instead of replaying the original input from scratch.
 func (s *Service) ResumeTurnAsync(ctx context.Context, sessionID, turnID string) (*SubmitResult, error) {
 	_ = ctx
-	session, err := s.requireSession(sessionID)
+	session, err := s.requireSessionFor(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -589,7 +589,7 @@ func (s *Service) startUserTurnLocked(session *sessionState, envelope message.En
 	runtimeCtx.Metadata["turn_id"] = turnID
 	attachSessionGraphContext(session, &runtimeCtx)
 	runtimeCtx.ProjectLedger, runtimeCtx.ProjectLedgerUpdatedAt = s.projectLedgerForRuntimeContext(sessionID)
-	s.refreshWorkContextFeedback(session)
+	s.refreshWorkContextFeedback(session, envelope.BodyText())
 	priorMessageCount := len(session.agent.GetMessages())
 	if envelope.Timestamp.IsZero() {
 		envelope.Timestamp = now
@@ -1159,7 +1159,7 @@ func (s *Service) PostRuntimeReply(ctx context.Context, sessionID, text string) 
 // reply plus any generated local files into an existing session.
 func (s *Service) PostRuntimeReplyWithArtifactPaths(ctx context.Context, sessionID, text string, artifactPaths []string) error {
 	_ = ctx
-	session, err := s.requireSession(sessionID)
+	session, err := s.requireSessionFor(ctx, sessionID)
 	if err != nil {
 		return err
 	}

@@ -261,6 +261,7 @@ export function useWorkDesktopData() {
       source: values.source?.trim() ?? "",
       source_excerpt: values.sourceExcerpt?.trim() ?? "",
       observed_at: values.observedAt?.trim() ?? "",
+      valid_until: values.validUntil?.trim() ?? "",
       provenance: values.provenance?.trim() ?? "",
       supersedes_id: values.supersedes?.trim() ?? "",
     }),
@@ -269,7 +270,7 @@ export function useWorkDesktopData() {
   });
 
   const reviewMutation = useMutation({
-    mutationFn: (input: { factId: string; status: string; version: number }) => reviewWorkFact(token || null, contextId!, input.factId, input.status, input.version),
+    mutationFn: (input: { factId: string; status: string; version: number; evidence?: { observed_at: string; source: string } }) => reviewWorkFact(token || null, contextId!, input.factId, input.status, input.version, input.evidence),
     onSuccess: () => { invalidateDetail(); useWorkDesktopStore.getState().closeEditor(); void message.success(tr("saved")); },
     onError: (error) => (isConflict(error) ? void message.error(tr("conflict409")) : fail(error, "saveFailed")),
   });
@@ -281,10 +282,9 @@ export function useWorkDesktopData() {
   });
 
   const organizeMutation = useMutation({
-    // On-demand AI maintenance: a real queued turn on the linked session, not a
-    // client-side shuffle. Files inside the sweep stay maintenance-only.
+    // A scoped background maintenance job, independent of the linked chats.
     mutationFn: () => organizeWorkContext(token || null, contextId!),
-    onSuccess: () => { invalidateDetail(); void message.success(tr("organized")); },
+    onSuccess: (result) => { invalidateDetail(); void message.info(tr(result.queued ? "organized" : "dreamUnchanged")); },
     onError: (error) => fail(error, "saveFailed"),
   });
 

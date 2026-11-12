@@ -40,7 +40,7 @@ func (s *Service) DeleteNote(_ context.Context, id string) (notes.Note, error) {
 // GetRelatedMemories queries durable memory that is relevant to this note.
 // Uses the note's tags as search keywords, falling back to title/summary if
 // no tags are set.  Returns up to maxRelatedMemoriesForNote results.
-func (s *Service) GetRelatedMemories(_ context.Context, noteID string) ([]memory.StoredMemory, error) {
+func (s *Service) GetRelatedMemories(ctx context.Context, noteID string) ([]memory.StoredMemory, error) {
 	note, err := s.notesManager().Get(noteID)
 	if err != nil {
 		return nil, err
@@ -60,9 +60,10 @@ func (s *Service) GetRelatedMemories(_ context.Context, noteID string) ([]memory
 		return nil, nil
 	}
 
-	results, err := s.memoryManager().Search(memory.SearchOptions{
-		Query: query,
-		Limit: maxRelatedMemoriesForNote,
+	results, err := s.memoryManager(ctx).Search(memory.SearchOptions{
+		Query:     query,
+		Limit:     maxRelatedMemoriesForNote,
+		Automatic: true,
 	})
 	if err != nil {
 		return nil, err

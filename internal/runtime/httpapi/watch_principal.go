@@ -1,11 +1,26 @@
 package httpapi
 
 import (
+	"context"
 	"strings"
 
 	"github.com/tim5wang/godex/internal/core/identity"
+	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/services/watchauth"
 )
+
+// The audit subject remains the device; memory belongs to the approving human.
+// Pre-ownership local pairings retain their local-operator compatibility.
+func withWatchMemoryOwner(ctx context.Context, device watchauth.Device) context.Context {
+	owner := strings.TrimSpace(device.OwnerUserID)
+	if owner == "" {
+		owner = "unassigned-watch:" + device.DeviceID
+		if device.TenantID == "" {
+			owner = "local-operator"
+		}
+	}
+	return memory.WithOwner(ctx, memory.Owner{TenantID: device.TenantID, UserID: owner})
+}
 
 // watchDevicePrincipal is the identity of an authenticated paired watch (P0 §7,
 // the last un-wired family).

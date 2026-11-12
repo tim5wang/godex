@@ -200,8 +200,8 @@ func (s *Store) LinkSession(ctx context.Context, scope Scope, contextID string, 
 	if err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(1) FROM wc_context_sessions s
 		JOIN wc_contexts c ON c.tenant_id = s.tenant_id AND c.id = s.context_id
-		WHERE s.tenant_id=? AND s.session_id=? AND c.owner_id<>?`,
-		tenantID, sessionID, ownerID).Scan(&crossOwner); err != nil {
+		WHERE s.session_id=? AND (c.tenant_id<>? OR c.owner_id<>?)`,
+		sessionID, tenantID, ownerID).Scan(&crossOwner); err != nil {
 		return SessionLink{}, err
 	}
 	if crossOwner > 0 {
@@ -234,6 +234,9 @@ func (s *Store) LinkSession(ctx context.Context, scope Scope, contextID string, 
 		INSERT INTO wc_context_sessions(tenant_id, id, context_id, session_id, topic, created_at)
 		VALUES(?, ?, ?, ?, ?, ?)`,
 		tenantID, item.ID, contextID, item.SessionID, item.Topic, item.CreatedAt); err != nil {
+		return SessionLink{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO wc_session_bindings(session_id,tenant_id,owner_id,context_id) VALUES(?,?,?,?) ON CONFLICT(session_id) DO NOTHING`, sessionID, tenantID, ownerID, contextID); err != nil {
 		return SessionLink{}, err
 	}
 	if err := recordEventTx(ctx, tx, tenantID, contextID, "session_linked",
@@ -274,6 +277,14 @@ func (s *Store) UnlinkSession(ctx context.Context, scope Scope, contextID, sessi
 	}
 	if affected == 0 {
 		return ErrNotFound
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM wc_session_bindings WHERE session_id=? AND tenant_id=? AND owner_id=? AND context_id=?`, sessionID, tenantID, ownerID, contextID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO wc_session_bindings(session_id,tenant_id,owner_id,context_id)
+		SELECT s.session_id,c.tenant_id,c.owner_id,c.id FROM wc_context_sessions s JOIN wc_contexts c ON c.tenant_id=s.tenant_id AND c.id=s.context_id
+		WHERE s.session_id=? AND c.tenant_id=? AND c.owner_id=? ORDER BY s.created_at,s.id LIMIT 1`, sessionID, tenantID, ownerID); err != nil {
+		return err
 	}
 	now := nowRFC3339()
 	if err := recordEventTx(ctx, tx, tenantID, contextID, "session_unlinked",

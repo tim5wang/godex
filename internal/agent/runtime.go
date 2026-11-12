@@ -270,11 +270,10 @@ func NewWithSharedDependencies(cfg *config.Config, shared *SharedDependencies, s
 		// this guard the shared deps' global todo
 		// manager would carry over across sessions.
 		deps.todoMgr = localstore.NewTodoManagerForSession(cfg.SessionsDir, sessionID)
-		// Roadmap 6.2: when memory.session_scope is enabled, each session
-		// also gets its own memory manager rooted under cfg.MemoryDir so
-		// durable memory cannot leak across sessions. The default (disabled)
-		// keeps the shared org-level memory layer.
-		if cfg != nil && cfg.Memory.SessionScope {
+		// Unbound conversations keep working memory in their session partition.
+		// The backend may replace this with a desktop writer and a personal
+		// read-only overlay after resolving authenticated ownership.
+		if cfg != nil {
 			scopedMgr := memory.NewScopedManager(cfg.MemoryDir, scope.Session(sessionID))
 			deps.memoryMgr = scopedMgr
 			deps.memoryExt, deps.memoryStrategy = buildMemoryStack(cfg, deps.client, scopedMgr)
@@ -482,9 +481,14 @@ func (a *Agent) ApplyConfig(cfg *config.Config, shared *SharedDependencies) {
 	a.jevCompactionCaller = buildJevCompactionCaller(cfg)
 	a.skillLoader = deps.skillLoader
 	a.instrLoader = deps.instrLoader
-	a.memoryMgr = deps.memoryMgr
-	a.memoryExt = deps.memoryExt
-	a.memoryStrategy = deps.memoryStrategy
+	if a.memoryScopeKey == "" {
+		a.memoryMgr = deps.memoryMgr
+		a.memoryExt = deps.memoryExt
+		a.memoryStrategy = deps.memoryStrategy
+	}
+	if a.memoryScopeKey != "" && a.memorySharedMgr != nil {
+		a.memoryExt, a.memoryStrategy = buildMemoryStack(cfg, a.client, a.memoryMgr)
+	}
 	a.mcpMgr = deps.mcpMgr
 	a.compressor = deps.compressor
 	a.summarizer = deps.summarizer
@@ -815,51 +819,7 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 	// router (which resets engine state when the session switches engines).
 	// Empty or "godex" keeps the default loop below.
 	if strings.TrimSpace(opts.Harness) != "" && opts.Harness != "godex" {
-		// P2 #1: give the engine a stable access surface instead of the host's
-		// internals. The godex engine is the only one that may reach into the
-		// Agent; external engines build their turn from these inputs.
-		result, err := a.harnessRouter().RunTurn(ctx, HarnessTurnInput{
-			SessionID:          opts.SessionID,
-			TurnID:             opts.TurnID,
-			ActorID:            opts.ActorID,
-			ActorKind:          opts.ActorKind,
-			EmitRunnerPhases:   opts.EmitRunnerPhases,
-			Sink:               opts.Sink,
-			RuntimeContext:     opts.RuntimeContext,
-			Checkpoint:         opts.Checkpoint,
-			DrainInjections:    opts.DrainInjections,
-			OnInjectionDrained: opts.OnInjectionDrained,
-			Harness:            opts.Harness,
-			Model:              opts.Model,
-			ReasoningEffort:    opts.ReasoningEffort,
-			Messages: func() []protocol.Message {
-				return a.GetMessages()
-			},
-			WorkspaceDir: a.SandboxBinding().WorkspaceDir,
-			Scope:        a.SandboxScope(),
-			UsageContext: a.usageContext,
-		})
-		if err != nil {
-			return err
-		}
-		// P2 #2: the host consumes the engine's reply — append it to the
-		// transcript and checkpoint, exactly like the default loop does.
-		if reply := strings.TrimSpace(result.Reply); reply != "" {
-			a.AppendAssistantText(reply, "")
-			if opts.Checkpoint != nil {
-				opts.Checkpoint()
-			}
-			if sink := opts.Sink; sink != nil {
-				sink.Emit(events.Event{
-					SessionID: opts.SessionID,
-					TurnID:    opts.TurnID,
-					Type:      events.EventAssistantMessageComplete,
-					Timestamp: a.now(),
-					Payload:   events.TextPayload{Role: protocol.RoleAssistant, Text: reply},
-				})
-			}
-		}
-		return nil
+		return a.runHarnessTurn(ctx, opts)
 	}
 	ctx = tools.WithSessionID(ctx, opts.SessionID)
 	ctx = tools.WithSessionContext(ctx, opts.RuntimeContext)
@@ -1327,4 +1287,52 @@ func clampCacheKey(sessionID string) string {
 		return sessionID
 	}
 	return string(runes[:maxCacheKeyLen])
+}
+
+func (a *Agent) runHarnessTurn(ctx context.Context, opts RunOptions) error {
+	// P2 #1: give the engine a stable access surface instead of the host's
+	// internals. The godex engine is the only one that may reach into the
+	// Agent; external engines build their turn from these inputs.
+	result, err := a.harnessRouter().RunTurn(ctx, HarnessTurnInput{
+		SessionID:          opts.SessionID,
+		TurnID:             opts.TurnID,
+		ActorID:            opts.ActorID,
+		ActorKind:          opts.ActorKind,
+		EmitRunnerPhases:   opts.EmitRunnerPhases,
+		Sink:               opts.Sink,
+		RuntimeContext:     opts.RuntimeContext,
+		Checkpoint:         opts.Checkpoint,
+		DrainInjections:    opts.DrainInjections,
+		OnInjectionDrained: opts.OnInjectionDrained,
+		Harness:            opts.Harness,
+		Model:              opts.Model,
+		ReasoningEffort:    opts.ReasoningEffort,
+		Messages: func() []protocol.Message {
+			return a.GetMessages()
+		},
+		WorkspaceDir: a.SandboxBinding().WorkspaceDir,
+		Scope:        a.SandboxScope(),
+		UsageContext: a.usageContext,
+	})
+	if err != nil {
+		return err
+	}
+	// P2 #2: the host consumes the engine's reply — append it to the
+	// transcript and checkpoint, exactly like the default loop does.
+	if reply := strings.TrimSpace(result.Reply); reply != "" {
+		a.AppendAssistantText(reply, "")
+		if opts.Checkpoint != nil {
+			opts.Checkpoint()
+		}
+		if sink := opts.Sink; sink != nil {
+			sink.Emit(events.Event{
+				SessionID: opts.SessionID,
+				TurnID:    opts.TurnID,
+				Type:      events.EventAssistantMessageComplete,
+				Timestamp: a.now(),
+				Payload:   events.TextPayload{Role: protocol.RoleAssistant, Text: reply},
+			})
+		}
+	}
+	return nil
 }

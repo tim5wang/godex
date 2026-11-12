@@ -42,6 +42,7 @@ import {
   forgetMemory,
   getMeta,
   listMemory,
+  listLegacyMemory,
   listMemoryAudit,
   listMemoryCandidates,
   listMemorySuppressions,
@@ -55,6 +56,7 @@ import {
 } from "../../lib/api";
 import type { MemoryAuditLogEntry, MemoryCandidate, MemoryContextLayers, MemoryDigestResult, MemoryRecord, MemorySuppression, MemoryType } from "../../lib/types";
 import { useSettingsStore } from "../../store/settings";
+import { useNodeContextStore } from "../../store/nodeContext";
 import { ContextGroup, formatDate, MemoryAuditViewer, MemoryDigestViewer, MemoryViewer, Metric } from "./MemoryViewers";
 import {
   BlockedMemoryCard,
@@ -80,6 +82,9 @@ export function MemoryPage() {
   const { message } = AntApp.useApp();
   const { t } = useI18n();
   const token = useSettingsStore((state) => state.token);
+  const nodeID = useNodeContextStore((state) => state.nodeID);
+  const [legacyOpen, setLegacyOpen] = useState(false);
+  const [legacySearch, setLegacySearch] = useState("");
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [memoryType, setMemoryType] = useState<MemoryType | "">("");
@@ -100,34 +105,41 @@ export function MemoryPage() {
   const canReachMemory = !authRequired || !!token;
 
   const memoriesQuery = useQuery({
-    queryKey: ["memory", token, search, memoryType, sourceFilter],
+    queryKey: ["memory", token, nodeID, search, memoryType, sourceFilter],
     enabled: canReachMemory,
     queryFn: async () => listMemory(token || null, { query: search, memoryType, source: sourceFilter, limit: 500 }),
   });
   const archivedQuery = useQuery({
-    queryKey: ["memory-archived", token],
+    queryKey: ["memory-archived", token, nodeID],
     enabled: canReachMemory,
     queryFn: async () => listMemory(token || null, { status: "archived", limit: 500 }),
   });
   const candidatesQuery = useQuery({
-    queryKey: ["memory-candidates", token],
+    queryKey: ["memory-candidates", token, nodeID],
     enabled: canReachMemory,
     queryFn: async () => listMemoryCandidates(token || null),
   });
   const suppressionsQuery = useQuery({
-    queryKey: ["memory-suppressions", token],
+    queryKey: ["memory-suppressions", token, nodeID],
     enabled: canReachMemory,
     queryFn: async () => listMemorySuppressions(token || null),
   });
   const auditQuery = useQuery({
-    queryKey: ["memory-audit", token],
+    queryKey: ["memory-audit", token, nodeID],
     enabled: canReachMemory,
     queryFn: async () => listMemoryAudit(token || null, 50),
   });
   const contextQuery = useQuery({
-    queryKey: ["memory-context", token, previewQuery],
+    queryKey: ["memory-context", token, nodeID, previewQuery],
     enabled: canReachMemory,
     queryFn: async () => previewMemoryContext(token || null, previewQuery),
+  });
+
+  const legacyQuery = useQuery({
+    queryKey: ["memory-legacy", token, nodeID, legacySearch],
+    enabled: canReachMemory && legacyOpen,
+    queryFn: () => listLegacyMemory(token || null, legacySearch),
+    retry: false,
   });
 
   const memories = Array.isArray(memoriesQuery.data) ? memoriesQuery.data : [];
@@ -363,6 +375,7 @@ export function MemoryPage() {
       <div className="page-action-row">
         <Space wrap>
           <Button icon={<ReloadOutlined />} onClick={() => void refreshAll()}>Refresh</Button>
+          <Button onClick={() => setLegacyOpen(true)}>{t("workDesktop.legacyMemory")}</Button>
           <Button icon={<FileSearchOutlined />} loading={digestMutation.isPending} onClick={() => digestMutation.mutate()}>Digest</Button>
           <Button loading={mineMutation.isPending} onClick={() => mineMutation.mutate()}>{t("memory.actions.mineProjectDocs")}</Button>
           <Button loading={milestonesMutation.isPending} onClick={() => milestonesMutation.mutate()}>{t("memory.board.archiveMilestones")}</Button>
@@ -535,6 +548,14 @@ export function MemoryPage() {
       </Drawer>
       <Drawer title={viewing?.title} width={720} open={!!viewing} onClose={() => setViewing(null)} destroyOnHidden>
         {viewing ? <MemoryViewer item={viewing} /> : null}
+      </Drawer>
+      <Drawer title={t("workDesktop.legacyMemory")} width={720} open={legacyOpen} onClose={() => setLegacyOpen(false)}>
+        <Alert type="info" title={t("workDesktop.legacyMemoryHint")} style={{ marginBottom: 12 }} />
+        <Input.Search allowClear value={legacySearch} onChange={(event) => setLegacySearch(event.target.value)} style={{ marginBottom: 12 }} />
+        {legacyQuery.isError && <Alert type="warning" title={t("workDesktop.legacyMemoryUnavailable")} />}
+        <Space orientation="vertical" style={{ width: "100%" }}>
+          {legacyQuery.data?.map((record) => <Card size="small" key={record.id} title={record.title} extra={<Button size="small" onClick={() => setViewing(record)}>{t("workDesktop.expand")}</Button>}><Typography.Text type="secondary">{record.summary}</Typography.Text></Card>)}
+        </Space>
       </Drawer>
       <Drawer title="Memory audit" width={920} open={!!viewingAudit} onClose={() => setViewingAudit(null)} destroyOnHidden>
         {viewingAudit ? <MemoryAuditViewer entry={viewingAudit} /> : null}

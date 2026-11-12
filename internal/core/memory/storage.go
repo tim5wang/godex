@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/tim5wang/godex/internal/platform/retrieval"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,6 +20,8 @@ import (
 )
 
 func (m *Manager) ensureStore() error {
+	unlock := m.lockInitialization()
+	defer unlock()
 	if err := os.MkdirAll(m.dir, 0755); err != nil {
 		return err
 	}
@@ -199,6 +202,11 @@ func renderMemoryFile(entry Entry, content string) string {
 	if entry.SupersededBy != "" {
 		lines = append(lines, "SupersededBy: "+entry.SupersededBy)
 	}
+	if entry.Origin != nil {
+		if raw, err := json.Marshal(entry.Origin); err == nil {
+			lines = append(lines, "Origin: "+string(raw))
+		}
+	}
 	if entry.RecallPolicy != "" {
 		lines = append(lines, "RecallPolicy: "+entry.RecallPolicy)
 	}
@@ -242,6 +250,11 @@ func parseMemoryRecord(filename string, data []byte, fallbackModTime time.Time) 
 		key = strings.TrimSpace(strings.ToLower(key))
 		value = strings.TrimSpace(value)
 		switch key {
+		case "origin":
+			var origin Origin
+			if json.Unmarshal([]byte(value), &origin) == nil {
+				record.Origin = &origin
+			}
 		case "id":
 			record.ID = value
 		case "type":
@@ -458,11 +471,28 @@ func sourceDocumentFromContent(content string) string {
 	return ""
 }
 
+var opaqueSourceIDs = regexp.MustCompile(`(?i)([0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}|[0-9a-f]{12,})`)
+
+func sourceRelevanceText(source string) string {
+	return opaqueSourceIDs.ReplaceAllString(strings.ToLower(source), " ")
+}
+
+func sourceTermMatches(source, term string) bool {
+	numeric := true
+	for _, r := range term {
+		if !unicode.IsDigit(r) {
+			numeric = false
+			break
+		}
+	}
+	return !numeric && strings.Contains(source, term)
+}
+
 func scoreRelevantMemory(queryLower string, terms []string, entry Entry, content string) int {
 	title := strings.ToLower(entry.Title)
 	summary := strings.ToLower(entry.Summary)
 	body := strings.ToLower(content)
-	source := strings.ToLower(entry.Source)
+	source := sourceRelevanceText(entry.Source)
 
 	score := 0
 	if queryLower != "" {
@@ -475,7 +505,7 @@ func scoreRelevantMemory(queryLower string, terms []string, entry Entry, content
 		if strings.Contains(body, queryLower) {
 			score += 4
 		}
-		if strings.Contains(source, queryLower) {
+		if sourceTermMatches(source, queryLower) {
 			score += 3
 		}
 		for _, tag := range entry.Tags {
@@ -494,7 +524,7 @@ func scoreRelevantMemory(queryLower string, terms []string, entry Entry, content
 		if strings.Contains(body, term) {
 			score += 1
 		}
-		if strings.Contains(source, term) {
+		if sourceTermMatches(source, term) {
 			score += 2
 		}
 		for _, tag := range entry.Tags {
@@ -517,34 +547,4 @@ func scoreRelevantMemory(queryLower string, terms []string, entry Entry, content
 	return score
 }
 
-func extractTerms(query string) []string {
-	terms := make([]string, 0)
-	seen := make(map[string]struct{})
-	var builder strings.Builder
-	flush := func() {
-		if builder.Len() == 0 {
-			return
-		}
-		term := strings.ToLower(strings.TrimSpace(builder.String()))
-		builder.Reset()
-		if len([]rune(term)) < 2 {
-			return
-		}
-		if _, exists := seen[term]; exists {
-			return
-		}
-		seen[term] = struct{}{}
-		terms = append(terms, term)
-	}
-
-	for _, r := range query {
-		switch {
-		case unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.Is(unicode.Han, r):
-			builder.WriteRune(r)
-		default:
-			flush()
-		}
-	}
-	flush()
-	return terms
-}
+func extractTerms(query string) []string { return retrieval.Terms(query) }

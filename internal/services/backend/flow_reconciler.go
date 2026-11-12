@@ -60,6 +60,7 @@ func (s *Service) Start(ctx context.Context) error {
 		cancel()
 		return err
 	}
+	s.startMemoryDreamLoop(runCtx)
 	return nil
 }
 
@@ -76,6 +77,7 @@ func (s *Service) Stop(ctx context.Context) error {
 		s.flowReconcilerMu.Unlock()
 		// Still drain: a service that never had Start called on it can still hold turns
 		// whose detached goroutines are writing session files.
+		s.stopMemoryDreams()
 		return s.WaitIdleSessions(ctx)
 	}
 	s.flowReconcilerCancel = nil
@@ -90,6 +92,7 @@ func (s *Service) Stop(ctx context.Context) error {
 	// The sweep shares runCtx, so the cancel above stops it; this only waits for
 	// its current pass so a push is not cut off mid-flight.
 	s.StopAttentionSweep(ctx)
+	s.stopMemoryDreams()
 	waits := []<-chan struct{}{done, flowSessionSchedulerDone(sessionScheduler)}
 	for _, wait := range waits {
 		if wait == nil {

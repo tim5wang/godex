@@ -48,8 +48,21 @@ const (
 // StatusAll is a search-only sentinel meaning "do not filter by status".
 const StatusAll Status = "all"
 
+// Origin preserves the scope and exact evidence revision of promoted desktop knowledge.
+type Origin struct {
+	ValidUntil     string `json:"valid_until,omitempty"`
+	ContextID      string `json:"context_id"`
+	FactID         string `json:"fact_id"`
+	FactVersion    int    `json:"fact_version"`
+	Applicability  string `json:"applicability"`
+	SourceRevision string `json:"source_revision,omitempty"`
+	ObservedAt     string `json:"observed_at,omitempty"`
+	VerifiedAt     string `json:"verified_at,omitempty"`
+}
+
 // Entry is one durable memory entry.
 type Entry struct {
+	Origin      *Origin   `json:"origin,omitempty"`
 	ID          string    `json:"id"`
 	Title       string    `json:"title"`
 	File        string    `json:"file"`
@@ -73,6 +86,7 @@ type Entry struct {
 
 // SaveInput describes one memory to save.
 type SaveInput struct {
+	Origin       *Origin
 	Title        string
 	Summary      string
 	Content      string
@@ -85,6 +99,7 @@ type SaveInput struct {
 
 // UpdateInput updates one durable memory entry identified by title or file.
 type UpdateInput struct {
+	Origin       *Origin
 	Match        ForgetInput
 	Title        string
 	Summary      string
@@ -143,6 +158,8 @@ type Manager struct {
 	// candidateCountCache caches the number of pending memory candidates.
 	// -1 means "not cached, needs refresh".
 	candidateCountCache int
+	originValidator     func(Origin) bool
+	originRevision      func() string
 }
 
 type memoryFileCacheEntry struct {
@@ -162,7 +179,11 @@ func (m *Manager) ContextRevision() string {
 	if err != nil {
 		return ""
 	}
-	return fmt.Sprintf("%d:%d", info.ModTime().UnixNano(), info.Size())
+	revision := fmt.Sprintf("%d:%d", info.ModTime().UnixNano(), info.Size())
+	if m.originRevision != nil {
+		revision += "|" + m.originRevision()
+	}
+	return revision
 }
 
 // NewManager creates a new memory manager rooted at dir (unspecified scope).
@@ -259,6 +280,8 @@ func (m *Manager) BuildPromptSection() (string, error) {
 
 // Remember creates or updates one memory entry and rewrites the indexes.
 func (m *Manager) Remember(input SaveInput) (*Entry, error) {
+	unlock := m.lockMutation()
+	defer unlock()
 	if err := validateSaveInput(input); err != nil {
 		return nil, err
 	}
@@ -283,6 +306,7 @@ func (m *Manager) Remember(input SaveInput) (*Entry, error) {
 		Fingerprint:  computeMemoryFingerprint(input.Type, strings.TrimSpace(input.Title), strings.TrimSpace(input.Summary), strings.TrimSpace(input.Content)),
 		ExpiresAt:    input.ExpiresAt,
 		RecallPolicy: input.RecallPolicy,
+		Origin:       input.Origin,
 	}
 
 	existingIndex := -1
@@ -299,6 +323,9 @@ func (m *Manager) Remember(input SaveInput) (*Entry, error) {
 			entry.Status = existing.Status
 			entry.LastReferencedAt = existing.LastReferencedAt
 			entry.SupersededBy = existing.SupersededBy
+			if entry.Origin == nil {
+				entry.Origin = existing.Origin
+			}
 			if entry.RecallPolicy == "" {
 				entry.RecallPolicy = existing.RecallPolicy
 			}
@@ -368,6 +395,8 @@ func (m *Manager) Remember(input SaveInput) (*Entry, error) {
 
 // Update modifies one indexed memory entry while preserving its durable ID and file path.
 func (m *Manager) Update(input UpdateInput) (*Entry, error) {
+	unlock := m.lockMutation()
+	defer unlock()
 	if strings.TrimSpace(input.Match.Title) == "" && strings.TrimSpace(input.Match.File) == "" {
 		return nil, fmt.Errorf("missing title or file")
 	}
@@ -434,6 +463,10 @@ func (m *Manager) Update(input UpdateInput) (*Entry, error) {
 		ExpiresAt:        existing.ExpiresAt,
 		SupersededBy:     existing.SupersededBy,
 		RecallPolicy:     existing.RecallPolicy,
+		Origin:           existing.Origin,
+	}
+	if input.Origin != nil {
+		entry.Origin = input.Origin
 	}
 	if input.ExpiresAt != nil {
 		entry.ExpiresAt = input.ExpiresAt.UTC()
@@ -485,6 +518,8 @@ func (m *Manager) Update(input UpdateInput) (*Entry, error) {
 
 // Forget deletes one indexed memory entry and rewrites the indexes.
 func (m *Manager) Forget(input ForgetInput) (*Entry, error) {
+	unlock := m.lockMutation()
+	defer unlock()
 	if strings.TrimSpace(input.Title) == "" && strings.TrimSpace(input.File) == "" {
 		return nil, fmt.Errorf("missing title or file")
 	}
@@ -612,7 +647,7 @@ func (m *Manager) searchLinear(opts SearchOptions) ([]StoredMemory, error) {
 		if !entryStatusMatches(entry, opts.Status) {
 			continue
 		}
-		if opts.Automatic && !entryAutoRecallEligible(entry, time.Now()) {
+		if opts.Automatic && !m.autoRecallEligible(entry, time.Now()) {
 			continue
 		}
 		if tagFilter != "" && !entryHasTag(entry, tagFilter) {
@@ -708,6 +743,9 @@ func (m *Manager) readStoredMemory(entry Entry) (StoredMemory, error) {
 }
 
 func mergeEntryMetadata(indexEntry Entry, fileEntry Entry) Entry {
+	if indexEntry.Origin == nil {
+		indexEntry.Origin = fileEntry.Origin
+	}
 	merged := indexEntry
 	if merged.ID == "" {
 		merged.ID = fileEntry.ID

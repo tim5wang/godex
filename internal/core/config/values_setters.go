@@ -400,6 +400,8 @@ func setStorageStoredValue(file *ConfigFile, path string, value any) error {
 
 func setMemoryStoredValue(file *ConfigFile, path string, value any) error {
 	switch path {
+	case "memory.extraction_mode":
+		file.Memory.ExtractionMode = normalizeMemoryExtractionMode(asString(value))
 	case "memory.strategy":
 		file.Memory.Strategy = normalizeMemoryStrategyKind(asString(value))
 	case "memory.consolidate_after":

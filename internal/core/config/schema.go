@@ -197,6 +197,7 @@ func baseSchema() []SectionSchema {
 			Label:       "Memory",
 			Description: "Durable-memory capture strategy and per-session isolation.",
 			Fields: []FieldSchema{
+				{Path: "memory.extraction_mode", Label: "Extraction mode", Description: "rules keeps zero-model capture; single-pass adds background ADD-only extraction for new desktop deltas.", Type: "string", LiveApply: true, Options: []string{"rules", "single-pass"}},
 				{Path: "memory.strategy", Label: "Strategy", Description: "per-turn (default) | agent-only (no auto extraction) | consolidated (capture + LLM merge/dedup).", Type: "string", LiveApply: true, Options: []string{"per-turn", "agent-only", "consolidated"}},
 				{Path: "memory.consolidate_after", Label: "Consolidate After", Description: "Pending-candidate count that triggers an LLM consolidation pass when strategy=consolidated.", Type: "int", LiveApply: true},
 				{Path: "memory.session_scope", Label: "Session Scope", Description: "When true, isolate durable memory per session (roadmap 6.2): each session gets its own memory dir.", Type: "bool", LiveApply: true},

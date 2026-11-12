@@ -104,4 +104,23 @@ func init() {
 		`CREATE TABLE wc_memory_verifications(id TEXT PRIMARY KEY,tenant_id TEXT NOT NULL,context_id TEXT NOT NULL,session_id TEXT NOT NULL,turn_id TEXT NOT NULL,created_at TEXT NOT NULL,result_json TEXT NOT NULL)`,
 		`CREATE INDEX wc_memory_verifications_task ON wc_memory_verifications(tenant_id,context_id,session_id,turn_id)`,
 	}
+	migrations[10] = []string{
+		`CREATE TABLE wc_observation_keys(tenant_id TEXT NOT NULL,context_id TEXT NOT NULL,fingerprint TEXT NOT NULL,fact_id TEXT NOT NULL,PRIMARY KEY(tenant_id,context_id,fingerprint))`,
+		`CREATE TABLE wc_memory_extractions(id TEXT PRIMARY KEY,tenant_id TEXT NOT NULL,owner_id TEXT NOT NULL,context_id TEXT NOT NULL,session_id TEXT NOT NULL,turn_id TEXT NOT NULL,input_hash TEXT NOT NULL,input_json TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',attempt INTEGER NOT NULL DEFAULT 0,lease_until TEXT NOT NULL DEFAULT '',result_json TEXT NOT NULL DEFAULT '{}',last_error TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,completed_at TEXT NOT NULL DEFAULT '',UNIQUE(tenant_id,context_id,session_id,input_hash),UNIQUE(tenant_id,context_id,session_id,turn_id))`,
+		`CREATE INDEX wc_extraction_pending ON wc_memory_extractions(status,lease_until)`,
+	}
+
+	migrations[11] = []string{
+		`CREATE TABLE wc_memory_entities(id TEXT PRIMARY KEY,tenant_id TEXT NOT NULL,context_id TEXT NOT NULL,kind TEXT NOT NULL,name TEXT NOT NULL,identity_key TEXT NOT NULL,applicability TEXT NOT NULL,aliases_json TEXT NOT NULL DEFAULT '[]',proof_fact_id TEXT NOT NULL DEFAULT '',proof_version INTEGER NOT NULL DEFAULT 0,archived INTEGER NOT NULL DEFAULT 0,version INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(tenant_id,context_id,kind,identity_key,applicability))`,
+		`CREATE TABLE wc_entity_mentions(tenant_id TEXT NOT NULL,context_id TEXT NOT NULL,entity_id TEXT NOT NULL,fact_id TEXT NOT NULL,fact_version INTEGER NOT NULL,PRIMARY KEY(tenant_id,context_id,entity_id,fact_id))`,
+		`CREATE TABLE wc_entity_relations(id TEXT PRIMARY KEY,tenant_id TEXT NOT NULL,context_id TEXT NOT NULL,from_id TEXT NOT NULL,to_id TEXT NOT NULL,kind TEXT NOT NULL,fact_id TEXT NOT NULL,fact_version INTEGER NOT NULL,archived INTEGER NOT NULL DEFAULT 0,version INTEGER NOT NULL DEFAULT 1)`,
+		`CREATE TABLE wc_entity_dirty(tenant_id TEXT NOT NULL,context_id TEXT NOT NULL,fact_id TEXT NOT NULL,PRIMARY KEY(tenant_id,context_id,fact_id))`,
+		`INSERT INTO wc_entity_dirty SELECT tenant_id,context_id,id FROM wc_facts`,
+		`CREATE TRIGGER wc_entity_fact_insert AFTER INSERT ON wc_facts BEGIN INSERT OR IGNORE INTO wc_entity_dirty VALUES(NEW.tenant_id,NEW.context_id,NEW.id); END`,
+		`CREATE TRIGGER wc_entity_fact_update AFTER UPDATE ON wc_facts BEGIN INSERT OR IGNORE INTO wc_entity_dirty VALUES(NEW.tenant_id,NEW.context_id,NEW.id); END`,
+		`CREATE TRIGGER wc_entity_fact_delete AFTER DELETE ON wc_facts BEGIN INSERT OR IGNORE INTO wc_entity_dirty VALUES(OLD.tenant_id,OLD.context_id,OLD.id); END`,
+		`CREATE TABLE wc_entity_audits(id TEXT PRIMARY KEY,tenant_id TEXT NOT NULL,context_id TEXT NOT NULL,action TEXT NOT NULL,item_id TEXT NOT NULL,reason TEXT NOT NULL,before_json TEXT NOT NULL,after_json TEXT NOT NULL,created_at TEXT NOT NULL)`,
+		`CREATE INDEX wc_entities_context ON wc_memory_entities(tenant_id,context_id)`,
+	}
+
 }

@@ -1,0 +1,1133 @@
+{
+  "label": "before-bd94d5d",
+  "corpus_sha256": "220378819a22508d5125d23e65b0e5b4274d9f180070433a95a90704ac45779d",
+  "records": 48,
+  "metrics": {
+    "desktop/all": {
+      "queries": 40,
+      "precision_returned_at_5": 0.2909090909090909,
+      "recall_at_5": 0.96875,
+      "mrr": 0.9088541666666667,
+      "no_result_accuracy": 0.875,
+      "forbidden_hits": 0,
+      "mean_estimated_tokens": 97.925,
+      "p50_ms": 0.74,
+      "p95_ms": 1.337
+    },
+    "desktop/development": {
+      "queries": 20,
+      "precision_returned_at_5": 0.2833333333333333,
+      "recall_at_5": 1,
+      "mrr": 0.9583333333333334,
+      "no_result_accuracy": 1,
+      "forbidden_hits": 0,
+      "mean_estimated_tokens": 118.7,
+      "p50_ms": 0.856,
+      "p95_ms": 1.352
+    },
+    "desktop/holdout": {
+      "queries": 20,
+      "precision_returned_at_5": 0.3,
+      "recall_at_5": 0.9375,
+      "mrr": 0.859375,
+      "no_result_accuracy": 0.75,
+      "forbidden_hits": 0,
+      "mean_estimated_tokens": 77.15,
+      "p50_ms": 0.68,
+      "p95_ms": 0.954
+    },
+    "personal/all": {
+      "queries": 40,
+      "precision_returned_at_5": 0.2909090909090909,
+      "recall_at_5": 0.96875,
+      "mrr": 0.953125,
+      "no_result_accuracy": 0.875,
+      "forbidden_hits": 0,
+      "mean_estimated_tokens": 98.175,
+      "p50_ms": 10.615,
+      "p95_ms": 11.78
+    },
+    "personal/development": {
+      "queries": 20,
+      "precision_returned_at_5": 0.2833333333333333,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "no_result_accuracy": 1,
+      "forbidden_hits": 0,
+      "mean_estimated_tokens": 119.2,
+      "p50_ms": 10.033,
+      "p95_ms": 11.292
+    },
+    "personal/holdout": {
+      "queries": 20,
+      "precision_returned_at_5": 0.3,
+      "recall_at_5": 0.9375,
+      "mrr": 0.90625,
+      "no_result_accuracy": 0.75,
+      "forbidden_hits": 0,
+      "mean_estimated_tokens": 77.15,
+      "p50_ms": 10.64,
+      "p95_ms": 12.23
+    }
+  },
+  "results": {
+    "desktop": [
+      {
+        "query": "gopls references 引用定位修复",
+        "split": "development",
+        "expected": [
+          "lsp"
+        ],
+        "retrieved": [
+          "lsp",
+          "encoding",
+          "go"
+        ],
+        "ms": 0.829,
+        "estimated_tokens": 108
+      },
+      {
+        "query": "cannot widen applicability 整理失败",
+        "split": "development",
+        "expected": [
+          "scope"
+        ],
+        "retrieved": [
+          "scope",
+          "network",
+          "roll",
+          "dream",
+          "deadline"
+        ],
+        "ms": 0.587,
+        "estimated_tokens": 156
+      },
+      {
+        "query": "Dream context deadline exceeded 超时时间",
+        "split": "development",
+        "expected": [
+          "deadline"
+        ],
+        "retrieved": [
+          "deadline",
+          "dream",
+          "json",
+          "roll",
+          "owner"
+        ],
+        "ms": 0.634,
+        "estimated_tokens": 155
+      },
+      {
+        "query": "macOS 截图 OCR 使用什么",
+        "split": "development",
+        "expected": [
+          "ocr",
+          "vision"
+        ],
+        "retrieved": [
+          "ocr",
+          "vision"
+        ],
+        "ms": 0.567,
+        "estimated_tokens": 73
+      },
+      {
+        "query": "临时探针脚本放在哪个目录",
+        "split": "development",
+        "expected": [
+          "scratch"
+        ],
+        "retrieved": [
+          "scratch"
+        ],
+        "ms": 1.192,
+        "estimated_tokens": 29
+      },
+      {
+        "query": "用户要求用什么语言回复",
+        "split": "development",
+        "expected": [
+          "language"
+        ],
+        "retrieved": [
+          "language",
+          "noise-11",
+          "noise-10",
+          "noise-9",
+          "noise-8"
+        ],
+        "ms": 1.119,
+        "estimated_tokens": 316
+      },
+      {
+        "query": "godex_context_v2 的 runtime_tail",
+        "split": "development",
+        "expected": [
+          "capture"
+        ],
+        "retrieved": [
+          "capture"
+        ],
+        "ms": 0.196,
+        "estimated_tokens": 35
+      },
+      {
+        "query": "source_seq 没有变化还需要整理吗",
+        "split": "development",
+        "expected": [
+          "dream"
+        ],
+        "retrieved": [
+          "dream",
+          "roll",
+          "deadline",
+          "noise-11",
+          "noise-10"
+        ],
+        "ms": 1.172,
+        "estimated_tokens": 258
+      },
+      {
+        "query": "memory_apply 能用失败测试确认事实吗",
+        "split": "development",
+        "expected": [
+          "verify"
+        ],
+        "retrieved": [
+          "verify",
+          "network",
+          "json",
+          "noise-11",
+          "noise-10"
+        ],
+        "ms": 1.352,
+        "estimated_tokens": 256
+      },
+      {
+        "query": "不同 work_context 的工作记忆能共享吗",
+        "split": "development",
+        "expected": [
+          "owner"
+        ],
+        "retrieved": [
+          "verify",
+          "scope",
+          "owner",
+          "expired",
+          "fts"
+        ],
+        "ms": 1.337,
+        "estimated_tokens": 162
+      },
+      {
+        "query": "revert 遇到并发版本变更",
+        "split": "development",
+        "expected": [
+          "roll"
+        ],
+        "retrieved": [
+          "roll",
+          "camel",
+          "proof",
+          "cache"
+        ],
+        "ms": 1.412,
+        "estimated_tokens": 118
+      },
+      {
+        "query": "ApprovePermission 核实任务恢复",
+        "split": "development",
+        "expected": [
+          "auth"
+        ],
+        "retrieved": [
+          "auth",
+          "camel",
+          "cron",
+          "verify",
+          "proof"
+        ],
+        "ms": 0.74,
+        "estimated_tokens": 163
+      },
+      {
+        "query": "文件预览的代码折叠与 git changes",
+        "split": "development",
+        "expected": [
+          "preview"
+        ],
+        "retrieved": [
+          "preview",
+          "git",
+          "css"
+        ],
+        "ms": 1.091,
+        "estimated_tokens": 72
+      },
+      {
+        "query": "memoryRecallRevision 什么时候失效",
+        "split": "development",
+        "expected": [
+          "cache"
+        ],
+        "retrieved": [
+          "cache"
+        ],
+        "ms": 0.62,
+        "estimated_tokens": 32
+      },
+      {
+        "query": "memory.db SQLite FTS5 索引真源",
+        "split": "development",
+        "expected": [
+          "fts"
+        ],
+        "retrieved": [
+          "fts",
+          "camel",
+          "proof",
+          "cache",
+          "verify"
+        ],
+        "ms": 0.548,
+        "estimated_tokens": 164
+      },
+      {
+        "query": "推荐一家附近的川菜馆",
+        "split": "development",
+        "expected": [],
+        "retrieved": [],
+        "ms": 0.935,
+        "estimated_tokens": 0
+      },
+      {
+        "query": "量子纠缠贝尔不等式",
+        "split": "development",
+        "expected": [],
+        "retrieved": [],
+        "ms": 0.871,
+        "estimated_tokens": 0
+      },
+      {
+        "query": "今天黄金价格是多少",
+        "split": "development",
+        "expected": [],
+        "retrieved": [],
+        "ms": 0.856,
+        "estimated_tokens": 0
+      },
+      {
+        "query": "请用中文简短回答",
+        "split": "development",
+        "expected": [],
+        "retrieved": [],
+        "ms": 0.019,
+        "estimated_tokens": 0
+      },
+      {
+        "query": "go test ./internal/tools 验证命令",
+        "split": "development",
+        "expected": [
+          "go"
+        ],
+        "retrieved": [
+          "go",
+          "lsp",
+          "vision",
+          "noise-11",
+          "noise-10"
+        ],
+        "ms": 0.791,
+        "estimated_tokens": 277
+      },
+      {
+        "query": "expires_at superseded_by 自动召回",
+        "split": "holdout",
+        "expected": [
+          "expired"
+        ],
+        "retrieved": [
+          "expired",
+          "cache"
+        ],
+        "ms": 0.539,
+        "estimated_tokens": 59
+      },
+      {
+        "query": "mac-test darwin Vision 验证适用范围",
+        "split": "holdout",
+        "expected": [
+          "vision"
+        ],
+        "retrieved": [
+          "scope",
+          "vision",
+          "go",
+          "ocr",
+          "lsp"
+        ],
+        "ms": 0.888,
+        "estimated_tokens": 189
+      },
+      {
+        "query": "reasoning_effort max_tokens JSON 截断",
+        "split": "holdout",
+        "expected": [
+          "models"
+        ],
+        "retrieved": [
+          "models",
+          "json",
+          "encoding"
+        ],
+        "ms": 0.3,
+        "estimated_tokens": 87
+      },
+      {
+        "query": "Asia/Shanghai cron 时区和送达目标",
+        "split": "holdout",
+        "expected": [
+          "cron"
+        ],
+        "retrieved": [
+          "cron",
+          "auth"
+        ],
+        "ms": 0.808,
+        "estimated_tokens": 63
+      },
+      {
+        "query": "tool_exchange enable_bundles core_code bash",
+        "split": "holdout",
+        "expected": [
+          "tool"
+        ],
+        "retrieved": [
+          "tool"
+        ],
+        "ms": 0.257,
+        "estimated_tokens": 33
+      },
+      {
+        "query": "合并词条先 replace 再 merge",
+        "split": "holdout",
+        "expected": [
+          "merge"
+        ],
+        "retrieved": [
+          "merge"
+        ],
+        "ms": 0.693,
+        "estimated_tokens": 25
+      },
+      {
+        "query": "web-bundle-check gzip 预算",
+        "split": "holdout",
+        "expected": [
+          "bundle"
+        ],
+        "retrieved": [
+          "bundle",
+          "models",
+          "network",
+          "git",
+          "tool"
+        ],
+        "ms": 0.365,
+        "estimated_tokens": 149
+      },
+      {
+        "query": "中文 U+FFFD 截断乱码",
+        "split": "holdout",
+        "expected": [
+          "encoding"
+        ],
+        "retrieved": [
+          "encoding",
+          "models"
+        ],
+        "ms": 0.453,
+        "estimated_tokens": 58
+      },
+      {
+        "query": "parse_dream_result 校验失败会消耗水位吗",
+        "split": "holdout",
+        "expected": [
+          "json"
+        ],
+        "retrieved": [
+          "network",
+          "dream",
+          "scope",
+          "json",
+          "verify"
+        ],
+        "ms": 1.082,
+        "estimated_tokens": 158
+      },
+      {
+        "query": "wc_memory_verifications 记录哪些证据",
+        "split": "holdout",
+        "expected": [
+          "proof"
+        ],
+        "retrieved": [
+          "proof",
+          "vision",
+          "network",
+          "merge"
+        ],
+        "ms": 0.68,
+        "estimated_tokens": 113
+      },
+      {
+        "query": "CodeMirror 只读预览光标",
+        "split": "holdout",
+        "expected": [
+          "css"
+        ],
+        "retrieved": [
+          "css",
+          "preview"
+        ],
+        "ms": 0.663,
+        "estimated_tokens": 43
+      },
+      {
+        "query": "git diff --check 提交检查",
+        "split": "holdout",
+        "expected": [
+          "git"
+        ],
+        "retrieved": [
+          "git",
+          "bundle",
+          "models",
+          "cache",
+          "preview"
+        ],
+        "ms": 0.532,
+        "estimated_tokens": 141
+      },
+      {
+        "query": "voice-engine 17021 zipformer",
+        "split": "holdout",
+        "expected": [
+          "voice"
+        ],
+        "retrieved": [
+          "voice"
+        ],
+        "ms": 0.245,
+        "estimated_tokens": 25
+      },
+      {
+        "query": "web_fetch HTTP 错误与原始证据",
+        "split": "holdout",
+        "expected": [
+          "network"
+        ],
+        "retrieved": [
+          "network",
+          "proof",
+          "vision",
+          "git",
+          "auth"
+        ],
+        "ms": 0.839,
+        "estimated_tokens": 145
+      },
+      {
+        "query": "apply_memory_verification 原子批量回写",
+        "split": "holdout",
+        "expected": [
+          "camel"
+        ],
+        "retrieved": [],
+        "ms": 0.622,
+        "estimated_tokens": 0
+      },
+      {
+        "query": "internal/tools/lsp.go 的引用测试",
+        "split": "holdout",
+        "expected": [
+          "lsp"
+        ],
+        "retrieved": [
+          "lsp",
+          "go",
+          "verify",
+          "capture",
+          "scratch"
+        ],
+        "ms": 0.704,
+        "estimated_tokens": 185
+      },
+      {
+        "query": "帮我规划东京五天旅游",
+        "split": "holdout",
+        "expected": [],
+        "retrieved": [],
+        "ms": 0.954,
+        "estimated_tokens": 0
+      },
+      {
+        "query": "PostgreSQL VACUUM 参数如何设置",
+        "split": "holdout",
+        "expected": [],
+        "retrieved": [
+          "proof",
+          "deadline"
+        ],
+        "ms": 0.773,
+        "estimated_tokens": 70
+      },
+      {
+        "query": "Kubernetes ingress nginx TLS 续期",
+        "split": "holdout",
+        "expected": [],
+        "retrieved": [],
+        "ms": 0.29,
+        "estimated_tokens": 0
+      },
+      {
+        "query": "请问今天午饭吃什么",
+        "split": "holdout",
+        "expected": [],
+        "retrieved": [],
+        "ms": 0.859,
+        "estimated_tokens": 0
+      }
+    ],
+    "personal": [
+      {
+        "query": "gopls references 引用定位修复",
+        "split": "development",
+        "expected": [
+          "lsp"
+        ],
+        "retrieved": [
+          "lsp",
+          "encoding",
+          "go"
+        ],
+        "ms": 10.033,
+        "estimated_tokens": 108
+      },
+      {
+        "query": "cannot widen applicability 整理失败",
+        "split": "development",
+        "expected": [
+          "scope"
+        ],
+        "retrieved": [
+          "scope",
+          "network",
+          "dream",
+          "roll",
+          "deadline"
+        ],
+        "ms": 8.665,
+        "estimated_tokens": 156
+      },
+      {
+        "query": "Dream context deadline exceeded 超时时间",
+        "split": "development",
+        "expected": [
+          "deadline"
+        ],
+        "retrieved": [
+          "deadline",
+          "dream",
+          "roll",
+          "owner",
+          "verify"
+        ],
+        "ms": 8.856,
+        "estimated_tokens": 165
+      },
+      {
+        "query": "macOS 截图 OCR 使用什么",
+        "split": "development",
+        "expected": [
+          "ocr",
+          "vision"
+        ],
+        "retrieved": [
+          "ocr",
+          "vision"
+        ],
+        "ms": 9.039,
+        "estimated_tokens": 73
+      },
+      {
+        "query": "临时探针脚本放在哪个目录",
+        "split": "development",
+        "expected": [
+          "scratch"
+        ],
+        "retrieved": [
+          "scratch"
+        ],
+        "ms": 9.03,
+        "estimated_tokens": 29
+      },
+      {
+        "query": "用户要求用什么语言回复",
+        "split": "development",
+        "expected": [
+          "language"
+        ],
+        "retrieved": [
+          "language",
+          "noise-11",
+          "noise-10",
+          "noise-9",
+          "noise-8"
+        ],
+        "ms": 9.393,
+        "estimated_tokens": 316
+      },
+      {
+        "query": "godex_context_v2 的 runtime_tail",
+        "split": "development",
+        "expected": [
+          "capture"
+        ],
+        "retrieved": [
+          "capture"
+        ],
+        "ms": 9.741,
+        "estimated_tokens": 35
+      },
+      {
+        "query": "source_seq 没有变化还需要整理吗",
+        "split": "development",
+        "expected": [
+          "dream"
+        ],
+        "retrieved": [
+          "dream",
+          "roll",
+          "deadline",
+          "noise-11",
+          "noise-10"
+        ],
+        "ms": 10.907,
+        "estimated_tokens": 258
+      },
+      {
+        "query": "memory_apply 能用失败测试确认事实吗",
+        "split": "development",
+        "expected": [
+          "verify"
+        ],
+        "retrieved": [
+          "verify",
+          "network",
+          "json",
+          "noise-11",
+          "noise-10"
+        ],
+        "ms": 9.706,
+        "estimated_tokens": 256
+      },
+      {
+        "query": "不同 work_context 的工作记忆能共享吗",
+        "split": "development",
+        "expected": [
+          "owner"
+        ],
+        "retrieved": [
+          "owner",
+          "verify",
+          "scope",
+          "fts",
+          "expired"
+        ],
+        "ms": 10.909,
+        "estimated_tokens": 162
+      },
+      {
+        "query": "revert 遇到并发版本变更",
+        "split": "development",
+        "expected": [
+          "roll"
+        ],
+        "retrieved": [
+          "roll",
+          "camel",
+          "proof",
+          "cache"
+        ],
+        "ms": 11.176,
+        "estimated_tokens": 118
+      },
+      {
+        "query": "ApprovePermission 核实任务恢复",
+        "split": "development",
+        "expected": [
+          "auth"
+        ],
+        "retrieved": [
+          "auth",
+          "camel",
+          "cron",
+          "verify",
+          "proof"
+        ],
+        "ms": 9.796,
+        "estimated_tokens": 163
+      },
+      {
+        "query": "文件预览的代码折叠与 git changes",
+        "split": "development",
+        "expected": [
+          "preview"
+        ],
+        "retrieved": [
+          "preview",
+          "git",
+          "css"
+        ],
+        "ms": 11.292,
+        "estimated_tokens": 72
+      },
+      {
+        "query": "memoryRecallRevision 什么时候失效",
+        "split": "development",
+        "expected": [
+          "cache"
+        ],
+        "retrieved": [
+          "cache"
+        ],
+        "ms": 9.856,
+        "estimated_tokens": 32
+      },
+      {
+        "query": "memory.db SQLite FTS5 索引真源",
+        "split": "development",
+        "expected": [
+          "fts"
+        ],
+        "retrieved": [
+          "fts",
+          "proof",
+          "verify",
+          "camel",
+          "cache"
+        ],
+        "ms": 11.006,
+        "estimated_tokens": 164
+      },
+      {
+        "query": "推荐一家附近的川菜馆",
+        "split": "development",
+        "expected": [],
+        "retrieved": [],
+        "ms": 10.99,
+        "estimated_tokens": 0
+      },
+      {
+        "query": "量子纠缠贝尔不等式",
+        "split": "development",
+        "expected": [],
+        "retrieved": [],
+        "ms": 9.93,
+        "estimated_tokens": 0
+      },
+      {
+        "query": "今天黄金价格是多少",
+        "split": "development",
+        "expected": [],
+        "retrieved": [],
+        "ms": 11.605,
+        "estimated_tokens": 0
+      },
+      {
+        "query": "请用中文简短回答",
+        "split": "development",
+        "expected": [],
+        "retrieved": [],
+        "ms": 10.936,
+        "estimated_tokens": 0
+      },
+      {
+        "query": "go test ./internal/tools 验证命令",
+        "split": "development",
+        "expected": [
+          "go"
+        ],
+        "retrieved": [
+          "go",
+          "lsp",
+          "vision",
+          "noise-11",
+          "noise-10"
+        ],
+        "ms": 11.219,
+        "estimated_tokens": 277
+      },
+      {
+        "query": "expires_at superseded_by 自动召回",
+        "split": "holdout",
+        "expected": [
+          "expired"
+        ],
+        "retrieved": [
+          "expired",
+          "cache"
+        ],
+        "ms": 9.079,
+        "estimated_tokens": 59
+      },
+      {
+        "query": "mac-test darwin Vision 验证适用范围",
+        "split": "holdout",
+        "expected": [
+          "vision"
+        ],
+        "retrieved": [
+          "vision",
+          "scope",
+          "lsp",
+          "ocr",
+          "go"
+        ],
+        "ms": 10.615,
+        "estimated_tokens": 189
+      },
+      {
+        "query": "reasoning_effort max_tokens JSON 截断",
+        "split": "holdout",
+        "expected": [
+          "models"
+        ],
+        "retrieved": [
+          "models",
+          "json",
+          "encoding"
+        ],
+        "ms": 8.897,
+        "estimated_tokens": 87
+      },
+      {
+        "query": "Asia/Shanghai cron 时区和送达目标",
+        "split": "holdout",
+        "expected": [
+          "cron"
+        ],
+        "retrieved": [
+          "cron",
+          "auth"
+        ],
+        "ms": 11.522,
+        "estimated_tokens": 63
+      },
+      {
+        "query": "tool_exchange enable_bundles core_code bash",
+        "split": "holdout",
+        "expected": [
+          "tool"
+        ],
+        "retrieved": [
+          "tool"
+        ],
+        "ms": 11.413,
+        "estimated_tokens": 33
+      },
+      {
+        "query": "合并词条先 replace 再 merge",
+        "split": "holdout",
+        "expected": [
+          "merge"
+        ],
+        "retrieved": [
+          "merge"
+        ],
+        "ms": 12.23,
+        "estimated_tokens": 25
+      },
+      {
+        "query": "web-bundle-check gzip 预算",
+        "split": "holdout",
+        "expected": [
+          "bundle"
+        ],
+        "retrieved": [
+          "bundle",
+          "network",
+          "git",
+          "models",
+          "tool"
+        ],
+        "ms": 9.539,
+        "estimated_tokens": 149
+      },
+      {
+        "query": "中文 U+FFFD 截断乱码",
+        "split": "holdout",
+        "expected": [
+          "encoding"
+        ],
+        "retrieved": [
+          "encoding",
+          "models"
+        ],
+        "ms": 10.64,
+        "estimated_tokens": 58
+      },
+      {
+        "query": "parse_dream_result 校验失败会消耗水位吗",
+        "split": "holdout",
+        "expected": [
+          "json"
+        ],
+        "retrieved": [
+          "network",
+          "json",
+          "dream",
+          "scope",
+          "verify"
+        ],
+        "ms": 11.78,
+        "estimated_tokens": 158
+      },
+      {
+        "query": "wc_memory_verifications 记录哪些证据",
+        "split": "holdout",
+        "expected": [
+          "proof"
+        ],
+        "retrieved": [
+          "proof",
+          "network",
+          "vision",
+          "merge"
+        ],
+        "ms": 9.413,
+        "estimated_tokens": 113
+      },
+      {
+        "query": "CodeMirror 只读预览光标",
+        "split": "holdout",
+        "expected": [
+          "css"
+        ],
+        "retrieved": [
+          "css",
+          "preview"
+        ],
+        "ms": 9.606,
+        "estimated_tokens": 43
+      },
+      {
+        "query": "git diff --check 提交检查",
+        "split": "holdout",
+        "expected": [
+          "git"
+        ],
+        "retrieved": [
+          "git",
+          "bundle",
+          "preview",
+          "models",
+          "cache"
+        ],
+        "ms": 10.372,
+        "estimated_tokens": 141
+      },
+      {
+        "query": "voice-engine 17021 zipformer",
+        "split": "holdout",
+        "expected": [
+          "voice"
+        ],
+        "retrieved": [
+          "voice"
+        ],
+        "ms": 9.441,
+        "estimated_tokens": 25
+      },
+      {
+        "query": "web_fetch HTTP 错误与原始证据",
+        "split": "holdout",
+        "expected": [
+          "network"
+        ],
+        "retrieved": [
+          "network",
+          "proof",
+          "vision",
+          "git",
+          "auth"
+        ],
+        "ms": 10.197,
+        "estimated_tokens": 145
+      },
+      {
+        "query": "apply_memory_verification 原子批量回写",
+        "split": "holdout",
+        "expected": [
+          "camel"
+        ],
+        "retrieved": [],
+        "ms": 16.968,
+        "estimated_tokens": 0
+      },
+      {
+        "query": "internal/tools/lsp.go 的引用测试",
+        "split": "holdout",
+        "expected": [
+          "lsp"
+        ],
+        "retrieved": [
+          "lsp",
+          "go",
+          "verify",
+          "capture",
+          "scratch"
+        ],
+        "ms": 11.084,
+        "estimated_tokens": 185
+      },
+      {
+        "query": "帮我规划东京五天旅游",
+        "split": "holdout",
+        "expected": [],
+        "retrieved": [],
+        "ms": 9.82,
+        "estimated_tokens": 0
+      },
+      {
+        "query": "PostgreSQL VACUUM 参数如何设置",
+        "split": "holdout",
+        "expected": [],
+        "retrieved": [
+          "proof",
+          "deadline"
+        ],
+        "ms": 11.675,
+        "estimated_tokens": 70
+      },
+      {
+        "query": "Kubernetes ingress nginx TLS 续期",
+        "split": "holdout",
+        "expected": [],
+        "retrieved": [],
+        "ms": 11.206,
+        "estimated_tokens": 0
+      },
+      {
+        "query": "请问今天午饭吃什么",
+        "split": "holdout",
+        "expected": [],
+        "retrieved": [],
+        "ms": 11.506,
+        "estimated_tokens": 0
+      }
+    ]
+  }
+}

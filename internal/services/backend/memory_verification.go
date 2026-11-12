@@ -21,10 +21,11 @@ import (
 )
 
 type memoryVerificationGrant struct {
-	ContextID string            `json:"context_id"`
-	Scope     workcontext.Scope `json:"scope"`
-	Facts     map[string]int    `json:"facts"`
-	GrantedAt time.Time         `json:"granted_at"`
+	EntityOnly bool              `json:"entity_only,omitempty"`
+	ContextID  string            `json:"context_id"`
+	Scope      workcontext.Scope `json:"scope"`
+	Facts      map[string]int    `json:"facts"`
+	GrantedAt  time.Time         `json:"granted_at"`
 }
 
 func cloneMemoryVerificationGrant(g *memoryVerificationGrant) *memoryVerificationGrant {
@@ -71,7 +72,8 @@ func requestsMemoryVerification(envelope message.Envelope) bool {
 }
 
 func (s *Service) prepareMemoryVerificationGrant(session *sessionState, envelope message.Envelope, now time.Time) (*memoryVerificationGrant, error) {
-	if !requestsMemoryVerification(envelope) {
+	entityOnly := !requestsMemoryVerification(envelope)
+	if entityOnly && !requestsEntityMaintenance(envelope) {
 		return nil, nil
 	}
 	session.mu.RLock()
@@ -88,7 +90,7 @@ func (s *Service) prepareMemoryVerificationGrant(session *sessionState, envelope
 	if err != nil {
 		return nil, err
 	}
-	g := &memoryVerificationGrant{ContextID: id, Scope: scope, Facts: map[string]int{}, GrantedAt: now}
+	g := &memoryVerificationGrant{EntityOnly: entityOnly, ContextID: id, Scope: scope, Facts: map[string]int{}, GrantedAt: now}
 	for _, f := range facts {
 		if f.Status != "archived" && f.Status != "superseded" && f.Status != "rejected" {
 			g.Facts[f.ID] = f.Version
@@ -154,6 +156,9 @@ func (s *Service) beginMemoryVerification(ctx context.Context, session *sessionS
 	session.memoryVerification = v
 	session.mu.Unlock()
 	session.agent.ReplaceRuntimeFeedback(verificationFeedbackPrefix, fmt.Sprintf(`%s The USER explicitly authorized a deep verification of this desktop for this task only. Frozen desktop=%s, target records=%d. Call work_context action=memory_inventory to read complete records in pages. Inspect original code, run meaningful tests or fetch primary sources with existing tools; this authorization grants memory updates only, no extra tool/system permissions. Successful evidence tool call IDs become usable by memory_apply; failed calls, memory summaries, assistant text and self-reported receipts do not count. Use batches of at most 16 operations: confirm, archive, merge, replace, resolve_conflict, block. Keep applicability and distinguish code evidence from actual deployed/runtime evidence. Preferences/decisions need original user sources (history_search role=user), not guesses. For pending supersedes proposals, merge the proposal and its live predecessor with both versions before confirming. To synthesize combined wording, replace then merge the remaining records into the new confirmed fact. A block must say decision, missing_evidence or access; never confirm or delete a fact merely to clear the list. Finish with memory_status then memory_finish; every original record must have an audited outcome. Do not claim success or leave ordinary unverified observations unprocessed. Finish all writes BEFORE the final report.`, verificationFeedbackPrefix, g.ContextID, len(g.Facts)))
+	if g.EntityOnly {
+		session.agent.ReplaceRuntimeFeedback(verificationFeedbackPrefix, verificationFeedbackPrefix+" The USER authorized entity catalog metadata maintenance only for this desktop. Use work_context entities, entity_save and entity_relation with current entity/fact versions and reasons. Aliases are equivalent names; use part_of for membership and cite a current source fact. This grant cannot confirm, archive, replace or merge underlying facts; memory_apply is forbidden. Finish metadata writes before your report. No extra tool or system permissions are granted.")
+	}
 	close := func() {
 		cancel()
 		detach()
@@ -315,7 +320,7 @@ func (s *Service) memoryVerificationStatus(ctx context.Context, v *memoryVerific
 }
 
 func (s *Service) checkMemoryVerificationCompletion(ctx context.Context, v *memoryVerificationRuntime) error {
-	if v == nil {
+	if v == nil || v.grant.EntityOnly {
 		return nil
 	}
 	status, err := s.memoryVerificationStatus(ctx, v)

@@ -1,0 +1,248 @@
+{
+  "engine": "desktop",
+  "records": [
+    {
+      "id": "root",
+      "title": "AE2 wc_attention_actions snooze",
+      "content": "AE2 的 wc_attention_actions 存储推迟和处置动作。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "child",
+      "title": "AE2.1 snooze 条目级行为",
+      "content": "AE2.1 的 snooze 支持条目级动作优先，组级动作只在全部条目完成时离开。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "grandchild",
+      "title": "AE2.1.1 snooze 巡检细节",
+      "content": "AE2.1.1 的 snooze 处理历史巡检细节。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "catalog",
+      "title": "检索实体目录",
+      "content": "检索实体目录保存稳定标识、来源证据及版本。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "symbol",
+      "title": "GetSymbolReferences",
+      "content": "GetSymbolReferences 返回语言服务器的符号引用。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "file-a",
+      "title": "pkg/one/config.go",
+      "content": "pkg/one/config.go 管理配置版本。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "file-b",
+      "title": "pkg/two/config.go",
+      "content": "pkg/two/config.go 管理配置版本。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "under",
+      "title": "a_b",
+      "content": "a_b 处理连接请求。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "flat",
+      "title": "ab",
+      "content": "ab 处理连接请求。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "alpha",
+      "title": "AlphaModule",
+      "content": "AlphaModule 管理本地缓存。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "beta",
+      "title": "BetaModule",
+      "content": "BetaModule 管理远程缓存。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "foreign",
+      "title": "外桌面业务模块",
+      "content": "外桌面业务模块只在另一个桌面可用。",
+      "status": "confirmed",
+      "desktop": "other"
+    }
+  ],
+  "entities": [
+    {
+      "id": "root",
+      "kind": "module",
+      "name": "AE2",
+      "factid": "root",
+      "aliases": []
+    },
+    {
+      "id": "child",
+      "kind": "module",
+      "name": "AE2.1",
+      "factid": "child",
+      "aliases": []
+    },
+    {
+      "id": "grandchild",
+      "kind": "module",
+      "name": "AE2.1.1",
+      "factid": "grandchild",
+      "aliases": []
+    },
+    {
+      "id": "catalog",
+      "kind": "module",
+      "name": "检索实体目录",
+      "factid": "catalog",
+      "aliases": [
+        "记忆台账",
+        "memory_registry"
+      ]
+    },
+    {
+      "id": "symbol",
+      "kind": "symbol",
+      "name": "GetSymbolReferences",
+      "factid": "symbol",
+      "aliases": [
+        "find_references",
+        "查找引用入口"
+      ]
+    },
+    {
+      "id": "alpha",
+      "kind": "module",
+      "name": "AlphaModule",
+      "factid": "alpha",
+      "aliases": [
+        "common_tool"
+      ]
+    },
+    {
+      "id": "beta",
+      "kind": "module",
+      "name": "BetaModule",
+      "factid": "beta",
+      "aliases": [
+        "common_tool"
+      ]
+    },
+    {
+      "id": "foreign",
+      "kind": "module",
+      "name": "外桌面业务模块",
+      "factid": "foreign",
+      "aliases": [
+        "private_remote_alias"
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "from": "child",
+      "to": "root",
+      "factid": "child"
+    },
+    {
+      "from": "grandchild",
+      "to": "child",
+      "factid": "grandchild"
+    }
+  ],
+  "queries": [
+    {
+      "id": "alias-zh",
+      "text": "记忆台账",
+      "relevant": [
+        "catalog"
+      ],
+      "split": "validation"
+    },
+    {
+      "id": "alias-code",
+      "text": "memory_registry",
+      "relevant": [
+        "catalog"
+      ],
+      "split": "validation"
+    },
+    {
+      "id": "symbol-alias",
+      "text": "find_references",
+      "relevant": [
+        "symbol"
+      ],
+      "split": "validation"
+    },
+    {
+      "id": "symbol-zh",
+      "text": "查找引用入口",
+      "relevant": [
+        "symbol"
+      ],
+      "split": "validation"
+    },
+    {
+      "id": "part-of",
+      "text": "AE2 wc_attention_actions snooze",
+      "relevant": [
+        "root",
+        "child"
+      ],
+      "split": "validation"
+    },
+    {
+      "id": "exact-path",
+      "text": "pkg/one/config.go",
+      "relevant": [
+        "file-a"
+      ],
+      "split": "validation"
+    },
+    {
+      "id": "separator",
+      "text": "a_b",
+      "relevant": [
+        "under"
+      ],
+      "split": "validation"
+    },
+    {
+      "id": "ambiguous",
+      "text": "common_tool",
+      "relevant": [],
+      "split": "validation"
+    },
+    {
+      "id": "foreign",
+      "text": "private_remote_alias",
+      "relevant": [],
+      "split": "validation"
+    },
+    {
+      "id": "unrelated",
+      "text": "天文望远镜的口径如何选择",
+      "relevant": [],
+      "split": "validation"
+    }
+  ]
+}

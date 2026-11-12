@@ -137,6 +137,8 @@ type DecisionConfig struct {
 
 // MemoryConfig is the resolved durable-memory strategy configuration.
 type MemoryConfig struct {
+	// ExtractionMode is rules (default) or single-pass (desktop background ADD-only).
+	ExtractionMode string
 	// Strategy is the normalized memory strategy kind (per-turn/agent-only/consolidated).
 	Strategy string
 	// ConsolidateAfter is the pending-candidate count that triggers LLM

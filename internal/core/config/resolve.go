@@ -942,6 +942,7 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 			},
 		},
 		Memory: MemoryConfig{
+			ExtractionMode:   normalizeMemoryExtractionMode(file.Memory.ExtractionMode),
 			Strategy:         normalizeMemoryStrategyKind(file.Memory.Strategy),
 			ConsolidateAfter: file.Memory.ConsolidateAfter,
 			SessionScope:     file.Memory.SessionScope,

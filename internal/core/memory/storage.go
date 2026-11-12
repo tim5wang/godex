@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/tim5wang/godex/internal/platform/retrieval"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -476,75 +475,3 @@ var opaqueSourceIDs = regexp.MustCompile(`(?i)([0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9
 func sourceRelevanceText(source string) string {
 	return opaqueSourceIDs.ReplaceAllString(strings.ToLower(source), " ")
 }
-
-func sourceTermMatches(source, term string) bool {
-	numeric := true
-	for _, r := range term {
-		if !unicode.IsDigit(r) {
-			numeric = false
-			break
-		}
-	}
-	return !numeric && strings.Contains(source, term)
-}
-
-func scoreRelevantMemory(queryLower string, terms []string, entry Entry, content string) int {
-	title := strings.ToLower(entry.Title)
-	summary := strings.ToLower(entry.Summary)
-	body := strings.ToLower(content)
-	source := sourceRelevanceText(entry.Source)
-
-	score := 0
-	if queryLower != "" {
-		if strings.Contains(title, queryLower) {
-			score += 12
-		}
-		if strings.Contains(summary, queryLower) {
-			score += 10
-		}
-		if strings.Contains(body, queryLower) {
-			score += 4
-		}
-		if sourceTermMatches(source, queryLower) {
-			score += 3
-		}
-		for _, tag := range entry.Tags {
-			if strings.Contains(strings.ToLower(tag), queryLower) {
-				score += 3
-			}
-		}
-	}
-	for _, term := range terms {
-		if strings.Contains(title, term) {
-			score += 6
-		}
-		if strings.Contains(summary, term) {
-			score += 4
-		}
-		if strings.Contains(body, term) {
-			score += 1
-		}
-		if sourceTermMatches(source, term) {
-			score += 2
-		}
-		for _, tag := range entry.Tags {
-			if strings.Contains(strings.ToLower(tag), term) {
-				score += 2
-			}
-		}
-	}
-	// Type bonus: work_method and work_fact are process/contextual knowledge
-	// that should rank higher when they match the query.
-	if score == 0 {
-		return 0
-	}
-	switch entry.Type {
-	case TypeWorkMethod:
-		score += 3
-	case TypeWorkFact:
-		score += 2
-	}
-	return score
-}
-
-func extractTerms(query string) []string { return retrieval.Terms(query) }

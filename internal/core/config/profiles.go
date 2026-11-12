@@ -645,3 +645,10 @@ func looksSecretKey(key string) bool {
 	key = strings.ToLower(strings.TrimSpace(key))
 	return strings.Contains(key, "key") || strings.Contains(key, "token") || strings.Contains(key, "secret") || strings.Contains(key, "password")
 }
+
+func normalizeMemoryExtractionMode(value string) string {
+	if strings.EqualFold(strings.TrimSpace(value), "single-pass") {
+		return "single-pass"
+	}
+	return "rules"
+}

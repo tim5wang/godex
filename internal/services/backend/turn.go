@@ -919,7 +919,7 @@ func (s *Service) finishAgentTurnLocked(ctx context.Context, session *sessionSta
 		Timestamp: updatedAt,
 		Payload:   events.TurnPayload{Status: status},
 	})
-	s.captureSessionSignalCandidates(session, updatedAt, turnID)
+	s.captureTurnMemories(session, updatedAt, turnID, status, priorMessageCount)
 	// Make a backgrounded conversation's completion visible on its work stream: this is
 	// the event behind the desktop list's status, and the reason a user who left a
 	// desktop in the background can see that its conversation moved.
@@ -1005,7 +1005,12 @@ func (s *Service) captureSessionSignalCandidates(session *sessionState, now time
 	if session == nil || session.agent == nil {
 		return
 	}
-	timeline := session.timeline.Entries(snapshotTimelineLimit)
+	timeline := []events.Event{}
+	for _, event := range session.timeline.Entries(snapshotTimelineLimit) {
+		if event.TurnID == turnID {
+			timeline = append(timeline, event)
+		}
+	}
 	if err := session.agent.CaptureTimelineMemoryCandidates(timeline); err != nil {
 		session.events.Emit(events.Event{
 			SessionID: session.id,
@@ -1019,7 +1024,11 @@ func (s *Service) captureSessionSignalCandidates(session *sessionState, now time
 	if s.analyze == nil {
 		return
 	}
-	report, err := s.analyze(buildInsightsInput(collectSessionInsightsSnapshot(session, timeline)))
+	snapshot := collectSessionInsightsSnapshot(session, timeline)
+	if record, err := session.getTurnRecord(turnID); err == nil && record.PriorMessageCount >= 0 && record.PriorMessageCount <= len(snapshot.Messages) {
+		snapshot.Messages = snapshot.Messages[record.PriorMessageCount:]
+	}
+	report, err := s.analyze(buildInsightsInput(snapshot))
 	if err != nil {
 		session.events.Emit(events.Event{
 			SessionID: session.id,

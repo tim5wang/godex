@@ -154,6 +154,7 @@ func defaultConfigFile() ConfigFile {
 			},
 		},
 		Memory: MemorySection{
+			ExtractionMode:   "rules",
 			Strategy:         "per-turn",
 			ConsolidateAfter: 10,
 		},

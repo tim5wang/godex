@@ -173,3 +173,21 @@ func TestControlForwardsRoundTrip(t *testing.T) {
 		t.Errorf("expected template to contain forwards section")
 	}
 }
+
+func TestSinglePassExtractionModeRoundTrip(t *testing.T) {
+	file := defaultConfigFile()
+	if file.Memory.ExtractionMode != "rules" {
+		t.Fatal("default adds model calls")
+	}
+	if err := applyStoredValues(&file, UpdateRequest{Values: map[string]any{"memory.extraction_mode": "single-pass"}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := resolveConfigFile(file, "", "", "", "", "", "", "", "")
+	if cfg.Memory.ExtractionMode != "single-pass" || storedValues(file)["memory.extraction_mode"] != "single-pass" || effectiveValues(cfg)["memory.extraction_mode"] != "single-pass" {
+		t.Fatal("extraction mode lost in config roundtrip")
+	}
+	raw, err := renderConfigTemplate(file)
+	if err != nil || !strings.Contains(string(raw), "extraction_mode: single-pass") {
+		t.Fatal(string(raw), err)
+	}
+}

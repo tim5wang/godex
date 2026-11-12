@@ -64,7 +64,7 @@ func (s *Service) refreshWorkContextFeedback(session *sessionState, queries ...s
 		return
 	}
 	// Only query-matched facts enter automatic context; full detail is on demand.
-	detail.Facts, err = store.Recall(ctx, binding.Scope, binding.ContextID, "current", query)
+	detail.Facts, err = store.RecallCurrent(ctx, binding.Scope, binding.ContextID, query)
 	if err != nil {
 		detail.Facts = nil
 	}

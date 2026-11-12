@@ -256,6 +256,15 @@ func (s *Store) SetFactCandidate(ctx context.Context, scope Scope, contextID, fa
 // current (this context), related/direct (contexts reachable in one hop), or
 // all (every context owned by the caller). Results are ranked by term overlap.
 func (s *Store) Recall(ctx context.Context, scope Scope, contextID, rangeScope, query string) ([]Fact, error) {
+	return s.recall(ctx, scope, contextID, rangeScope, query, false)
+}
+
+// RecallCurrent filters validity before ranking for automatic prompt injection.
+func (s *Store) RecallCurrent(ctx context.Context, scope Scope, contextID, query string) ([]Fact, error) {
+	return s.recall(ctx, scope, contextID, "current", query, true)
+}
+
+func (s *Store) recall(ctx context.Context, scope Scope, contextID, rangeScope, query string, currentOnly bool) ([]Fact, error) {
 	tenantID, ownerID := scopeArgs(scope)
 	contextID = strings.TrimSpace(contextID)
 	if _, err := s.getContext(ctx, tenantID, ownerID, contextID); err != nil {
@@ -268,18 +277,32 @@ func (s *Store) Recall(ctx context.Context, scope Scope, contextID, rangeScope, 
 	if len(contextIDs) == 0 {
 		return []Fact{}, nil
 	}
-	terms := retrieval.Terms(query)
-	if strings.TrimSpace(query) != "" && len(terms) == 0 {
-		return []Fact{}, nil
-	}
-	if len(terms) == 0 {
-		return s.factsForContexts(ctx, tenantID, contextIDs)
-	}
-	ordered, err := s.searchFacts(ctx, tenantID, contextIDs, terms)
+	facts, err := s.factsForContexts(ctx, tenantID, contextIDs)
 	if err != nil {
 		return nil, err
 	}
-	return ordered, nil
+	eligible := facts[:0]
+	for _, f := range facts {
+		if !currentOnly || f.Current(time.Now()) {
+			eligible = append(eligible, f)
+		}
+	}
+	if strings.TrimSpace(query) == "" {
+		return eligible, nil
+	}
+	catalog := retrieval.Catalog{Groups: map[string]string{}}
+	for _, context := range contextIDs {
+		part, e := s.MemoryEntityCatalog(ctx, scope, context)
+		if e != nil {
+			return nil, e
+		}
+		catalog.Entities = append(catalog.Entities, part.Entities...)
+		catalog.Relations = append(catalog.Relations, part.Relations...)
+		for key, value := range part.Groups {
+			catalog.Groups[key] = value
+		}
+	}
+	return rankFacts(query, eligible, catalog), nil
 }
 
 // --- helpers ---
@@ -362,184 +385,12 @@ func (s *Store) factsForContexts(ctx context.Context, tenantID string, contextID
 			return nil, err
 		}
 		for _, item := range items {
-			if item.Status != "superseded" && item.Status != "rejected" {
+			if !retiredDreamFact(item) {
 				out = append(out, item)
 			}
 		}
 	}
 	return out, nil
-}
-
-// searchFacts ranks facts in the given contexts by term overlap. Candidates are
-// chosen by the FTS projection (with a LIKE fallback for CJK and short terms),
-// then scored in Go by field weight; retired facts are excluded.
-func (s *Store) searchFacts(ctx context.Context, tenantID string, contextIDs, terms []string) ([]Fact, error) {
-	ids := s.ftsCandidateIDs(ctx, tenantID, contextIDs, terms)
-	likeCandidates := s.likeCandidateIDs(ctx, tenantID, contextIDs, terms)
-	for id := range likeCandidates {
-		ids[id] = struct{}{}
-	}
-	if len(ids) == 0 {
-		return []Fact{}, nil
-	}
-	return s.factsByIDs(ctx, tenantID, ids, terms)
-}
-
-// ftsCandidateIDs runs the FTS5 MATCH expression over the indexed projection and
-// returns the matching fact ids. A malformed expression (user text is quoted, so
-// this should not happen) degrades to no FTS candidates, never an error.
-func (s *Store) ftsCandidateIDs(ctx context.Context, tenantID string, contextIDs, terms []string) map[string]struct{} {
-	out := map[string]struct{}{}
-	if len(terms) == 0 || len(contextIDs) == 0 {
-		return out
-	}
-	placeholders := make([]string, 0, len(contextIDs))
-	args := make([]any, 0, len(contextIDs)+1)
-	args = append(args, tenantID)
-	for _, cid := range contextIDs {
-		placeholders = append(placeholders, "?")
-		args = append(args, cid)
-	}
-	args = append(args, ftsMatchExpr(terms))
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT context_id, fact_id FROM wc_facts_fts
-		WHERE tenant_id=? AND context_id IN (`+strings.Join(placeholders, ",")+`)
-		  AND wc_facts_fts MATCH ?`, args...)
-	if err != nil {
-		return out
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid, fid string
-		if rows.Scan(&cid, &fid) == nil {
-			out[fid] = struct{}{}
-		}
-	}
-	return out
-}
-
-// likeCandidateIDs is the substring fallback, important for CJK text and for
-// terms shorter than the FTS tokenizer can index.
-func (s *Store) likeCandidateIDs(ctx context.Context, tenantID string, contextIDs, terms []string) map[string]struct{} {
-	out := map[string]struct{}{}
-	if len(terms) == 0 || len(contextIDs) == 0 {
-		return out
-	}
-	placeholders := make([]string, 0, len(contextIDs))
-	args := make([]any, 0, len(contextIDs)+len(terms))
-	args = append(args, tenantID)
-	for _, cid := range contextIDs {
-		placeholders = append(placeholders, "?")
-		args = append(args, cid)
-	}
-	likeClauses := make([]string, 0, len(terms))
-	for _, term := range terms {
-		likeClauses = append(likeClauses, `(LOWER(title) LIKE ? ESCAPE '\' OR LOWER(content) LIKE ? ESCAPE '\')`)
-		pattern := "%" + escapeLike(term) + "%"
-		args = append(args, pattern, pattern)
-	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id FROM wc_facts
-		WHERE tenant_id=? AND context_id IN (`+strings.Join(placeholders, ",")+`)
-		  AND `+recallStatusFilterSQL+`
-		  AND (`+strings.Join(likeClauses, " OR ")+`)`, args...)
-	if err != nil {
-		return out
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id string
-		if rows.Scan(&id) == nil {
-			out[id] = struct{}{}
-		}
-	}
-	return out
-}
-
-// factsByIDs loads candidate facts (excluding retired statuses), scores them
-// against the query terms and returns them ranked.
-func (s *Store) factsByIDs(ctx context.Context, tenantID string, ids map[string]struct{}, terms []string) ([]Fact, error) {
-	placeholders := make([]string, 0, len(ids))
-	args := make([]any, 0, len(ids)+1)
-	args = append(args, tenantID)
-	for id := range ids {
-		placeholders = append(placeholders, "?")
-		args = append(args, id)
-	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, context_id, title, content, kind, status, scope, subject, predicate,
-		       source, source_excerpt, source_revision, observed_at, verified_at,
-		       provenance, supersedes_id, memory_candidate_id, version, created_at, valid_until
-		FROM wc_facts
-		WHERE tenant_id=? AND id IN (`+strings.Join(placeholders, ",")+`)
-		  AND `+recallStatusFilterSQL+`
-		ORDER BY created_at DESC, id`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	scored := []scoredFact{}
-	for rows.Next() {
-		item, err := scanFactRow(rows)
-		if err != nil {
-			return nil, err
-		}
-		scored = append(scored, scoredFact{fact: item, score: factScore(item, terms)})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	sortScored(scored)
-	out := make([]Fact, 0, len(scored))
-	for _, s := range scored {
-		out = append(out, s.fact)
-	}
-	return out, nil
-}
-
-// scoredFact pairs a fact with its recall score.
-type scoredFact struct {
-	fact  Fact
-	score int
-}
-
-// factScore counts how many distinct terms appear in a fact's searchable text,
-// weighting title and subject matches higher.
-func factScore(fact Fact, terms []string) int {
-	title := strings.ToLower(fact.Title)
-	subject := strings.ToLower(fact.Subject)
-	content := strings.ToLower(fact.Content)
-	score := 0
-	for _, term := range terms {
-		switch {
-		case strings.Contains(title, term):
-			score += 3
-		case strings.Contains(subject, term):
-			score += 2
-		case strings.Contains(content, term):
-			score++
-		}
-	}
-	return score
-}
-
-// sortScored orders facts by descending score then newest first.
-func sortScored(items []scoredFact) {
-	for i := 1; i < len(items); i++ {
-		for j := i; j > 0; j-- {
-			left, right := items[j-1], items[j]
-			swap := false
-			if right.score > left.score {
-				swap = true
-			} else if right.score == left.score && right.fact.CreatedAt > left.fact.CreatedAt {
-				swap = true
-			}
-			if !swap {
-				break
-			}
-			items[j-1], items[j] = items[j], items[j-1]
-		}
-	}
 }
 
 // insertFactTx inserts a fact row.
@@ -681,4 +532,22 @@ func (f Fact) Current(now time.Time) bool {
 func (s *Store) ExpireFacts(ctx context.Context, now time.Time) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE wc_facts SET status='stale',version=version+1 WHERE status IN ('confirmed','candidate','observed') AND valid_until<>'' AND julianday(valid_until)<=julianday(?)`, now.UTC().Format(time.RFC3339Nano))
 	return err
+}
+
+func rankFacts(query string, facts []Fact, catalog retrieval.Catalog) []Fact {
+	docs := make([]retrieval.Document, 0, len(facts))
+	byID := make(map[string]Fact, len(facts))
+	for _, f := range facts {
+		docs = append(docs, retrieval.Document{ID: f.ID, Title: f.Title, Text: f.Content, Entities: []string{f.Subject, f.Predicate}})
+		byID[f.ID] = f
+	}
+	matches := retrieval.RankWithCatalog(query, docs, 0, catalog)
+	out := make([]Fact, 0, len(matches))
+	for _, match := range matches {
+		f := byID[match.ID]
+		signals := match.Signals
+		f.Recall = &signals
+		out = append(out, f)
+	}
+	return out
 }

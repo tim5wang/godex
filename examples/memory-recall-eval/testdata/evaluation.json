@@ -1,0 +1,294 @@
+{
+  "baseline_commit": "bd94d5d",
+  "default_extraction_model_calls": 0,
+  "opt_in_extraction_calls_per_attempt": 1,
+  "synthetic": {
+    "records": 48,
+    "queries": 40,
+    "corpus_sha256": "220378819a22508d5125d23e65b0e5b4274d9f180070433a95a90704ac45779d",
+    "before": {
+      "desktop/all": {
+        "queries": 40,
+        "precision_returned_at_5": 0.2909090909090909,
+        "recall_at_5": 0.96875,
+        "mrr": 0.9088541666666667,
+        "no_result_accuracy": 0.875,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 97.925,
+        "p50_ms": 0.74,
+        "p95_ms": 1.337
+      },
+      "desktop/development": {
+        "queries": 20,
+        "precision_returned_at_5": 0.2833333333333333,
+        "recall_at_5": 1,
+        "mrr": 0.9583333333333334,
+        "no_result_accuracy": 1,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 118.7,
+        "p50_ms": 0.856,
+        "p95_ms": 1.352
+      },
+      "desktop/holdout": {
+        "queries": 20,
+        "precision_returned_at_5": 0.3,
+        "recall_at_5": 0.9375,
+        "mrr": 0.859375,
+        "no_result_accuracy": 0.75,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 77.15,
+        "p50_ms": 0.68,
+        "p95_ms": 0.954
+      },
+      "personal/all": {
+        "queries": 40,
+        "precision_returned_at_5": 0.2909090909090909,
+        "recall_at_5": 0.96875,
+        "mrr": 0.953125,
+        "no_result_accuracy": 0.875,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 98.175,
+        "p50_ms": 10.615,
+        "p95_ms": 11.78
+      },
+      "personal/development": {
+        "queries": 20,
+        "precision_returned_at_5": 0.2833333333333333,
+        "recall_at_5": 1,
+        "mrr": 1,
+        "no_result_accuracy": 1,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 119.2,
+        "p50_ms": 10.033,
+        "p95_ms": 11.292
+      },
+      "personal/holdout": {
+        "queries": 20,
+        "precision_returned_at_5": 0.3,
+        "recall_at_5": 0.9375,
+        "mrr": 0.90625,
+        "no_result_accuracy": 0.75,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 77.15,
+        "p50_ms": 10.64,
+        "p95_ms": 12.23
+      }
+    },
+    "after": {
+      "desktop/all": {
+        "queries": 40,
+        "precision_returned_at_5": 0.8461538461538461,
+        "recall_at_5": 1,
+        "mrr": 0.96875,
+        "no_result_accuracy": 0.875,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 30.375,
+        "p50_ms": 0.483,
+        "p95_ms": 0.617
+      },
+      "desktop/development": {
+        "queries": 20,
+        "precision_returned_at_5": 0.9444444444444444,
+        "recall_at_5": 1,
+        "mrr": 0.96875,
+        "no_result_accuracy": 1,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 29.15,
+        "p50_ms": 0.478,
+        "p95_ms": 0.63
+      },
+      "desktop/holdout": {
+        "queries": 20,
+        "precision_returned_at_5": 0.7619047619047619,
+        "recall_at_5": 1,
+        "mrr": 0.96875,
+        "no_result_accuracy": 0.75,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 31.6,
+        "p50_ms": 0.492,
+        "p95_ms": 0.55
+      },
+      "personal/all": {
+        "queries": 40,
+        "precision_returned_at_5": 0.8461538461538461,
+        "recall_at_5": 1,
+        "mrr": 1,
+        "no_result_accuracy": 0.875,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 30.975,
+        "p50_ms": 11.333,
+        "p95_ms": 15.561
+      },
+      "personal/development": {
+        "queries": 20,
+        "precision_returned_at_5": 0.9444444444444444,
+        "recall_at_5": 1,
+        "mrr": 1,
+        "no_result_accuracy": 1,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 29.15,
+        "p50_ms": 10.923,
+        "p95_ms": 16.696
+      },
+      "personal/holdout": {
+        "queries": 20,
+        "precision_returned_at_5": 0.7619047619047619,
+        "recall_at_5": 1,
+        "mrr": 1,
+        "no_result_accuracy": 0.75,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 32.8,
+        "p50_ms": 11.634,
+        "p95_ms": 13.877
+      }
+    }
+  },
+  "limitations": [
+    "Fixed labeled small corpora, not a production A/B or a general semantic benchmark.",
+    "Real replay misses one complementary AE2.1 fact without the requested table identifier; Recall@5 100% to 95.8%.",
+    "No-answer false positives remain: synthetic 87.5% overall, real snapshot 25%.",
+    "Personal storage reconciliation dominates latency; no latency reduction claimed for that path.",
+    "Character-count/2 token estimates cover returned text, not full prompt or model billing.",
+    "Extraction semantic accuracy evaluated with scripted responses only; no real-model extraction benchmark."
+  ],
+  "real_snapshot_summary": {
+    "records": 101,
+    "queries": 16,
+    "before": {
+      "desktop/all": {
+        "queries": 16,
+        "precision_returned_at_5": 0.24074074074074073,
+        "recall_at_5": 1,
+        "mrr": 1,
+        "no_result_accuracy": 0.25,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 1639.375,
+        "p50_ms": 2.509,
+        "p95_ms": 4.333
+      },
+      "desktop/development": {
+        "queries": 0,
+        "precision_returned_at_5": 0,
+        "recall_at_5": 0,
+        "mrr": 0,
+        "no_result_accuracy": 0,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 0,
+        "p50_ms": 0,
+        "p95_ms": 0
+      },
+      "desktop/holdout": {
+        "queries": 0,
+        "precision_returned_at_5": 0,
+        "recall_at_5": 0,
+        "mrr": 0,
+        "no_result_accuracy": 0,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 0,
+        "p50_ms": 0,
+        "p95_ms": 0
+      },
+      "personal/all": {
+        "queries": 16,
+        "precision_returned_at_5": 0.24074074074074073,
+        "recall_at_5": 1,
+        "mrr": 1,
+        "no_result_accuracy": 0.25,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 642.25,
+        "p50_ms": 30.284,
+        "p95_ms": 35.79
+      },
+      "personal/development": {
+        "queries": 0,
+        "precision_returned_at_5": 0,
+        "recall_at_5": 0,
+        "mrr": 0,
+        "no_result_accuracy": 0,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 0,
+        "p50_ms": 0,
+        "p95_ms": 0
+      },
+      "personal/holdout": {
+        "queries": 0,
+        "precision_returned_at_5": 0,
+        "recall_at_5": 0,
+        "mrr": 0,
+        "no_result_accuracy": 0,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 0,
+        "p50_ms": 0,
+        "p95_ms": 0
+      }
+    },
+    "after": {
+      "desktop/all": {
+        "queries": 16,
+        "precision_returned_at_5": 0.42857142857142855,
+        "recall_at_5": 0.9583333333333334,
+        "mrr": 1,
+        "no_result_accuracy": 0.25,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 866.8125,
+        "p50_ms": 1.897,
+        "p95_ms": 2.547
+      },
+      "desktop/development": {
+        "queries": 0,
+        "precision_returned_at_5": 0,
+        "recall_at_5": 0,
+        "mrr": 0,
+        "no_result_accuracy": 0,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 0,
+        "p50_ms": 0,
+        "p95_ms": 0
+      },
+      "desktop/holdout": {
+        "queries": 0,
+        "precision_returned_at_5": 0,
+        "recall_at_5": 0,
+        "mrr": 0,
+        "no_result_accuracy": 0,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 0,
+        "p50_ms": 0,
+        "p95_ms": 0
+      },
+      "personal/all": {
+        "queries": 16,
+        "precision_returned_at_5": 0.41379310344827586,
+        "recall_at_5": 0.9583333333333334,
+        "mrr": 1,
+        "no_result_accuracy": 0.25,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 344.3125,
+        "p50_ms": 32.032,
+        "p95_ms": 41.098
+      },
+      "personal/development": {
+        "queries": 0,
+        "precision_returned_at_5": 0,
+        "recall_at_5": 0,
+        "mrr": 0,
+        "no_result_accuracy": 0,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 0,
+        "p50_ms": 0,
+        "p95_ms": 0
+      },
+      "personal/holdout": {
+        "queries": 0,
+        "precision_returned_at_5": 0,
+        "recall_at_5": 0,
+        "mrr": 0,
+        "no_result_accuracy": 0,
+        "forbidden_hits": 0,
+        "mean_estimated_tokens": 0,
+        "p50_ms": 0,
+        "p95_ms": 0
+      }
+    }
+  }
+}

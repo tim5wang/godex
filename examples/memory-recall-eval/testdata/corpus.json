@@ -1,0 +1,652 @@
+{
+  "records": [
+    {
+      "id": "lsp",
+      "title": "LSP 引用定位修复",
+      "content": "internal/tools/lsp.go 使用 gopls references 查找 Go 符号引用；lsp_test.go 覆盖引用范围和空结果。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "scope",
+      "title": "工作记忆适用范围校验",
+      "content": "cannot widen applicability 表示整理结果扩大了来源事实的 scope；必须按完整范围分组。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "deadline",
+      "title": "记忆整理请求超时",
+      "content": "context deadline exceeded：Dream 每批默认 180 秒，timeout_seconds 可设置为 30 到 600 秒。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "ocr",
+      "title": "macOS 截图文字识别",
+      "content": "macOS Vision OCR 通过 Swift 提取截图文字；这台 arm64 节点的 x86_64 tesseract 无法运行。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "scratch",
+      "title": "工作区临时脚本目录",
+      "content": "临时探针写到 workspace 内的 .godex/tmp，使用宿主声明的 scratch 目录。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "language",
+      "title": "用户回复语言偏好",
+      "content": "用户要求中文回复；技术符号和函数名称保留原文。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "capture",
+      "title": "调用日志诊断格式",
+      "content": "godex_context_v2 捕获 runtime_tail 和 context_sources，用于分析真实模型输入。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "dream",
+      "title": "Dream 增量整理水位",
+      "content": "source_seq 与 processed_seq 相等时没有变化，不创建整理任务，不调用模型。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "verify",
+      "title": "工作记忆核实闭环",
+      "content": "work_context memory_apply 需要实际工具 evidence_ids 和 if_version；失败测试不能确认事实。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "owner",
+      "title": "工作桌面隔离",
+      "content": "同一 work_context 下会话共享工作记忆；tenant 和 owner 隔离，跨桌面需提炼到个人层。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "roll",
+      "title": "整理撤销与版本冲突",
+      "content": "revert 只允许撤销最新 Dream 批次；并发审阅修改版本后拒绝覆盖原始事实。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "auth",
+      "title": "工具审批后的任务恢复",
+      "content": "ApprovePermission 之后核实任务沿用原 turn_id，继续处理原始目标清单。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "preview",
+      "title": "代码预览折叠",
+      "content": "文件预览支持语法高亮、代码折叠以及 git changes 列表。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "cache",
+      "title": "召回缓存失效",
+      "content": "memoryRecallRevision 在事实版本或查询改变时失效；缓存中的 expires_at 每次请求仍检查。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "fts",
+      "title": "个人记忆全文索引",
+      "content": "memory.db 是 SQLite FTS5 sidecar，Markdown 为个人记忆真源，索引可以重建。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "expired",
+      "title": "记忆过期和替代关系",
+      "content": "expires_at 与 superseded_by 控制自动召回资格；归档条目保留历史。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "go",
+      "title": "Go 项目验证命令",
+      "content": "Go 修复先运行 go test ./internal/tools，再 go vet ./internal/tools；使用真实构建命令。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "vision",
+      "title": "Vision OCR 证据的节点范围",
+      "content": "Vision 验证只适用于 mac-test 节点的 darwin 环境，不能推断其他机器已安装。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "models",
+      "title": "模型配置的推理预算",
+      "content": "reasoning_effort 保留配置值；max_tokens 同时承担思考与 JSON 输出，需检查截断。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "cron",
+      "title": "定时任务时区",
+      "content": "cron 和 heartbeat 使用 IANA 时区，例如 Asia/Shanghai；明确 delivery target。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "tool",
+      "title": "工具按需激活",
+      "content": "tool_exchange enable_bundles 激活 core_code 后才调用 bash，操作仍遵守审批。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "merge",
+      "title": "同范围词条合并",
+      "content": "merge 保留代表事实，归档同组其他记录；改写结论先 replace 再处理重复词条。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "bundle",
+      "title": "Web 首屏体积检查",
+      "content": "make web-bundle-check 构建前端并检查 gzip 预算；冷路由分块按需加载。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "encoding",
+      "title": "中文截断边界修复",
+      "content": "TruncateRunes 按字符边界截断，避免按字节切断汉字后出现 U+FFFD 乱码。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "json",
+      "title": "结构化 JSON 响应解析",
+      "content": "parseDreamResult 拒绝不完整 JSON 和未知事实 ID，失败不消费源水位。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "proof",
+      "title": "证据回执审计存储",
+      "content": "wc_memory_verifications 保存工具参数、输出 SHA256、前后版本和核实原因。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "css",
+      "title": "代码编辑器只读样式",
+      "content": "CodeMirror 在只读面板隐藏编辑光标，Markdown 正文保留换行。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "git",
+      "title": "Git 暂存和提交",
+      "content": "git diff --check 检查空白错误，git commit 提交完成后检查工作区是否干净。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "voice",
+      "title": "语音识别引擎端口",
+      "content": "voice-engine 监听 17021，使用 zipformer 中文识别模型。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "network",
+      "title": "外部网页抓取失败",
+      "content": "web_fetch 请求失败时记录 HTTP 状态与原始错误，不能把摘要当作原始网页证据。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "camel",
+      "title": "核实 API 的实现位置",
+      "content": "ApplyMemoryVerification 是数据库事务入口，批次限制为 16 项，版本冲突整体回滚。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "noise-0",
+      "title": "项目维护观察 0",
+      "content": "当前项目工具调用和验证流程需要注意，用户可能需要确认。工具验证调用相关经验。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "noise-1",
+      "title": "项目维护观察 1",
+      "content": "当前项目工具调用和验证流程需要注意，用户可能需要确认。工具验证调用相关经验。工具验证调用相关经验。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "noise-2",
+      "title": "项目维护观察 2",
+      "content": "当前项目工具调用和验证流程需要注意，用户可能需要确认。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "noise-3",
+      "title": "项目维护观察 3",
+      "content": "当前项目工具调用和验证流程需要注意，用户可能需要确认。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "noise-4",
+      "title": "项目维护观察 4",
+      "content": "当前项目工具调用和验证流程需要注意，用户可能需要确认。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "noise-5",
+      "title": "项目维护观察 5",
+      "content": "当前项目工具调用和验证流程需要注意，用户可能需要确认。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "noise-6",
+      "title": "项目维护观察 6",
+      "content": "当前项目工具调用和验证流程需要注意，用户可能需要确认。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "noise-7",
+      "title": "项目维护观察 7",
+      "content": "当前项目工具调用和验证流程需要注意，用户可能需要确认。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "noise-8",
+      "title": "项目维护观察 8",
+      "content": "当前项目工具调用和验证流程需要注意，用户可能需要确认。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "noise-9",
+      "title": "项目维护观察 9",
+      "content": "当前项目工具调用和验证流程需要注意，用户可能需要确认。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "noise-10",
+      "title": "项目维护观察 10",
+      "content": "当前项目工具调用和验证流程需要注意，用户可能需要确认。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "noise-11",
+      "title": "项目维护观察 11",
+      "content": "当前项目工具调用和验证流程需要注意，用户可能需要确认。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。工具验证调用相关经验。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "old-ocr",
+      "title": "old-ocr",
+      "content": "OCR 应使用 tesseract；Vision 不可用。",
+      "status": "archived",
+      "desktop": "primary",
+      "expired": false
+    },
+    {
+      "id": "old-deadline",
+      "title": "old-deadline",
+      "content": "Dream timeout_seconds 默认 5 秒，记忆整理超时。",
+      "status": "confirmed",
+      "desktop": "primary",
+      "expired": true
+    },
+    {
+      "id": "foreign-lsp",
+      "title": "foreign-lsp",
+      "content": "LSP gopls references 定位结论属于另一个桌面。",
+      "status": "confirmed",
+      "desktop": "other",
+      "expired": false
+    },
+    {
+      "id": "unverified-merge",
+      "title": "unverified-merge",
+      "content": "merge 同范围冲突事实可以不提供证据确认。",
+      "status": "observed",
+      "desktop": "primary",
+      "expired": false
+    },
+    {
+      "id": "blocked-go",
+      "title": "blocked-go",
+      "content": "go test 已通过，可以部署上线。",
+      "status": "verification_blocked",
+      "desktop": "primary",
+      "expired": false
+    }
+  ],
+  "queries": [
+    {
+      "id": "lsp",
+      "text": "gopls references 引用定位修复",
+      "relevant": [
+        "lsp"
+      ],
+      "split": "development"
+    },
+    {
+      "id": "scope",
+      "text": "cannot widen applicability 整理失败",
+      "relevant": [
+        "scope"
+      ],
+      "split": "development"
+    },
+    {
+      "id": "deadline",
+      "text": "Dream context deadline exceeded 超时时间",
+      "relevant": [
+        "deadline"
+      ],
+      "split": "development"
+    },
+    {
+      "id": "ocr",
+      "text": "macOS 截图 OCR 使用什么",
+      "relevant": [
+        "ocr",
+        "vision"
+      ],
+      "split": "development"
+    },
+    {
+      "id": "scratch",
+      "text": "临时探针脚本放在哪个目录",
+      "relevant": [
+        "scratch"
+      ],
+      "split": "development"
+    },
+    {
+      "id": "language",
+      "text": "用户要求用什么语言回复",
+      "relevant": [
+        "language"
+      ],
+      "split": "development"
+    },
+    {
+      "id": "capture",
+      "text": "godex_context_v2 的 runtime_tail",
+      "relevant": [
+        "capture"
+      ],
+      "split": "development"
+    },
+    {
+      "id": "dream",
+      "text": "source_seq 没有变化还需要整理吗",
+      "relevant": [
+        "dream"
+      ],
+      "split": "development"
+    },
+    {
+      "id": "verify",
+      "text": "memory_apply 能用失败测试确认事实吗",
+      "relevant": [
+        "verify"
+      ],
+      "split": "development"
+    },
+    {
+      "id": "owner",
+      "text": "不同 work_context 的工作记忆能共享吗",
+      "relevant": [
+        "owner"
+      ],
+      "split": "development"
+    },
+    {
+      "id": "roll",
+      "text": "revert 遇到并发版本变更",
+      "relevant": [
+        "roll"
+      ],
+      "split": "development"
+    },
+    {
+      "id": "auth",
+      "text": "ApprovePermission 核实任务恢复",
+      "relevant": [
+        "auth"
+      ],
+      "split": "development"
+    },
+    {
+      "id": "preview",
+      "text": "文件预览的代码折叠与 git changes",
+      "relevant": [
+        "preview"
+      ],
+      "split": "development"
+    },
+    {
+      "id": "cache",
+      "text": "memoryRecallRevision 什么时候失效",
+      "relevant": [
+        "cache"
+      ],
+      "split": "development"
+    },
+    {
+      "id": "fts",
+      "text": "memory.db SQLite FTS5 索引真源",
+      "relevant": [
+        "fts"
+      ],
+      "split": "development"
+    },
+    {
+      "id": "none1",
+      "text": "推荐一家附近的川菜馆",
+      "relevant": [],
+      "split": "development"
+    },
+    {
+      "id": "none2",
+      "text": "量子纠缠贝尔不等式",
+      "relevant": [],
+      "split": "development"
+    },
+    {
+      "id": "none3",
+      "text": "今天黄金价格是多少",
+      "relevant": [],
+      "split": "development"
+    },
+    {
+      "id": "none4",
+      "text": "请用中文简短回答",
+      "relevant": [],
+      "split": "development"
+    },
+    {
+      "id": "go",
+      "text": "go test ./internal/tools 验证命令",
+      "relevant": [
+        "go"
+      ],
+      "split": "development"
+    },
+    {
+      "id": "expired",
+      "text": "expires_at superseded_by 自动召回",
+      "relevant": [
+        "expired"
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "vision",
+      "text": "mac-test darwin Vision 验证适用范围",
+      "relevant": [
+        "vision"
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "models",
+      "text": "reasoning_effort max_tokens JSON 截断",
+      "relevant": [
+        "models"
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "cron",
+      "text": "Asia/Shanghai cron 时区和送达目标",
+      "relevant": [
+        "cron"
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "tool",
+      "text": "tool_exchange enable_bundles core_code bash",
+      "relevant": [
+        "tool"
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "merge",
+      "text": "合并词条先 replace 再 merge",
+      "relevant": [
+        "merge"
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "bundle",
+      "text": "web-bundle-check gzip 预算",
+      "relevant": [
+        "bundle"
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "encoding",
+      "text": "中文 U+FFFD 截断乱码",
+      "relevant": [
+        "encoding"
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "json",
+      "text": "parse_dream_result 校验失败会消耗水位吗",
+      "relevant": [
+        "json"
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "proof",
+      "text": "wc_memory_verifications 记录哪些证据",
+      "relevant": [
+        "proof"
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "css",
+      "text": "CodeMirror 只读预览光标",
+      "relevant": [
+        "css"
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "git",
+      "text": "git diff --check 提交检查",
+      "relevant": [
+        "git"
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "voice",
+      "text": "voice-engine 17021 zipformer",
+      "relevant": [
+        "voice"
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "network",
+      "text": "web_fetch HTTP 错误与原始证据",
+      "relevant": [
+        "network"
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "camel",
+      "text": "apply_memory_verification 原子批量回写",
+      "relevant": [
+        "camel"
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "path",
+      "text": "internal/tools/lsp.go 的引用测试",
+      "relevant": [
+        "lsp"
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "none5",
+      "text": "帮我规划东京五天旅游",
+      "relevant": [],
+      "split": "holdout"
+    },
+    {
+      "id": "none6",
+      "text": "PostgreSQL VACUUM 参数如何设置",
+      "relevant": [],
+      "split": "holdout"
+    },
+    {
+      "id": "none7",
+      "text": "Kubernetes ingress nginx TLS 续期",
+      "relevant": [],
+      "split": "holdout"
+    },
+    {
+      "id": "none8",
+      "text": "请问今天午饭吃什么",
+      "relevant": [],
+      "split": "holdout"
+    }
+  ]
+}

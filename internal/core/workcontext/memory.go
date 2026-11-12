@@ -151,7 +151,11 @@ func (s *Store) MemoryRevision(ctx context.Context, scope Scope) string {
 	if s.db.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(m.source_seq),0),COALESCE(SUM((SELECT SUM(f.version) FROM wc_facts f WHERE f.tenant_id=c.tenant_id AND f.context_id=c.id)),0) FROM wc_memory_state m JOIN wc_contexts c ON c.tenant_id=m.tenant_id AND c.id=m.context_id WHERE c.tenant_id=? AND c.owner_id=?`, tenant, owner).Scan(&count, &total, &versions) != nil {
 		return "unavailable"
 	}
-	return fmt.Sprintf("%d:%d:%d", count, total, versions)
+	var metadata int64
+	if s.db.QueryRowContext(ctx, `SELECT COALESCE((SELECT SUM(e.version) FROM wc_memory_entities e JOIN wc_contexts c ON c.tenant_id=e.tenant_id AND c.id=e.context_id WHERE c.tenant_id=? AND c.owner_id=?),0)+COALESCE((SELECT SUM(r.version) FROM wc_entity_relations r JOIN wc_contexts c ON c.tenant_id=r.tenant_id AND c.id=r.context_id WHERE c.tenant_id=? AND c.owner_id=?),0)`, tenant, owner, tenant, owner).Scan(&metadata) != nil {
+		return "unavailable"
+	}
+	return fmt.Sprintf("%d:%d:%d:%d", count, total, versions, metadata)
 }
 
 func (s *Store) Fact(ctx context.Context, scope Scope, contextID, factID string) (Fact, error) {

@@ -46,6 +46,9 @@ func (s *Service) handleMemoryVerification(ctx context.Context, sessionID string
 	if err != nil {
 		return nil, err
 	}
+	if v.grant.EntityOnly {
+		return nil, fmt.Errorf("entity maintenance authorizes metadata only, not fact verification actions")
+	}
 	v.opMu.Lock()
 	defer v.opMu.Unlock()
 	if _, err = s.requireMemoryVerification(ctx, sessionID, binding); err != nil {

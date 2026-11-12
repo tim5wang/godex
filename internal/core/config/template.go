@@ -910,6 +910,8 @@ channels:
     proxy: {{ yamlString .Channels.Weixin.Proxy }}
 
 memory:
+  # rules keeps zero-model capture; single-pass adds one background ADD-only extraction per new desktop delta.
+  extraction_mode: {{ yamlString .Memory.ExtractionMode }}
   # Durable-memory behavior: per-turn (default) | agent-only (no auto extraction) | consolidated (capture + LLM merge/dedup).
   strategy: {{ yamlString .Memory.Strategy }}
   # Pending-candidate count that triggers an LLM consolidation pass when strategy=consolidated.

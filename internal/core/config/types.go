@@ -322,6 +322,7 @@ type ChannelsSection struct {
 
 // MemorySection configures the durable-memory strategy.
 type MemorySection struct {
+	ExtractionMode string `yaml:"extraction_mode"`
 	// Strategy selects the memory behavior: per-turn (default), agent-only,
 	// or consolidated (per-turn capture + LLM merge/dedup/delete of candidates).
 	Strategy string `yaml:"strategy"`

@@ -109,7 +109,7 @@ func desktopRecord(f workcontext.Fact) memory.StoredMemory {
 	if f.Status == "rejected" || f.Status == "superseded" || f.Status == "archived" {
 		status = memory.StatusArchived
 	}
-	return memory.StoredMemory{Entry: memory.Entry{ID: f.ID, File: "fact:" + f.ID, Title: f.Title, Summary: textutil.TruncateRunes(f.Content, 180), Type: memory.TypeWorkFact, Source: f.Source, Status: status, Tags: []string{f.Status, f.Kind}, RecallPolicy: "manual", Origin: &memory.Origin{ContextID: f.ContextID, FactID: f.ID, FactVersion: f.Version, Applicability: f.Scope, SourceRevision: f.SourceRevision, ValidUntil: f.ValidUntil, ObservedAt: f.ObservedAt, VerifiedAt: f.VerifiedAt}}, Content: fmt.Sprintf("Verification status: %s\nApplicability: %s\nObserved: %s\nSource: %s\n\n%s", f.Status, f.Scope, f.ObservedAt, f.Source, f.Content)}
+	return memory.StoredMemory{Retrieval: f.Recall, Entry: memory.Entry{ID: f.ID, File: "fact:" + f.ID, Title: f.Title, Summary: textutil.TruncateRunes(f.Content, 180), Type: memory.TypeWorkFact, Source: f.Source, Status: status, Tags: []string{f.Status, f.Kind}, RecallPolicy: "manual", Origin: &memory.Origin{ContextID: f.ContextID, FactID: f.ID, FactVersion: f.Version, Applicability: f.Scope, SourceRevision: f.SourceRevision, ValidUntil: f.ValidUntil, ObservedAt: f.ObservedAt, VerifiedAt: f.VerifiedAt}}, Content: fmt.Sprintf("Verification status: %s\nApplicability: %s\nObserved: %s\nSource: %s\n\n%s", f.Status, f.Scope, f.ObservedAt, f.Source, f.Content)}
 }
 
 func (w *desktopMemory) localFacts() ([]workcontext.Fact, error) {
@@ -141,7 +141,13 @@ func (w *desktopMemory) List() ([]memory.Entry, error) {
 	return out, nil
 }
 func (w *desktopMemory) Search(options memory.SearchOptions) ([]memory.StoredMemory, error) {
-	facts, err := w.store.Recall(context.Background(), w.binding.Scope, w.binding.ContextID, "current", options.Query)
+	var facts []workcontext.Fact
+	var err error
+	if options.Automatic {
+		facts, err = w.store.RecallCurrent(context.Background(), w.binding.Scope, w.binding.ContextID, options.Query)
+	} else {
+		facts, err = w.store.Recall(context.Background(), w.binding.Scope, w.binding.ContextID, "current", options.Query)
+	}
 	if options.Status == memory.StatusAll || options.Status == memory.StatusArchived {
 		facts, err = w.localFacts()
 	}
@@ -150,7 +156,7 @@ func (w *desktopMemory) Search(options memory.SearchOptions) ([]memory.StoredMem
 	}
 	out := []memory.StoredMemory{}
 	for _, f := range facts {
-		if !desktopFactMatchesQuery(f, options.Query) {
+		if f.Recall == nil && !desktopFactMatchesQuery(f, options.Query) {
 			continue
 		}
 		r := desktopRecord(f)
@@ -196,16 +202,6 @@ func desktopFactMatchesQuery(f workcontext.Fact, query string) bool {
 }
 func (w *desktopMemory) Remember(input memory.SaveInput) (*memory.Entry, error) {
 	// Remember in a bound conversation records a proposal, never global truth.
-	facts, err := w.localFacts()
-	if err != nil {
-		return nil, err
-	}
-	for _, f := range facts {
-		if f.Status != "rejected" && f.Status != "superseded" && f.Status != "archived" && f.Title == input.Title && f.Content == input.Content {
-			r := desktopRecord(f)
-			return &r.Entry, nil
-		}
-	}
 	source := strings.TrimSpace(input.Source)
 	if source == "" {
 		source = "session://" + w.sessionID
@@ -214,7 +210,7 @@ func (w *desktopMemory) Remember(input memory.SaveInput) (*memory.Entry, error) 
 	if !input.ExpiresAt.IsZero() {
 		expiry = input.ExpiresAt.Format(time.RFC3339Nano)
 	}
-	f, err := w.store.CreateFact(context.Background(), w.binding.Scope, w.binding.ContextID, workcontext.FactInput{ValidUntil: expiry, Title: input.Title, Content: input.Content, Kind: desktopMemoryKind(input.Type), Scope: `{"work_context":"` + w.binding.ContextID + `"}`, Source: source, Provenance: "derived"})
+	f, _, err := w.store.CreateObservation(context.Background(), w.binding.Scope, w.binding.ContextID, workcontext.FactInput{ValidUntil: expiry, Title: input.Title, Content: input.Content, Kind: desktopMemoryKind(input.Type), Scope: `{"work_context":"` + w.binding.ContextID + `"}`, Source: source, Provenance: "derived"})
 	if err != nil {
 		return nil, err
 	}

@@ -52,6 +52,7 @@ func registerWorkContextRoutes(mux *http.ServeMux, service *backend.Service, pro
 			writeJSON(w, http.StatusOK, result)
 		})))
 	}
+	registerMemoryEntityRoutes(handle)
 	id := func(r *http.Request) string { return strings.TrimSpace(r.PathValue("id")) }
 	invalidJSON := func(err error) error { return fmt.Errorf("%w: %v", workcontext.ErrInvalid, err) }
 	handle("GET /v1/work-contexts", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
@@ -205,6 +206,9 @@ func registerWorkContextRoutes(mux *http.ServeMux, service *backend.Service, pro
 			return nil, invalidJSON(err)
 		}
 		return s.ConfigureDreamWithTimeout(r.Context(), scope, id(r), input.Enabled, input.IntervalSeconds, input.TimeoutSeconds, time.Now())
+	})
+	handle("GET /v1/work-contexts/{id}/memory/extractions", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
+		return s.ExtractionHistory(r.Context(), scope, id(r))
 	})
 	handle("GET /v1/work-contexts/{id}/memory/verifications", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
 		return s.MemoryVerificationHistory(r.Context(), scope, id(r), "", "")

@@ -1,0 +1,300 @@
+{
+  "description": "Scoped entity catalog ablation with identical fact eligibility and BM25 kernel. All runs use throwaway stores and no LLM calls.",
+  "latency_method": "Median of per-run p50/p95 across 3 fresh-store runs; no production latency claim.",
+  "limits": [
+    "Entity validation is a small targeted fixture, not a held-out benchmark.",
+    "Live replay uses 101 exported records and 16 manually labeled queries, with two explicitly curated module definitions and one part_of relation.",
+    "Only aggregate live metrics are stored here; private text and identifiers stay outside version control.",
+    "Personal retrieval has no catalog integration. No-answer false positives remain in live replay."
+  ],
+  "cases": {
+    "original-fixed": {
+      "records": 48,
+      "corpus_sha256": "220378819a22508d5125d23e65b0e5b4274d9f180070433a95a90704ac45779d",
+      "without_catalog": {
+        "desktop/all": {
+          "queries": 40,
+          "precision_returned_at_5": 0.8461538461538461,
+          "recall_at_5": 1,
+          "mrr": 0.96875,
+          "no_result_accuracy": 0.875,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 30.375,
+          "p50_ms": 0.445,
+          "p95_ms": 0.633
+        },
+        "desktop/development": {
+          "queries": 20,
+          "precision_returned_at_5": 0.9444444444444444,
+          "recall_at_5": 1,
+          "mrr": 0.96875,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 29.15,
+          "p50_ms": 0.435,
+          "p95_ms": 0.561
+        },
+        "desktop/holdout": {
+          "queries": 20,
+          "precision_returned_at_5": 0.7619047619047619,
+          "recall_at_5": 1,
+          "mrr": 0.96875,
+          "no_result_accuracy": 0.75,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 31.6,
+          "p50_ms": 0.449,
+          "p95_ms": 0.633
+        },
+        "personal/all": {
+          "queries": 40,
+          "precision_returned_at_5": 0.8461538461538461,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 0.875,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 30.975,
+          "p50_ms": 9.141,
+          "p95_ms": 11.241
+        },
+        "personal/development": {
+          "queries": 20,
+          "precision_returned_at_5": 0.9444444444444444,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 29.15,
+          "p50_ms": 9.735,
+          "p95_ms": 11.523
+        },
+        "personal/holdout": {
+          "queries": 20,
+          "precision_returned_at_5": 0.7619047619047619,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 0.75,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 32.8,
+          "p50_ms": 8.775,
+          "p95_ms": 9.372
+        }
+      },
+      "with_catalog": {
+        "desktop/all": {
+          "queries": 40,
+          "precision_returned_at_5": 0.8461538461538461,
+          "recall_at_5": 1,
+          "mrr": 0.96875,
+          "no_result_accuracy": 0.875,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 30.375,
+          "p50_ms": 1.036,
+          "p95_ms": 1.488
+        },
+        "desktop/development": {
+          "queries": 20,
+          "precision_returned_at_5": 0.9444444444444444,
+          "recall_at_5": 1,
+          "mrr": 0.96875,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 29.15,
+          "p50_ms": 1.077,
+          "p95_ms": 1.432
+        },
+        "desktop/holdout": {
+          "queries": 20,
+          "precision_returned_at_5": 0.7619047619047619,
+          "recall_at_5": 1,
+          "mrr": 0.96875,
+          "no_result_accuracy": 0.75,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 31.6,
+          "p50_ms": 1.035,
+          "p95_ms": 1.333
+        },
+        "personal/all": {
+          "queries": 40,
+          "precision_returned_at_5": 0.8461538461538461,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 0.875,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 30.975,
+          "p50_ms": 9.173,
+          "p95_ms": 11.319
+        },
+        "personal/development": {
+          "queries": 20,
+          "precision_returned_at_5": 0.9444444444444444,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 29.15,
+          "p50_ms": 10.491,
+          "p95_ms": 11.319
+        },
+        "personal/holdout": {
+          "queries": 20,
+          "precision_returned_at_5": 0.7619047619047619,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 0.75,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 32.8,
+          "p50_ms": 8.812,
+          "p95_ms": 10.675
+        }
+      }
+    },
+    "entity-validation": {
+      "records": 12,
+      "corpus_sha256": "6ecab06364ca802a6f78c583bdd14268d87203dbcc16cc6cfb2bb58e065981a8",
+      "without_catalog": {
+        "desktop/all": {
+          "queries": 10,
+          "precision_returned_at_5": 0.6666666666666666,
+          "recall_at_5": 0.5,
+          "mrr": 0.5714285714285714,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 11.5,
+          "p50_ms": 0.137,
+          "p95_ms": 0.3
+        },
+        "desktop/development": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        },
+        "desktop/holdout": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        }
+      },
+      "with_catalog": {
+        "desktop/all": {
+          "queries": 10,
+          "precision_returned_at_5": 1,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 16.9,
+          "p50_ms": 0.396,
+          "p95_ms": 0.67
+        },
+        "desktop/development": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        },
+        "desktop/holdout": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        }
+      }
+    },
+    "live-curated-replay": {
+      "records": 101,
+      "corpus_sha256": "53d45ad72ead338200911c4173231e8f05ebca89401a9d555cbaee2ac2fa3bc8",
+      "without_catalog": {
+        "desktop/all": {
+          "queries": 16,
+          "precision_returned_at_5": 0.42857142857142855,
+          "recall_at_5": 0.9583333333333334,
+          "mrr": 1,
+          "no_result_accuracy": 0.25,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 866.8125,
+          "p50_ms": 1.829,
+          "p95_ms": 2.351
+        },
+        "desktop/development": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        },
+        "desktop/holdout": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        }
+      },
+      "with_catalog": {
+        "desktop/all": {
+          "queries": 16,
+          "precision_returned_at_5": 0.5,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 0.25,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 810.9375,
+          "p50_ms": 4.519,
+          "p95_ms": 5.725
+        },
+        "desktop/development": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        },
+        "desktop/holdout": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        }
+      }
+    }
+  }
+}

@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/tim5wang/godex/internal/core/scope"
 	"github.com/tim5wang/godex/internal/platform/fsutil"
+	"github.com/tim5wang/godex/internal/platform/retrieval"
 )
 
 const (
@@ -134,6 +134,7 @@ type SearchOptions struct {
 
 // RelevantMemory is a retrieved memory entry plus its content.
 type RelevantMemory struct {
+	Retrieval *retrieval.Signals `json:"retrieval,omitempty"`
 	Entry
 	Content        string `json:"content"`
 	Score          int    `json:"score,omitempty"`
@@ -142,6 +143,8 @@ type RelevantMemory struct {
 
 // StoredMemory is one durable memory entry with its full content body.
 type StoredMemory struct {
+	Retrieval   *retrieval.Signals `json:"retrieval,omitempty"`
+	RecallScore int                `json:"-"`
 	Entry
 	Content string `json:"content"`
 }
@@ -635,8 +638,6 @@ func (m *Manager) searchLinear(opts SearchOptions) ([]StoredMemory, error) {
 		return nil, nil
 	}
 
-	queryLower := strings.ToLower(strings.TrimSpace(opts.Query))
-	terms := extractTerms(opts.Query)
 	tagFilter := strings.ToLower(strings.TrimSpace(opts.Tag))
 	sourceFilter := strings.ToLower(strings.TrimSpace(opts.Source))
 	relevant := make([]StoredMemory, 0, len(entries))
@@ -663,34 +664,13 @@ func (m *Manager) searchLinear(opts SearchOptions) ([]StoredMemory, error) {
 			}
 			return nil, err
 		}
-		score := scoreRelevantMemory(queryLower, terms, record.Entry, record.Content)
-		if queryLower == "" && len(terms) == 0 {
-			score = 1
-		}
-		if score == 0 {
-			continue
-		}
 		relevant = append(relevant, StoredMemory{
 			Entry:   record.Entry,
 			Content: record.Content,
 		})
 	}
 
-	sort.SliceStable(relevant, func(i, j int) bool {
-		left := scoreRelevantMemory(queryLower, terms, relevant[i].Entry, relevant[i].Content)
-		right := scoreRelevantMemory(queryLower, terms, relevant[j].Entry, relevant[j].Content)
-		if left == right {
-			if relevant[i].UpdatedAt.Equal(relevant[j].UpdatedAt) {
-				return relevant[i].Title < relevant[j].Title
-			}
-			return relevant[i].UpdatedAt.After(relevant[j].UpdatedAt)
-		}
-		return left > right
-	})
-	if opts.Limit > 0 && len(relevant) > opts.Limit {
-		relevant = relevant[:opts.Limit]
-	}
-	return relevant, nil
+	return rankStoredMemories(opts.Query, relevant, opts.Limit), nil
 }
 
 func (m *Manager) listBySearchOptions(opts SearchOptions) ([]Entry, error) {
@@ -719,14 +699,13 @@ func (m *Manager) FindRelevant(query string, limit int) ([]RelevantMemory, error
 		return nil, nil
 	}
 
-	queryLower := strings.ToLower(strings.TrimSpace(query))
-	terms := extractTerms(query)
 	relevant := make([]RelevantMemory, 0, len(results))
 	for _, result := range results {
 		relevant = append(relevant, RelevantMemory{
 			Entry:          result.Entry,
 			Content:        truncateBody(result.Content),
-			Score:          scoreRelevantMemory(queryLower, terms, result.Entry, result.Content),
+			Score:          result.RecallScore,
+			Retrieval:      result.Retrieval,
 			SourceDocument: sourceDocumentFromContent(result.Content),
 		})
 	}

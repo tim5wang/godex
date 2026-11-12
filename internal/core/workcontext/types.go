@@ -2,7 +2,10 @@
 // sessions and the taskboard execution boundary. SQLite is the initial store.
 package workcontext
 
-import "errors"
+import (
+	"errors"
+	"github.com/tim5wang/godex/internal/platform/retrieval"
+)
 
 var (
 	ErrNotFound = errors.New("work context: not found")
@@ -133,26 +136,27 @@ type Delegation struct {
 	CreatedAt string `json:"created_at"`
 }
 type Fact struct {
-	ValidUntil        string `json:"valid_until,omitempty"`
-	ID                string `json:"id"`
-	ContextID         string `json:"context_id"`
-	Title             string `json:"title"`
-	Content           string `json:"content"`
-	Kind              string `json:"kind"`
-	Status            string `json:"status"`
-	Scope             string `json:"scope"`
-	Subject           string `json:"subject"`
-	Predicate         string `json:"predicate"`
-	Source            string `json:"source"`
-	SourceExcerpt     string `json:"source_excerpt"`
-	SourceRevision    string `json:"source_revision"`
-	ObservedAt        string `json:"observed_at"`
-	VerifiedAt        string `json:"verified_at"`
-	Provenance        string `json:"provenance"`
-	SupersedesID      string `json:"supersedes_id"`
-	Version           int    `json:"version"`
-	CreatedAt         string `json:"created_at"`
-	MemoryCandidateID string `json:"memory_candidate_id"`
+	Recall            *retrieval.Signals `json:"recall,omitempty"`
+	ValidUntil        string             `json:"valid_until,omitempty"`
+	ID                string             `json:"id"`
+	ContextID         string             `json:"context_id"`
+	Title             string             `json:"title"`
+	Content           string             `json:"content"`
+	Kind              string             `json:"kind"`
+	Status            string             `json:"status"`
+	Scope             string             `json:"scope"`
+	Subject           string             `json:"subject"`
+	Predicate         string             `json:"predicate"`
+	Source            string             `json:"source"`
+	SourceExcerpt     string             `json:"source_excerpt"`
+	SourceRevision    string             `json:"source_revision"`
+	ObservedAt        string             `json:"observed_at"`
+	VerifiedAt        string             `json:"verified_at"`
+	Provenance        string             `json:"provenance"`
+	SupersedesID      string             `json:"supersedes_id"`
+	Version           int                `json:"version"`
+	CreatedAt         string             `json:"created_at"`
+	MemoryCandidateID string             `json:"memory_candidate_id"`
 }
 type FactInput struct {
 	ValidUntil     string `json:"valid_until,omitempty"`

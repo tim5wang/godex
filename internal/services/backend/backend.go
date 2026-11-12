@@ -383,6 +383,9 @@ type Service struct {
 	dreamLoopWG         sync.WaitGroup
 	dreamOrganize       func(context.Context, string, string) (string, error)
 
+	extractionWorkers map[string]bool // guarded by dreamMu
+	memoryExtract     func(context.Context, string, string) (string, error)
+
 	// Attention sweep: records delegated-card progress as events even when nobody
 	// is looking at the desktop, and pushes the subset that needs a human. The
 	// notifier is optional so a center without Web Push still gets the inbox.

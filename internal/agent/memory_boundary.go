@@ -2,6 +2,7 @@ package agent
 
 import (
 	"github.com/tim5wang/godex/internal/core/memory"
+	"github.com/tim5wang/godex/internal/core/templates"
 	"github.com/tim5wang/godex/internal/tools"
 )
 
@@ -50,3 +51,6 @@ func (a *Agent) memoryToolWriter() tools.MemoryWriter {
 // MemoryWriter gives explicit slash commands the same host-bound default store
 // as the model tool, instead of accidentally selecting the personal overlay.
 func (a *Agent) MemoryWriter() tools.MemoryWriter { return a.memoryToolWriter() }
+
+// AutomaticMemoryEnabled lets the host honor template-level memory:none.
+func (a *Agent) AutomaticMemoryEnabled() bool { return a.memoryMode() != templates.MemoryNone }

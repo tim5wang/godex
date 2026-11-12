@@ -155,6 +155,7 @@ func (s *Service) sweepMemoryDream(ctx context.Context) {
 	if err != nil {
 		return
 	}
+	s.sweepMemoryExtractions(ctx, store)
 	if err = store.ExpireFacts(ctx, s.now()); err != nil {
 		return
 	}

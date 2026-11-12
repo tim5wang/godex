@@ -18,7 +18,7 @@ import (
 )
 
 // schemaVersion is the current ordered migration version.
-const schemaVersion = 9
+const schemaVersion = 11
 
 // statusArkid is the terminal read-only status.
 const statusArchived = "archived"

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -46,24 +45,10 @@ func (m *Manager) searchWithSidecar(opts SearchOptions) ([]StoredMemory, error) 
 	}
 	defer rows.Close()
 
-	ftsMatchedIDs := make(map[string]struct{})
-	if strings.TrimSpace(opts.Query) != "" {
-		ftsMatchedIDs, err = m.queryFTSMatches(db, opts.Query)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	queryLower := strings.ToLower(strings.TrimSpace(opts.Query))
-	terms := extractTerms(opts.Query)
 	tagFilter := strings.ToLower(strings.TrimSpace(opts.Tag))
 	sourceFilter := strings.ToLower(strings.TrimSpace(opts.Source))
 
-	type scoredMemory struct {
-		record StoredMemory
-		score  int
-	}
-	scored := make([]scoredMemory, 0, len(entries))
+	records := make([]StoredMemory, 0, len(entries))
 	// Validity metadata lives in the authoritative index/markdown, not FTS.
 	metadata := make(map[string]Entry, len(entries))
 	for _, entry := range entries {
@@ -96,40 +81,13 @@ func (m *Manager) searchWithSidecar(opts SearchOptions) ([]StoredMemory, error) 
 			continue
 		}
 
-		score := scoreRelevantMemory(queryLower, terms, record.Entry, record.Content)
-		if queryLower == "" && len(terms) == 0 {
-			score = 1
-		}
-		if _, ok := ftsMatchedIDs[record.ID]; ok && score > 0 {
-			score += 5
-		}
-		if score == 0 {
-			continue
-		}
-		scored = append(scored, scoredMemory{record: record, score: score})
+		records = append(records, record)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
-	sort.SliceStable(scored, func(i, j int) bool {
-		if scored[i].score == scored[j].score {
-			if scored[i].record.UpdatedAt.Equal(scored[j].record.UpdatedAt) {
-				return scored[i].record.Title < scored[j].record.Title
-			}
-			return scored[i].record.UpdatedAt.After(scored[j].record.UpdatedAt)
-		}
-		return scored[i].score > scored[j].score
-	})
-
-	results := make([]StoredMemory, 0, len(scored))
-	for _, item := range scored {
-		results = append(results, item.record)
-	}
-	if opts.Limit > 0 && len(results) > opts.Limit {
-		results = results[:opts.Limit]
-	}
-	return results, nil
+	return rankStoredMemories(opts.Query, records, opts.Limit), nil
 }
 
 func (m *Manager) syncSidecarEntry(entry Entry) {
@@ -320,45 +278,6 @@ func (m *Manager) sidecarEntryNeedsRefresh(entry Entry, current sidecarEntryStat
 		return true, nil
 	}
 	return false, nil
-}
-
-func (m *Manager) queryFTSMatches(db *sql.DB, query string) (map[string]struct{}, error) {
-	ftsQuery := buildFTSQuery(query)
-	if ftsQuery == "" {
-		return nil, nil
-	}
-
-	rows, err := db.Query(`SELECT id FROM memory_fts WHERE memory_fts MATCH ?`, ftsQuery)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	ids := make(map[string]struct{})
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids[id] = struct{}{}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return ids, nil
-}
-
-func buildFTSQuery(query string) string {
-	terms := extractTerms(query)
-	if len(terms) == 0 {
-		return ""
-	}
-	clauses := make([]string, 0, len(terms))
-	for _, term := range terms {
-		escaped := strings.ReplaceAll(term, `"`, `""`)
-		clauses = append(clauses, fmt.Sprintf(`"%s"`, escaped))
-	}
-	return strings.Join(clauses, " OR ")
 }
 
 func loadSidecarState(db *sql.DB) (map[string]sidecarEntryState, error) {

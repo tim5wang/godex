@@ -28,11 +28,13 @@ var corpusJSON []byte
 
 type record struct {
 	ID, Title, Content, Status, Desktop string
+	Kind, Scope, EquivalentTo           string
 	Expired                             bool
 }
 type query struct {
 	ID, Text, Split string
 	Relevant        []string
+	History         []string
 }
 type evalEntity struct {
 	ID, Kind, Name, FactID string
@@ -47,13 +49,14 @@ type corpus struct {
 	Queries   []query
 }
 type result struct {
-	Signals   []any    `json:"signals,omitempty"`
-	Query     string   `json:"query"`
-	Split     string   `json:"split"`
-	Expected  []string `json:"expected"`
-	Retrieved []string `json:"retrieved"`
-	MS        float64  `json:"ms"`
-	Tokens    int      `json:"estimated_tokens"`
+	Plan      *retrieval.RecallPlan `json:"recall_plan,omitempty"`
+	Signals   []any                 `json:"signals,omitempty"`
+	Query     string                `json:"query"`
+	Split     string                `json:"split"`
+	Expected  []string              `json:"expected"`
+	Retrieved []string              `json:"retrieved"`
+	MS        float64               `json:"ms"`
+	Tokens    int                   `json:"estimated_tokens"`
 }
 type metrics struct {
 	Queries          int     `json:"queries"`
@@ -78,6 +81,7 @@ func main() {
 	out := flag.String("out", "", "JSON output file; stdout if empty")
 	label := flag.String("label", "current", "report label")
 	noCatalog := flag.Bool("without-catalog", false, "ablate the scoped catalog while keeping the same eligible facts and ranking kernel")
+	literal := flag.Bool("literal-query", false, "ablate task-aware planning and search only the latest message")
 	corpusPath := flag.String("corpus", "", "optional labeled JSON corpus; defaults to embedded fixture")
 	flag.Parse()
 	rawCorpus := corpusJSON
@@ -89,7 +93,7 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	r, err := evaluateWithCatalog(*label, rawCorpus, !*noCatalog)
+	r, err := evaluateOptions(*label, rawCorpus, !*noCatalog, !*literal)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -111,9 +115,16 @@ func evaluate(label string, rawCorpus []byte) (report, error) {
 }
 
 func evaluateWithCatalog(label string, rawCorpus []byte, withCatalog bool) (report, error) {
+	return evaluateOptions(label, rawCorpus, withCatalog, true)
+}
+
+func evaluateOptions(label string, rawCorpus []byte, withCatalog, withPlan bool) (report, error) {
 	var data corpus
 	err := json.Unmarshal(rawCorpus, &data)
 	if err != nil {
+		return report{}, err
+	}
+	if err = validateEquivalentLabels(data.Records); err != nil {
 		return report{}, err
 	}
 	dir, err := os.MkdirTemp("", "godex-recall-eval-")
@@ -142,6 +153,7 @@ func evaluateWithCatalog(label string, rawCorpus []byte, withCatalog bool) (repo
 	personalIDs := map[string]string{}
 	forbidden := map[string]bool{}
 	for _, r := range data.Records {
+		r = evalRecordDefaults(r)
 		id := c.ID
 		if r.Desktop == "other" {
 			id = other.ID
@@ -152,7 +164,7 @@ func evaluateWithCatalog(label string, rawCorpus []byte, withCatalog bool) (repo
 			deadline = "2020-01-01T00:00:00Z"
 			expiry, _ = time.Parse(time.RFC3339, deadline)
 		}
-		f, e := store.CreateFact(ctx, scope, id, workcontext.FactInput{Title: r.Title, Content: r.Content, Kind: "fact", Scope: `{"env":"eval"}`, Source: "fixture://" + r.ID, ObservedAt: "2026-01-01T00:00:00Z", ValidUntil: deadline})
+		f, e := store.CreateFact(ctx, scope, id, workcontext.FactInput{Title: r.Title, Content: r.Content, Kind: r.Kind, Scope: r.Scope, Source: "fixture://" + r.ID, ObservedAt: "2026-01-01T00:00:00Z", ValidUntil: deadline})
 		if e != nil {
 			return report{}, e
 		}
@@ -160,19 +172,27 @@ func evaluateWithCatalog(label string, rawCorpus []byte, withCatalog bool) (repo
 		if e != nil {
 			return report{}, e
 		}
-		desktopIDs[f.ID] = r.ID
+		desktopIDs[f.ID] = r.EquivalentTo
 		sourceFacts[r.ID] = f
 		if r.Desktop != "primary" || r.Status != "confirmed" || r.Expired {
-			forbidden[r.ID] = true
+			forbidden[r.EquivalentTo] = true
 		}
 		if r.Desktop != "primary" || r.Status == "observed" || r.Status == "verification_blocked" {
 			continue
 		}
-		entry, e := m.Remember(memory.SaveInput{Title: r.Title, Summary: r.Content, Content: r.Content, Type: memory.TypeWorkFact, Source: "fixture://" + r.ID, ExpiresAt: expiry})
+		var origin *memory.Origin
+		if r.Scope != `{"env":"eval"}` {
+			origin = &memory.Origin{ContextID: id, FactID: f.ID, FactVersion: f.Version, Applicability: r.Scope}
+		}
+		var tags []string
+		if r.Kind == "decision" {
+			tags = []string{"decision"}
+		}
+		entry, e := m.Remember(memory.SaveInput{Title: r.Title, Summary: r.Content, Content: r.Content, Type: evalMemoryType(r.Kind), Tags: tags, Source: "fixture://" + r.ID, ExpiresAt: expiry, Origin: origin})
 		if e != nil {
 			return report{}, e
 		}
-		personalIDs[entry.ID] = r.ID
+		personalIDs[entry.ID] = r.EquivalentTo
 		if r.Status == "archived" || r.Status == "superseded" || r.Status == "rejected" {
 			if _, e = m.Archive(memory.ForgetInput{File: entry.File}); e != nil {
 				return report{}, e
@@ -191,13 +211,19 @@ func evaluateWithCatalog(label string, rawCorpus []byte, withCatalog bool) (repo
 	for _, engine := range engines {
 		for _, q := range data.Queries {
 			one := result{Query: q.Text, Split: q.Split, Expected: q.Relevant, Retrieved: []string{}}
+			searchQuery := q.Text
+			if withPlan {
+				plan := retrieval.PlanRecall(append(append([]string{}, q.History...), q.Text))
+				searchQuery = plan.Query
+				one.Plan = &plan
+			}
 			// Warm the cache once; timed reads still include eligibility and ranking.
 			if engine == "personal" {
-				_, _ = m.FindRelevant(q.Text, 5)
+				_, _ = m.FindRelevant(searchQuery, 5)
 			}
 			start := time.Now()
 			if engine == "desktop" {
-				facts, e := recallForEvaluation(ctx, store, scope, c.ID, q.Text, withCatalog)
+				facts, e := recallForEvaluation(ctx, store, scope, c.ID, searchQuery, withCatalog)
 				if e != nil {
 					return out, e
 				}
@@ -213,7 +239,7 @@ func evaluateWithCatalog(label string, rawCorpus []byte, withCatalog bool) (repo
 					}
 				}
 			} else {
-				facts, e := m.FindRelevant(q.Text, 5)
+				facts, e := m.FindRelevant(searchQuery, 5)
 				if e != nil {
 					return out, e
 				}
@@ -255,12 +281,14 @@ func summarize(rows []result, split string, forbidden map[string]bool) metrics {
 			}
 		}
 		hits := 0
+		hitIDs := map[string]bool{}
 		first := 0
 		for i, id := range row.Retrieved {
 			if forbidden[id] {
 				m.Forbidden++
 			}
-			if expected[id] {
+			if expected[id] && !hitIDs[id] {
+				hitIDs[id] = true
 				hits++
 				if first == 0 {
 					first = i + 1
@@ -336,6 +364,9 @@ func seedEntityCatalog(ctx context.Context, store *workcontext.Store, scope work
 	return nil
 }
 func recallForEvaluation(ctx context.Context, store *workcontext.Store, scope workcontext.Scope, id, query string, withCatalog bool) ([]workcontext.Fact, error) {
+	if query == "" {
+		return nil, nil
+	}
 	if withCatalog {
 		return store.RecallCurrent(ctx, scope, id, query)
 	}
@@ -347,7 +378,7 @@ func recallForEvaluation(ctx context.Context, store *workcontext.Store, scope wo
 	byID := map[string]workcontext.Fact{}
 	for _, fact := range facts {
 		if fact.Current(time.Now()) {
-			docs = append(docs, retrieval.Document{ID: fact.ID, Title: fact.Title, Text: fact.Content, Entities: []string{fact.Subject, fact.Predicate}})
+			docs = append(docs, retrieval.Document{ID: fact.ID, Title: fact.Title, Text: fact.Content, Entities: []string{fact.Subject, fact.Predicate}, Kind: fact.Kind, Group: fact.ContextID + "\x00" + fact.Scope, Source: fact.Source, Version: fact.Version})
 			byID[fact.ID] = fact
 		}
 	}
@@ -359,4 +390,42 @@ func recallForEvaluation(ctx context.Context, store *workcontext.Store, scope wo
 		out = append(out, f)
 	}
 	return out, nil
+}
+
+func evalRecordDefaults(r record) record {
+	if r.Kind == "" {
+		r.Kind = "fact"
+	}
+	if r.Scope == "" {
+		r.Scope = `{"env":"eval"}`
+	}
+	if r.EquivalentTo == "" {
+		r.EquivalentTo = r.ID
+	}
+	return r
+}
+
+func validateEquivalentLabels(records []record) error {
+	byID := map[string]record{}
+	for _, r := range records {
+		byID[r.ID] = evalRecordDefaults(r)
+	}
+	for _, raw := range records {
+		r := evalRecordDefaults(raw)
+		target, ok := byID[r.EquivalentTo]
+		if !ok || r.Status != target.Status || r.Desktop != target.Desktop || r.Expired != target.Expired || r.Scope != target.Scope || r.Kind != target.Kind {
+			return fmt.Errorf("invalid equivalence label for %s: eligibility and applicability must match", r.ID)
+		}
+	}
+	return nil
+}
+func evalMemoryType(kind string) memory.Type {
+	switch kind {
+	case "method":
+		return memory.TypeWorkMethod
+	case "warning":
+		return memory.TypeWarning
+	default:
+		return memory.TypeWorkFact
+	}
 }

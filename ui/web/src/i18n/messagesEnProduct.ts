@@ -1,3 +1,4 @@
+import { recallDiagnosticsEn } from "./messagesRecallDiagnostics";
 import { enProductExtraMessages } from "./messagesEnProductExtra";
 
 export const enProductMessages = {
@@ -213,6 +214,7 @@ export const enProductMessages = {
       contextInspectorMemoryIdentity: "L0 identity",
       contextInspectorMemoryCore: "Core memory",
       contextInspectorMemoryRelevant: "Relevant recall",
+      ...recallDiagnosticsEn,
       contextInspectorMemoryIdentityEmpty: "No identity memory is active.",
       contextInspectorMemoryCoreEmpty: "No stable core memory matched.",
       contextInspectorMemoryRelevantEmpty: "No additional relevant recall matched.",

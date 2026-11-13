@@ -1,0 +1,273 @@
+{
+  "records": [
+    {
+      "id": "version",
+      "title": "work_context if_version",
+      "content": "work_context if_version 传递当前版本，版本冲突时刷新后重试。",
+      "kind": "method",
+      "scope": "",
+      "equivalentto": "",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "broad",
+      "title": "work_context checkpoint",
+      "content": "work_context checkpoint 保存阶段进度。",
+      "kind": "fact",
+      "scope": "",
+      "equivalentto": "",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "ack",
+      "title": "work_context checkpoint ack",
+      "content": "work_context checkpoint ack 完成后顶掉答案，最终回复前先完成必要回写。",
+      "kind": "warning",
+      "scope": "",
+      "equivalentto": "",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "refresh-method",
+      "title": "cache_refresh 执行步骤",
+      "content": "cache_refresh 执行步骤：先检查配置，再执行刷新命令。",
+      "kind": "method",
+      "scope": "",
+      "equivalentto": "",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "refresh-fact",
+      "title": "cache_refresh 原理",
+      "content": "cache_refresh 保存缓存索引状态。",
+      "kind": "fact",
+      "scope": "",
+      "equivalentto": "",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "decision",
+      "title": "db_engine 选择",
+      "content": "db_engine 选择 SQLite 的决定来自单进程存储和维护成本。",
+      "kind": "decision",
+      "scope": "",
+      "equivalentto": "",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "db-method",
+      "title": "db_engine 命令",
+      "content": "db_engine 提供备份命令。",
+      "kind": "method",
+      "scope": "",
+      "equivalentto": "",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "duplicate-a",
+      "title": "dup_cache 配置",
+      "content": "dup_cache 配置生效，读取索引文件。",
+      "kind": "fact",
+      "scope": "",
+      "equivalentto": "",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "duplicate-b",
+      "title": "dup_cache 说明",
+      "content": "dup_cache 配置生效；读取索引文件。",
+      "kind": "fact",
+      "scope": "",
+      "equivalentto": "duplicate-a",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "dev",
+      "title": "scope_cache 开发配置",
+      "content": "scope_cache 加载配置文件。",
+      "kind": "fact",
+      "scope": "{\"env\":\"dev\"}",
+      "equivalentto": "",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "prod",
+      "title": "scope_cache 生产配置",
+      "content": "scope_cache 加载配置文件。",
+      "kind": "fact",
+      "scope": "{\"env\":\"prod\"}",
+      "equivalentto": "",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "fact-kind",
+      "title": "kind_cache 配置",
+      "content": "kind_cache 读取索引文件。",
+      "kind": "fact",
+      "scope": "",
+      "equivalentto": "",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "method-kind",
+      "title": "kind_cache 过程",
+      "content": "kind_cache 读取索引文件。",
+      "kind": "method",
+      "scope": "",
+      "equivalentto": "",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "positive",
+      "title": "claim_cache 支持",
+      "content": "claim_cache 支持热加载。",
+      "kind": "fact",
+      "scope": "",
+      "equivalentto": "",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "negative",
+      "title": "claim_cache 不支持",
+      "content": "claim_cache 不支持热加载。",
+      "kind": "fact",
+      "scope": "",
+      "equivalentto": "",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "five",
+      "title": "timeout_cache 节点甲配置",
+      "content": "timeout_cache 超时 5 秒。",
+      "kind": "fact",
+      "scope": "",
+      "equivalentto": "",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "ten",
+      "title": "timeout_cache 节点乙配置",
+      "content": "timeout_cache 超时 10 秒。",
+      "kind": "fact",
+      "scope": "",
+      "equivalentto": "",
+      "status": "confirmed",
+      "desktop": "primary"
+    }
+  ],
+  "queries": [
+    {
+      "id": "parameter",
+      "text": "work_context if_version 怎么传",
+      "relevant": [
+        "version"
+      ],
+      "split": "validation"
+    },
+    {
+      "id": "facets",
+      "text": "work_context checkpoint ack 顶掉答案",
+      "relevant": [
+        "ack"
+      ],
+      "split": "validation"
+    },
+    {
+      "id": "method",
+      "text": "如何执行 cache_refresh 步骤",
+      "relevant": [
+        "refresh-method"
+      ],
+      "split": "validation"
+    },
+    {
+      "id": "decision",
+      "text": "为什么选择 db_engine",
+      "relevant": [
+        "decision"
+      ],
+      "split": "validation"
+    },
+    {
+      "id": "duplicate",
+      "text": "dup_cache 配置",
+      "relevant": [
+        "duplicate-a"
+      ],
+      "split": "validation"
+    },
+    {
+      "id": "scope",
+      "text": "scope_cache 配置",
+      "relevant": [
+        "dev",
+        "prod"
+      ],
+      "split": "validation"
+    },
+    {
+      "id": "kind",
+      "text": "kind_cache",
+      "relevant": [
+        "fact-kind",
+        "method-kind"
+      ],
+      "split": "validation"
+    },
+    {
+      "id": "opposition",
+      "text": "claim_cache 支持热加载",
+      "relevant": [
+        "positive",
+        "negative"
+      ],
+      "split": "validation"
+    },
+    {
+      "id": "parameters",
+      "text": "timeout_cache 超时",
+      "relevant": [
+        "five",
+        "ten"
+      ],
+      "split": "validation"
+    },
+    {
+      "id": "broad-topic",
+      "text": "cache_refresh",
+      "relevant": [
+        "refresh-method",
+        "refresh-fact"
+      ],
+      "split": "validation"
+    },
+    {
+      "id": "unrelated",
+      "text": "量子纠缠贝尔不等式",
+      "relevant": [],
+      "split": "validation"
+    },
+    {
+      "id": "unknown",
+      "text": "unknown_identifier 参数",
+      "relevant": [],
+      "split": "validation"
+    }
+  ]
+}

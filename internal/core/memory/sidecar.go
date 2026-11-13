@@ -87,7 +87,7 @@ func (m *Manager) searchWithSidecar(opts SearchOptions) ([]StoredMemory, error) 
 		return nil, err
 	}
 
-	return rankStoredMemories(opts.Query, records, opts.Limit), nil
+	return rankStoredMemories(opts.Query, records, opts.Limit, opts.diagnostics), nil
 }
 
 func (m *Manager) syncSidecarEntry(entry Entry) {

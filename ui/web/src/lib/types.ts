@@ -260,8 +260,26 @@ export interface SessionContextInspector {
   transcript_ref_count: number;
   transcript_refs?: string[];
   recall_query?: string;
+  recall_mode?: string;
+  recall_diagnostics?: RecallDiagnostic[];
   memory_preview: MemoryContextLayers;
   history_recall?: HistoryRecallDecisionSummary | null;
+}
+
+export interface RecallDiagnostic {
+  query: string;
+  intent: string;
+  layer?: string;
+  cache?: string;
+  candidates: number;
+  returned: number;
+  selected_ids?: string[];
+  estimated_result_tokens: number;
+  elapsed_ms: number;
+  rejected?: Record<string, number>;
+  eligibility?: Record<string, number>;
+  decisions?: { id: string; title?: string; kind?: string; source?: string; version?: number; reason: string; duplicate_of?: string; matched_terms?: string[]; type_match?: boolean }[];
+  details_truncated?: boolean;
 }
 
 export interface SessionContextUsage {

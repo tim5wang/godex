@@ -148,6 +148,20 @@ export function isLedgerBookkeepingTool(name: string | undefined, input: Record<
 }
 
 /**
+ * True only for a bookkeeping call that actually succeeded.
+ *
+ * A failed checkpoint/ack recorded nothing. Hiding it would leave the user believing
+ * the state was saved when it was not, so failures stay visible in the default feed
+ * and keep their error text in the expanded detail.
+ */
+export function isSilentLedgerBookkeeping(item: FeedItem | undefined): boolean {
+  if (!item || !isLedgerBookkeepingTool(item.title, item.input)) {
+    return false;
+  }
+  return !item.error?.trim() && item.status !== "failed";
+}
+
+/**
  * True when the text at `index` is a trailing WRAP-UP NOTE rather than the answer.
  *
  * The ledger tools are "report, then record" tools: ack is defined as "mark the stream
@@ -250,7 +264,7 @@ export function splitTurnSegments(segments: FeedSegment[]): { process: FeedSegme
         return Boolean(segment.text?.trim());
       }
       if (segment.type === "tool") {
-        return !isLedgerBookkeepingTool(segment.item?.title, segment.item?.input);
+        return !isSilentLedgerBookkeeping(segment.item);
       }
       return true;
     });

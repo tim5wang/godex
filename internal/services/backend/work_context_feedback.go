@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/platform/retrieval"
 	"github.com/tim5wang/godex/internal/platform/textutil"
@@ -25,10 +24,8 @@ func (s *Service) refreshWorkContextFeedback(session *sessionState, queries ...s
 	if session == nil || session.agent == nil {
 		return
 	}
-	query := protocol.LatestPersistentUserText(session.agent.GetMessages())
-	if len(queries) > 0 {
-		query = queries[0]
-	}
+	plan := session.agent.MemoryRecallPlan(queries...)
+	query := plan.Query
 	store, storeErr := s.WorkContexts()
 	binding := workMemoryBinding{Err: storeErr}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -58,13 +55,16 @@ func (s *Service) refreshWorkContextFeedback(session *sessionState, queries ...s
 		session.agent.ReplaceRuntimeFeedback(workContextFeedbackPrefix, message)
 		return
 	}
-	detail, err := store.Get(ctx, binding.Scope, binding.ContextID)
+	detail, err := store.PromptState(ctx, binding.Scope, binding.ContextID)
 	if err != nil {
 		session.agent.ReplaceRuntimeFeedback(workContextFeedbackPrefix, workContextFeedbackPrefix+"\nDesktop snapshot unavailable; previous facts are not current.")
 		return
 	}
 	// Only query-matched facts enter automatic context; full detail is on demand.
-	detail.Facts, err = store.RecallCurrent(ctx, binding.Scope, binding.ContextID, query)
+	detail.Facts = nil
+	if query != "" && session.agent.AutomaticMemoryEnabled() {
+		detail.Facts, err = store.RecallCurrent(ctx, binding.Scope, binding.ContextID, query)
+	}
 	if err != nil {
 		detail.Facts = nil
 	}

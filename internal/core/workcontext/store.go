@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -68,7 +69,9 @@ var unknownScopeValues = map[string]bool{"unknown": true, "unk": true, "n/a": tr
 // Store is a SQLite-backed work context store. All access is isolated by the
 // (tenant_id, owner_id) scope generated from the caller identity.
 type Store struct {
-	db *sql.DB
+	db              *sql.DB
+	recallMu        sync.Mutex
+	recallSnapshots map[string]recallSnapshot
 }
 
 // Open opens (creating if needed) the SQLite database at path with WAL,

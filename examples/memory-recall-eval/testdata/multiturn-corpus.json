@@ -1,0 +1,233 @@
+{
+  "records": [
+    {
+      "id": "lsp",
+      "title": "gopls references",
+      "content": "gopls references 支持符号引用与重命名。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "ocr",
+      "title": "Vision OCR",
+      "content": "Vision OCR 使用 macOS 原生截图识别。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "db",
+      "title": "PostgreSQL VACUUM",
+      "content": "PostgreSQL VACUUM 清理数据库旧版本元组。",
+      "status": "confirmed",
+      "desktop": "primary"
+    },
+    {
+      "id": "noise",
+      "title": "工具配置参数",
+      "content": "工具配置参数和错误信息必须核实，什么情况不等于成功。",
+      "status": "confirmed",
+      "desktop": "primary"
+    }
+  ],
+  "queries": [
+    {
+      "id": "continue",
+      "history": [
+        "修复 gopls references"
+      ],
+      "text": "好，继续下一步",
+      "relevant": [
+        "lsp"
+      ],
+      "split": "development"
+    },
+    {
+      "id": "anaphora",
+      "history": [
+        "检查 Vision OCR"
+      ],
+      "text": "这个方案还有哪些问题",
+      "relevant": [
+        "ocr"
+      ],
+      "split": "development"
+    },
+    {
+      "id": "after-ack",
+      "history": [
+        "修复 gopls references",
+        "谢谢"
+      ],
+      "text": "继续",
+      "relevant": [
+        "lsp"
+      ],
+      "split": "development"
+    },
+    {
+      "id": "ack",
+      "history": [
+        "修复 gopls references"
+      ],
+      "text": "谢谢",
+      "relevant": [],
+      "split": "development"
+    },
+    {
+      "id": "no-topic",
+      "history": [],
+      "text": "继续下一步",
+      "relevant": [],
+      "split": "development"
+    },
+    {
+      "id": "switch",
+      "history": [
+        "修复 gopls references"
+      ],
+      "text": "换个话题：Vision OCR",
+      "relevant": [
+        "ocr"
+      ],
+      "split": "development"
+    },
+    {
+      "id": "independent",
+      "history": [
+        "修复 gopls references"
+      ],
+      "text": "PostgreSQL VACUUM 参数怎么设置",
+      "relevant": [
+        "db"
+      ],
+      "split": "development"
+    },
+    {
+      "id": "food",
+      "history": [
+        "修复 gopls references"
+      ],
+      "text": "附近有什么好吃的川菜馆",
+      "relevant": [],
+      "split": "development"
+    },
+    {
+      "id": "quantum",
+      "history": [],
+      "text": "量子纠缠贝尔不等式",
+      "relevant": [],
+      "split": "development"
+    },
+    {
+      "id": "procedure",
+      "history": [
+        "修复 gopls references"
+      ],
+      "text": "请用中文简短回答",
+      "relevant": [],
+      "split": "development"
+    },
+    {
+      "id": "english",
+      "history": [
+        "检查 Vision OCR"
+      ],
+      "text": "OK, continue",
+      "relevant": [
+        "ocr"
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "order",
+      "history": [
+        "PostgreSQL VACUUM 数据库清理"
+      ],
+      "text": "好，按这个顺序优化吧",
+      "relevant": [
+        "db"
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "follow",
+      "history": [
+        "检查 Vision OCR"
+      ],
+      "text": "还有什么优化计划",
+      "relevant": [
+        "ocr"
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "next-batch",
+      "history": [
+        "修复 gopls references"
+      ],
+      "text": "好，下一批",
+      "relevant": [
+        "lsp"
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "greeting",
+      "history": [
+        "检查 Vision OCR"
+      ],
+      "text": "你好",
+      "relevant": [],
+      "split": "holdout"
+    },
+    {
+      "id": "cancel",
+      "history": [
+        "修复 gopls references",
+        "取消任务"
+      ],
+      "text": "继续",
+      "relevant": [],
+      "split": "holdout"
+    },
+    {
+      "id": "switch-reset",
+      "history": [
+        "修复 gopls references",
+        "换个话题"
+      ],
+      "text": "继续",
+      "relevant": [],
+      "split": "holdout"
+    },
+    {
+      "id": "new-named",
+      "history": [
+        "修复 gopls references"
+      ],
+      "text": "继续研究 PostgreSQL VACUUM",
+      "relevant": [
+        "db"
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "travel",
+      "history": [
+        "检查 Vision OCR"
+      ],
+      "text": "帮我规划东京五天旅游",
+      "relevant": [],
+      "split": "holdout"
+    },
+    {
+      "id": "unknown",
+      "history": [
+        "修复 gopls references"
+      ],
+      "text": "Kubernetes ingress nginx TLS 续期",
+      "relevant": [],
+      "split": "holdout"
+    }
+  ]
+}

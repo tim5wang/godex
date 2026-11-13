@@ -524,6 +524,23 @@ func TestBuildCronPromptMarksExecutionMode(t *testing.T) {
 	}
 }
 
+func TestBuildCronPromptAsksForIncrementalDelivery(t *testing.T) {
+	job := Job{ID: "job-2", Message: "每10分钟巡检看板"}
+	prompt := buildCronPrompt(job, "")
+	// A scheduled run must not turn planning narration into the delivered
+	// message, and an unchanged status check must stay one short line — the
+	// repeated long reports users complained about came from that path.
+	for _, want := range []string{
+		"lead with the outcome, then only what changed since the previous run",
+		"If nothing changed and this is a status check, answer in one short line",
+		"Do not turn planning narration or tool chatter into the delivered message",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected cron prompt to contain %q, got %q", want, prompt)
+		}
+	}
+}
+
 func TestUpdateJobPreservesNextRunForMetadataOnlyChanges(t *testing.T) {
 	store := NewFileStore(t.TempDir())
 	backend := &fakeBackend{}

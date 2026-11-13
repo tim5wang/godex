@@ -402,11 +402,22 @@ func (a *Agent) buildRuntimeSystemPrompt(agentProfile ...string) (string, error)
 		a.buildSystemPrompt(),
 		conciseDefaultResponsePrompt,
 		"For capability-availability checks, inspect status and run a minimal direct probe. Report verified failures promptly. Retry only to test a concrete recoverable cause; implementation repair belongs to a user-requested repair task.",
+		"Before a final reply, finish any required work_context recording (checkpoint/ack) so the visible answer is not followed by unexplained record calls. If saving fails, say the state was not saved instead of implying it was.",
 		dynamic,
 	), "\n\n"), nil
 }
 
-const conciseDefaultResponsePrompt = "Default response style: be concise unless the user asks for a detailed report. Do not restate stable context, raw tool output, or lengthy process notes unless they directly change the answer. When a stage produces a verified finding or changes your decision, put a brief conclusion and any remaining verification in assistant text so the user and later calls can reuse it. Do not expose private reasoning or narrate routine tool calls. Reuse established evidence; only investigate unresolved questions that can change the result. Once the requested result is supported, deliver it without another round of confirmation. Batch independent read-only queries in one tool round; keep dependent steps ordered. Follow Tool Availability for symbol versus text navigation; prefer the corresponding native tools over equivalent shell pipelines."
+const conciseDefaultResponsePrompt = `Default response style: lead with what the user needs to know, then the least evidence that supports it.
+- Answer first: give the direct answer, current status, or recommendation before supporting detail. Do not open with tool narration, internal task ids, or a file inventory.
+- Match the request: a simple question can be one short paragraph; research, plans and comparisons may be thorough. Be concise unless the user asks for detail, but never drop a failure, an uncertainty that changes the decision, or a required action for brevity.
+- Verify honestly: say what you actually ran. Keep implementation, command/test results, UI or device checks, and deployment as separate claims. Never present a passing unit test or build as proof that a UI flow works or that anything is deployed.
+- Report progress only when something changed, a real blocker appeared, a decision is needed, or work finished. Do not restate unchanged background or repeat the same failure in new words.
+- On failure, say what did not work, the known impact, the evidence boundary, and who must act next. Retry only for a concrete recoverable cause.
+- Do not stop at "please verify" when the work is already authorized and the remaining safe step is yours to do. Ask only for new permission, irreversible actions, or a genuine trade-off.
+- Do not restate stable context, raw tool output, or lengthy process notes unless they directly change the answer.
+- When a stage produces a verified finding or changes your decision, put a brief conclusion and any remaining verification in assistant text so the user and later calls can reuse it.
+- Do not expose private reasoning or narrate routine tool calls. Reuse established evidence; only investigate unresolved questions that can change the result.
+- Batch independent read-only queries in one tool round; keep dependent steps ordered. Follow Tool Availability for symbol versus text navigation; prefer the corresponding native tools over equivalent shell pipelines.`
 
 // collectRuntimeMessages gathers per-turn runtime notifications. When gateTodo
 // is true (the active request path), the todo status is only injected when its
@@ -472,7 +483,7 @@ func (a *Agent) collectMemoryMessagesThrottled(history []protocol.Message) ([]pr
 	if a.memoryMode() == templates.MemoryNone {
 		return nil, memory.ContextLayers{}, nil
 	}
-	query := protocol.LatestPersistentUserText(history)
+	query := memoryRecallPlan(history).Query
 	revision := a.memoryContextRevision()
 	a.mu.Lock()
 	if query != a.memoryRecallQuery || a.memoryRecallManager != a.memoryMgr || a.memoryRecallRevision != revision {
@@ -602,17 +613,27 @@ func (a *Agent) collectMemoryMessagesReadOnly(history []protocol.Message) ([]pro
 	if a.memoryMode() == templates.MemoryNone {
 		return nil, memory.ContextLayers{}, nil
 	}
-	query := protocol.LatestPersistentUserText(history)
+	query := memoryRecallPlan(history).Query
 	layers, err := a.memoryMgr.PreviewContextLayers(query)
 	if err != nil {
 		return nil, memory.ContextLayers{}, err
+	}
+	for _, d := range layers.Diagnostics {
+		d.Layer = "primary"
 	}
 	if a.memorySharedMgr != nil {
 		shared, e := a.memorySharedMgr.PreviewContextLayers(query)
 		if e != nil {
 			return nil, memory.ContextLayers{}, e
 		}
+		for _, d := range shared.Diagnostics {
+			d.Layer = "personal"
+		}
 		layers = memory.MergeContextLayers(layers, shared)
+	} else if strings.HasPrefix(a.memoryScopeKey, "desktop:") {
+		for _, d := range layers.Diagnostics {
+			d.Layer = "personal"
+		}
 	}
 	if len(layers.Identity) == 0 && len(layers.Core) == 0 && len(layers.Relevant) == 0 {
 		return nil, layers, nil

@@ -145,6 +145,21 @@ func (s *Store) Get(ctx context.Context, scope Scope, id string) (Detail, error)
 	return detail, nil
 }
 
+// PromptState omits the full fact store and unrelated management collections.
+// Automatic context selects facts through RecallCurrent and changes via Focus.
+func (s *Store) PromptState(ctx context.Context, scope Scope, id string) (Detail, error) {
+	tenant, owner := scopeArgs(scope)
+	item, err := s.getContext(ctx, tenant, owner, id)
+	if err != nil {
+		return Detail{}, err
+	}
+	resources, err := s.listContextResources(ctx, tenant, id)
+	if err != nil {
+		return Detail{}, err
+	}
+	return Detail{Context: item, Resources: resources}, nil
+}
+
 // Patch applies a partial update guarded by optimistic concurrency.
 func (s *Store) Patch(ctx context.Context, scope Scope, id string, patch ContextPatch) (Context, error) {
 	tenantID, ownerID := scopeArgs(scope)

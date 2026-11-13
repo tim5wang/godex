@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/tim5wang/godex/internal/core/compress"
+	"github.com/tim5wang/godex/internal/platform/retrieval"
 )
 
 const (
@@ -27,10 +28,11 @@ const (
 // ContextLayers groups durable memory into identity, stable core, and
 // query-time relevant recall.
 type ContextLayers struct {
-	Identity []RelevantMemory `json:"identity"`
-	Core     []RelevantMemory `json:"core"`
-	Relevant []RelevantMemory `json:"relevant"`
-	Excluded map[string]int   `json:"excluded,omitempty"`
+	Diagnostics []*retrieval.Diagnostics `json:"diagnostics,omitempty"`
+	Identity    []RelevantMemory         `json:"identity"`
+	Core        []RelevantMemory         `json:"core"`
+	Relevant    []RelevantMemory         `json:"relevant"`
+	Excluded    map[string]int           `json:"excluded,omitempty"`
 }
 
 // Current removes entries that expired while a cached recall was being reused.
@@ -71,6 +73,7 @@ func (m *Manager) buildContextLayers(query string, trackReferences bool) (Contex
 	if err != nil {
 		return ContextLayers{}, err
 	}
+	trace := &retrieval.Diagnostics{Query: query, Intent: retrieval.QueryIntent(query), Cache: "not_run"}
 	excluded := make(map[string]int)
 	now := time.Now()
 	for _, entry := range entries {
@@ -95,7 +98,8 @@ func (m *Manager) buildContextLayers(query string, trackReferences bool) (Contex
 	}
 	entries = activeEntries(filtered)
 	if len(entries) == 0 {
-		return ContextLayers{Excluded: excluded}, nil
+		trace.Eligibility = recallEligibility(excluded)
+		return ContextLayers{Excluded: excluded, Diagnostics: []*retrieval.Diagnostics{trace}}, nil
 	}
 
 	identity, err := m.selectIdentityMemories(entries, maxIdentityContextMemories)
@@ -124,7 +128,7 @@ func (m *Manager) buildContextLayers(query string, trackReferences bool) (Contex
 	}
 	core = trimMemoriesToTokenBudget(core, maxCoreContextTokens)
 
-	relevant, err := m.selectRelevantMemories(query, maxRelevantContextMemories)
+	relevant, err := m.selectRelevantMemories(query, maxRelevantContextMemories, trace)
 	if err != nil {
 		return ContextLayers{}, err
 	}
@@ -150,7 +154,8 @@ func (m *Manager) buildContextLayers(query string, trackReferences bool) (Contex
 
 	if len(identity) == 0 && len(core) == 0 && len(relevant) == 0 {
 		excluded["not_selected_by_relevance_scope_or_budget"] = len(entries)
-		return ContextLayers{Excluded: excluded}, nil
+		trace.Eligibility = recallEligibility(excluded)
+		return ContextLayers{Excluded: excluded, Diagnostics: []*retrieval.Diagnostics{trace}}, nil
 	}
 	if trackReferences {
 		// Best-effort: record which memories actually reached the prompt so the
@@ -160,7 +165,24 @@ func (m *Manager) buildContextLayers(query string, trackReferences bool) (Contex
 	if count := len(entries) - len(identity) - len(core) - len(relevant); count > 0 {
 		excluded["not_selected_by_relevance_scope_or_budget"] = count
 	}
-	return ContextLayers{Identity: identity, Core: core, Relevant: relevant, Excluded: excluded}, nil
+	ids, tokens := []string{}, 0
+	for _, r := range relevant {
+		ids = append(ids, r.ID)
+		tokens += len([]rune(r.Title+r.Content)) / 2
+	}
+	retrieval.FinalizeSelection(trace, ids, tokens)
+	trace.Eligibility = recallEligibility(excluded)
+	return ContextLayers{Identity: identity, Core: core, Relevant: relevant, Excluded: excluded, Diagnostics: []*retrieval.Diagnostics{trace}}, nil
+}
+
+func recallEligibility(excluded map[string]int) map[string]int {
+	out := map[string]int{}
+	for reason, count := range excluded {
+		if reason != "not_selected_by_relevance_scope_or_budget" {
+			out[reason] = count
+		}
+	}
+	return out
 }
 
 // referencedIDs collects the IDs of memories that were selected into any
@@ -175,7 +197,7 @@ func referencedIDs(layers ...[]RelevantMemory) map[string]struct{} {
 	return ids
 }
 
-func (m *Manager) selectRelevantMemories(query string, limit int) ([]RelevantMemory, error) {
+func (m *Manager) selectRelevantMemories(query string, limit int, diagnostics ...*retrieval.Diagnostics) ([]RelevantMemory, error) {
 	if strings.TrimSpace(query) == "" || limit <= 0 {
 		return nil, nil
 	}
@@ -189,7 +211,11 @@ func (m *Manager) selectRelevantMemories(query string, limit int) ([]RelevantMem
 		}
 	}
 
-	relevant, err := m.FindRelevant(query, poolLimit)
+	var trace *retrieval.Diagnostics
+	if len(diagnostics) > 0 {
+		trace = diagnostics[0]
+	}
+	relevant, err := m.findRelevant(query, poolLimit, trace)
 	if err != nil {
 		return nil, err
 	}
@@ -607,10 +633,24 @@ func MergeContextLayers(primary, shared ContextLayers) ContextLayers {
 		return trimMemoriesToTokenBudget(out, limit)
 	}
 	out := ContextLayers{Identity: merge(primary.Identity, shared.Identity, maxIdentityContextTokens), Core: merge(primary.Core, shared.Core, maxCoreContextTokens), Relevant: merge(primary.Relevant, shared.Relevant, maxRelevantContextTokens), Excluded: map[string]int{}}
+	out.Diagnostics = append(append([]*retrieval.Diagnostics{}, primary.Diagnostics...), shared.Diagnostics...)
 	for _, m := range []map[string]int{primary.Excluded, shared.Excluded} {
 		for k, v := range m {
 			out.Excluded[k] += v
 		}
+	}
+	for _, d := range out.Diagnostics {
+		ids, tokens := []string{}, 0
+		for _, r := range out.Relevant {
+			for _, id := range d.SelectedIDs {
+				if id == r.ID {
+					ids = append(ids, r.ID)
+					tokens += len([]rune(r.Title+r.Content)) / 2
+					break
+				}
+			}
+		}
+		retrieval.FinalizeSelection(d, ids, tokens)
 	}
 	return out
 }

@@ -19,6 +19,7 @@ import (
 type ContextInspectionDetails struct {
 	Context      tools.ContextInspection
 	RecallQuery  string
+	RecallMode   string
 	MemoryLayers memory.ContextLayers
 }
 
@@ -40,7 +41,8 @@ func (a *Agent) InspectContextDetails(ctx context.Context, sessionID string) (Co
 	}
 	history, _ := a.messageState()
 	history = dedupeRepeatedLargeToolResultSummaries(history)
-	recallQuery := strings.TrimSpace(protocol.LatestPersistentUserText(history))
+	plan := memoryRecallPlan(history)
+	recallQuery := plan.Query
 	memoryMessages, memoryLayers, err := a.collectMemoryMessagesReadOnly(history)
 	if err != nil {
 		return ContextInspectionDetails{}, err
@@ -97,6 +99,7 @@ func (a *Agent) InspectContextDetails(ctx context.Context, sessionID string) (Co
 			CumulativeOutputTokens:        int(cumOutput),
 		},
 		RecallQuery:  recallQuery,
+		RecallMode:   plan.Mode,
 		MemoryLayers: memoryLayers,
 	}, nil
 }

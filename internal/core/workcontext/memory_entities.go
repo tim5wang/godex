@@ -167,13 +167,20 @@ func refreshFactEntitiesTx(ctx context.Context, tx *sql.Tx, tenant, id, key stri
 	return err
 }
 func (s *Store) entityDirectory(ctx context.Context, scope Scope, id string) ([]MemoryEntity, map[string]Fact, error) {
+	return s.entityDirectoryWithFacts(ctx, scope, id, nil)
+}
+
+func (s *Store) entityDirectoryWithFacts(ctx context.Context, scope Scope, id string, facts []Fact) ([]MemoryEntity, map[string]Fact, error) {
 	if err := s.RefreshMemoryEntities(ctx, scope, id); err != nil {
 		return nil, nil, err
 	}
 	tenant, _ := scopeArgs(scope)
-	facts, err := s.Facts(ctx, scope, id)
-	if err != nil {
-		return nil, nil, err
+	if facts == nil {
+		var err error
+		facts, err = s.Facts(ctx, scope, id)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	byFact := map[string]Fact{}
 	for _, f := range facts {
@@ -360,8 +367,12 @@ func writeEntityAudit(ctx context.Context, tx *sql.Tx, tenant, id, action, key, 
 }
 
 func (s *Store) MemoryEntityCatalog(ctx context.Context, scope Scope, id string) (retrieval.Catalog, error) {
+	return s.memoryEntityCatalogWithFacts(ctx, scope, id, nil)
+}
+
+func (s *Store) memoryEntityCatalogWithFacts(ctx context.Context, scope Scope, id string, known []Fact) (retrieval.Catalog, error) {
 	catalog := retrieval.Catalog{Groups: map[string]string{}}
-	entities, facts, err := s.entityDirectory(ctx, scope, id)
+	entities, facts, err := s.entityDirectoryWithFacts(ctx, scope, id, known)
 	if err != nil {
 		return catalog, err
 	}

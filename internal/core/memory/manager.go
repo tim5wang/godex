@@ -120,10 +120,11 @@ type ForgetInput struct {
 
 // SearchOptions controls metadata filtering when browsing memories.
 type SearchOptions struct {
-	Query  string
-	Type   Type
-	Tag    string
-	Source string
+	diagnostics *retrieval.Diagnostics
+	Query       string
+	Type        Type
+	Tag         string
+	Source      string
 	// Status filters by lifecycle state. Empty means active-only (the default
 	// recall behavior); StatusArchived lists only archived; StatusAll includes
 	// both. Archived memories are excluded from default recall.
@@ -150,9 +151,11 @@ type StoredMemory struct {
 }
 
 type Manager struct {
-	dir   string
-	scope scope.Id
-	mu    sync.RWMutex
+	dir          string
+	scope        scope.Id
+	mu           sync.RWMutex
+	projectionMu sync.Mutex
+	projection   memorySearchProjection
 
 	contentCache map[string]memoryFileCacheEntry
 	readFile     func(string) ([]byte, error)
@@ -620,8 +623,11 @@ func (m *Manager) Get(idOrTitle string) (*StoredMemory, error) {
 
 // Search lists durable memories using keyword and metadata filters.
 func (m *Manager) Search(opts SearchOptions) ([]StoredMemory, error) {
-	if results, err := m.searchWithSidecar(opts); err == nil {
+	if results, err := m.searchProjected(opts); err == nil {
 		return results, nil
+	}
+	if opts.diagnostics != nil {
+		opts.diagnostics.Cache = "linear_fallback"
 	}
 	return m.searchLinear(opts)
 }
@@ -670,7 +676,7 @@ func (m *Manager) searchLinear(opts SearchOptions) ([]StoredMemory, error) {
 		})
 	}
 
-	return rankStoredMemories(opts.Query, relevant, opts.Limit), nil
+	return rankStoredMemories(opts.Query, relevant, opts.Limit, opts.diagnostics), nil
 }
 
 func (m *Manager) listBySearchOptions(opts SearchOptions) ([]Entry, error) {
@@ -687,11 +693,19 @@ func (m *Manager) listBySearchOptions(opts SearchOptions) ([]Entry, error) {
 
 // FindRelevant returns up to limit relevant memories for the query.
 func (m *Manager) FindRelevant(query string, limit int) ([]RelevantMemory, error) {
+	return m.findRelevant(query, limit, nil)
+}
+
+func (m *Manager) findRelevant(query string, limit int, trace *retrieval.Diagnostics) ([]RelevantMemory, error) {
+	started := time.Now()
+	if trace != nil {
+		defer func() { trace.ElapsedMS = float64(time.Since(started).Microseconds()) / 1000 }()
+	}
 	if strings.TrimSpace(query) == "" || limit <= 0 {
 		return nil, nil
 	}
 
-	results, err := m.Search(SearchOptions{Query: query, Limit: limit, Automatic: true})
+	results, err := m.Search(SearchOptions{Query: query, Limit: limit, Automatic: true, diagnostics: trace})
 	if err != nil {
 		return nil, err
 	}

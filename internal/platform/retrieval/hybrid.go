@@ -12,8 +12,10 @@ import (
 // the caller's responsibility and must happen BEFORE ranking. Source IDs, type
 // labels, confidence and timestamps cannot create a relevance match.
 type Document struct {
-	ID, Title, Text string
-	Entities        []string
+	ID, Title, Text     string
+	Entities            []string
+	Kind, Group, Source string
+	Version             int
 }
 
 // Signals explains a match; scores are ranking signals, never truth confidence.
@@ -22,10 +24,14 @@ type Signals struct {
 	Related   []EntityHit `json:"related_entities,omitempty"`
 	Ambiguous []string    `json:"ambiguous_entities,omitempty"`
 	Relation  float64     `json:"relation,omitempty"`
+	Coverage  float64     `json:"query_coverage"`
 	Keyword   float64     `json:"bm25"`
 	Entity    float64     `json:"entity"`
 	Terms     []string    `json:"matched_terms,omitempty"`
 	Entities  []string    `json:"matched_entities,omitempty"`
+	Anchors   int         `json:"matched_identifiers,omitempty"`
+	Intent    string      `json:"intent,omitempty"`
+	TypeMatch float64     `json:"type_match,omitempty"`
 }
 type Match struct {
 	ID      string
@@ -47,6 +53,10 @@ func Rank(query string, documents []Document, limit int) []Match {
 }
 
 func RankWithCatalog(query string, documents []Document, limit int, catalog Catalog) []Match {
+	return rankWithCatalog(query, documents, limit, catalog, nil)
+}
+
+func rankWithCatalog(query string, documents []Document, limit int, catalog Catalog, trace *Diagnostics) []Match {
 	plan := planCatalog(query, catalog)
 	terms := rankingTerms(query)
 	entities, anchors := queryEntities(query)
@@ -110,24 +120,35 @@ func RankWithCatalog(query string, documents []Document, limit int, catalog Cata
 		// Explicit identifiers are strong query constraints. A generic word such as
 		// "failed" must not surface unrelated tools when the named symbol is absent.
 		if len(anchors) > 0 && len(plan.anchored) > 0 && !catalogAnchor && len(signals.Related) == 0 {
+			trace.reject(d, "identifier_mismatch", "")
 			continue
 		}
 		if len(anchors) > 0 && matchedAnchors == 0 && !catalogAnchor && !(len(signals.Related) > 0 && signals.Keyword > 0) {
+			trace.reject(d, "identifier_mismatch", "")
 			continue
 		}
 		if signals.Keyword == 0 && signals.Entity == 0 {
+			trace.reject(d, "no_evidence", "")
+			continue
+		}
+		signals.Coverage = termCoverage(terms, signals.Terms)
+		if !sufficientEvidence(signals, len(entities)) {
+			trace.reject(d, "weak_keyword_evidence", "")
 			continue
 		}
 		maxKeyword = max(maxKeyword, signals.Keyword)
+		signals.Anchors = max(matchedAnchors, catalogAnchors(signals.Direct, plan.anchored))
 		scored = append(scored, scoredDocument{match: Match{ID: d.ID, Signals: signals}, order: i})
 	}
 	eligible := scored[:0]
 	for _, s := range scored {
 		if s.match.Signals.Entity > 0 || s.match.Signals.Relation > 0 && s.match.Signals.Keyword > 0 || s.match.Signals.Keyword >= maxKeyword*.4 {
 			eligible = append(eligible, s)
+		} else {
+			trace.reject(documents[s.order], "weak_relative_score", "")
 		}
 	}
-	scored = eligible
+	scored = refineCandidates(query, documents, eligible, trace)
 	fuse(scored, func(s scoredDocument) float64 { return s.match.Signals.Keyword }, 1)
 	fuse(scored, func(s scoredDocument) float64 { return s.match.Signals.Entity }, .8)
 	fuse(scored, func(s scoredDocument) float64 {
@@ -136,21 +157,74 @@ func RankWithCatalog(query string, documents []Document, limit int, catalog Cata
 		}
 		return 0
 	}, .2)
+	fuse(scored, func(s scoredDocument) float64 { return s.match.Signals.TypeMatch }, .25)
 	sort.SliceStable(scored, func(i, j int) bool {
 		if scored[i].fusion == scored[j].fusion {
 			return scored[i].order < scored[j].order
 		}
 		return scored[i].fusion > scored[j].fusion
 	})
-	if limit > 0 && len(scored) > limit {
-		scored = scored[:limit]
-	}
+	scored = selectDistinct(documents, scored, limit, trace)
 	out := make([]Match, 0, len(scored))
 	for _, s := range scored {
 		s.match.Score = int(math.Round(s.fusion * 10000))
 		out = append(out, s.match)
 	}
 	return out
+}
+
+func catalogAnchors(hits []EntityHit, anchors map[string]bool) int {
+	n := 0
+	for _, hit := range hits {
+		if anchors[hit.ID] {
+			n++
+		}
+	}
+	return n
+}
+
+// Bare keyword fragments need query coverage. A recognized identity or an
+// evidenced one-hop neighbor can legitimately use another name for the topic.
+func sufficientEvidence(s Signals, queryEntities int) bool {
+	if s.Entity > 0 || s.Relation > 0 && s.Keyword > 0 {
+		return true
+	}
+	if queryEntities > 0 {
+		return false
+	}
+	if s.Coverage >= .2 && (len(s.Terms) >= 2 || s.Coverage >= .8) {
+		return true
+	}
+	// A literal technical word plus another matching qualifier can anchor a
+	// long natural-language question without requiring every filler to match.
+	hanPhrases := 0
+	for _, term := range s.Terms {
+		if len([]rune(term)) >= 4 && strings.ContainsFunc(term, func(r rune) bool { return unicode.Is(unicode.Han, r) }) {
+			return true
+		}
+		if len([]rune(term)) == 3 && strings.ContainsFunc(term, func(r rune) bool { return unicode.Is(unicode.Han, r) }) {
+			hanPhrases++
+		}
+		if len(s.Terms) >= 2 && len(term) >= 3 && term[0] >= 'a' && term[0] <= 'z' {
+			return true
+		}
+	}
+	return hanPhrases >= 2
+}
+
+func termCoverage(terms, matched []string) float64 {
+	weight := func(term string) float64 { return float64(min(len([]rune(term)), 3)) }
+	total, found := 0.0, 0.0
+	for _, term := range terms {
+		total += weight(term)
+	}
+	for _, term := range matched {
+		found += weight(term)
+	}
+	if total == 0 {
+		return 0
+	}
+	return found / total
 }
 
 func rankingTerms(query string) []string {
@@ -218,12 +292,14 @@ func queryEntities(query string) ([]string, map[string]bool) {
 		if !distinctive {
 			continue
 		}
-		for _, key := range entityKeys(token) {
+		for i, key := range entityKeys(token) {
 			if !seen[key] {
 				out = append(out, key)
 				seen[key] = true
 			}
-			if strong {
+			// A basename remains a ranking hint, not a second identity or a
+			// substitute for an explicitly requested full path.
+			if strong && i == 0 {
 				anchors[key] = true
 			}
 		}

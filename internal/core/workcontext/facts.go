@@ -270,6 +270,9 @@ func (s *Store) recall(ctx context.Context, scope Scope, contextID, rangeScope, 
 	if _, err := s.getContext(ctx, tenantID, ownerID, contextID); err != nil {
 		return nil, err
 	}
+	if currentOnly {
+		return s.recallCurrentSnapshot(ctx, scope, contextID, query)
+	}
 	contextIDs, err := s.recallScopeContexts(ctx, tenantID, ownerID, contextID, rangeScope)
 	if err != nil {
 		return nil, err
@@ -534,14 +537,18 @@ func (s *Store) ExpireFacts(ctx context.Context, now time.Time) error {
 	return err
 }
 
-func rankFacts(query string, facts []Fact, catalog retrieval.Catalog) []Fact {
+func rankFacts(query string, facts []Fact, catalog retrieval.Catalog, diagnostics ...*retrieval.Diagnostics) []Fact {
 	docs := make([]retrieval.Document, 0, len(facts))
 	byID := make(map[string]Fact, len(facts))
 	for _, f := range facts {
-		docs = append(docs, retrieval.Document{ID: f.ID, Title: f.Title, Text: f.Content, Entities: []string{f.Subject, f.Predicate}})
+		docs = append(docs, retrieval.Document{ID: f.ID, Title: f.Title, Text: f.Content, Entities: []string{f.Subject, f.Predicate}, Kind: f.Kind, Group: f.ContextID + "\x00" + dreamScopeKey(f.Scope) + "\x00" + f.Subject + "\x00" + f.Predicate, Source: f.Source, Version: f.Version})
 		byID[f.ID] = f
 	}
-	matches := retrieval.RankWithCatalog(query, docs, 0, catalog)
+	var trace *retrieval.Diagnostics
+	if len(diagnostics) > 0 {
+		trace = diagnostics[0]
+	}
+	matches := retrieval.RankWithDiagnostics(query, docs, 0, catalog, trace)
 	out := make([]Fact, 0, len(matches))
 	for _, match := range matches {
 		f := byID[match.ID]

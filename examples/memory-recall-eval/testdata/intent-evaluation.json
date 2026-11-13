@@ -1,0 +1,596 @@
+{
+  "baseline": "Previous task-aware recall / filtering / cache batch, frozen in before-intent-recall executable; baseline changes were uncommitted.",
+  "method": "Same labeled corpora, temporary stores, no LLM calls. Three fresh-store runs per version; latency is the median of per-run p50/p95. Both versions warm personal reads once per query.",
+  "limits": [
+    "Live replay retains the previous two curated module definitions and one part_of relation; this is not an online A/B test.",
+    "The new 12-query fixture is a scenario suite with declared types/scopes and equivalence labels, not an independent holdout.",
+    "Equivalent labels count one information unit; duplicate returns do not increase recall.",
+    "Only aggregate live metrics are checked in.",
+    "Selection deduplication is limited to exact/format-equivalent text with compatible type, scope and title identities, not general semantic equivalence."
+  ],
+  "cases": {
+    "fixed": {
+      "records": 48,
+      "corpus_sha256": "220378819a22508d5125d23e65b0e5b4274d9f180070433a95a90704ac45779d",
+      "before": {
+        "desktop/all": {
+          "queries": 40,
+          "precision_returned_at_5": 0.9166666666666666,
+          "recall_at_5": 1,
+          "mrr": 0.96875,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 28.15,
+          "p50_ms": 0.381,
+          "p95_ms": 0.68
+        },
+        "desktop/development": {
+          "queries": 20,
+          "precision_returned_at_5": 0.9444444444444444,
+          "recall_at_5": 1,
+          "mrr": 0.96875,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 29.15,
+          "p50_ms": 0.413,
+          "p95_ms": 0.77
+        },
+        "desktop/holdout": {
+          "queries": 20,
+          "precision_returned_at_5": 0.8888888888888888,
+          "recall_at_5": 1,
+          "mrr": 0.96875,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 27.15,
+          "p50_ms": 0.364,
+          "p95_ms": 0.521
+        },
+        "personal/all": {
+          "queries": 40,
+          "precision_returned_at_5": 0.9166666666666666,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 28.15,
+          "p50_ms": 2.969,
+          "p95_ms": 3.481
+        },
+        "personal/development": {
+          "queries": 20,
+          "precision_returned_at_5": 0.9444444444444444,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 29.15,
+          "p50_ms": 2.571,
+          "p95_ms": 3.373
+        },
+        "personal/holdout": {
+          "queries": 20,
+          "precision_returned_at_5": 0.8888888888888888,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 27.15,
+          "p50_ms": 3.059,
+          "p95_ms": 3.481
+        }
+      },
+      "after": {
+        "desktop/all": {
+          "queries": 40,
+          "precision_returned_at_5": 0.9428571428571428,
+          "recall_at_5": 1,
+          "mrr": 0.96875,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 27.35,
+          "p50_ms": 0.433,
+          "p95_ms": 0.792
+        },
+        "desktop/development": {
+          "queries": 20,
+          "precision_returned_at_5": 0.9444444444444444,
+          "recall_at_5": 1,
+          "mrr": 0.96875,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 29.15,
+          "p50_ms": 0.423,
+          "p95_ms": 0.792
+        },
+        "desktop/holdout": {
+          "queries": 20,
+          "precision_returned_at_5": 0.9411764705882353,
+          "recall_at_5": 1,
+          "mrr": 0.96875,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 25.55,
+          "p50_ms": 0.45,
+          "p95_ms": 0.606
+        },
+        "personal/all": {
+          "queries": 40,
+          "precision_returned_at_5": 0.9428571428571428,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 27.35,
+          "p50_ms": 3.014,
+          "p95_ms": 3.297
+        },
+        "personal/development": {
+          "queries": 20,
+          "precision_returned_at_5": 0.9444444444444444,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 29.15,
+          "p50_ms": 3.013,
+          "p95_ms": 3.297
+        },
+        "personal/holdout": {
+          "queries": 20,
+          "precision_returned_at_5": 0.9411764705882353,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 25.55,
+          "p50_ms": 2.993,
+          "p95_ms": 3.287
+        }
+      }
+    },
+    "multiturn": {
+      "records": 4,
+      "corpus_sha256": "0bcc485580094d35528556177a5f349ba54d1b88aa17858fc7cf1a847bedb19a",
+      "before": {
+        "desktop/all": {
+          "queries": 20,
+          "precision_returned_at_5": 1,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 10.35,
+          "p50_ms": 0.066,
+          "p95_ms": 0.313
+        },
+        "desktop/development": {
+          "queries": 10,
+          "precision_returned_at_5": 1,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 10.3,
+          "p50_ms": 0.072,
+          "p95_ms": 0.88
+        },
+        "desktop/holdout": {
+          "queries": 10,
+          "precision_returned_at_5": 1,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 10.4,
+          "p50_ms": 0.065,
+          "p95_ms": 0.079
+        },
+        "personal/all": {
+          "queries": 20,
+          "precision_returned_at_5": 1,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 10.35,
+          "p50_ms": 0.182,
+          "p95_ms": 0.231
+        },
+        "personal/development": {
+          "queries": 10,
+          "precision_returned_at_5": 1,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 10.3,
+          "p50_ms": 0.205,
+          "p95_ms": 0.231
+        },
+        "personal/holdout": {
+          "queries": 10,
+          "precision_returned_at_5": 1,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 10.4,
+          "p50_ms": 0.179,
+          "p95_ms": 0.259
+        }
+      },
+      "after": {
+        "desktop/all": {
+          "queries": 20,
+          "precision_returned_at_5": 1,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 10.35,
+          "p50_ms": 0.079,
+          "p95_ms": 0.324
+        },
+        "desktop/development": {
+          "queries": 10,
+          "precision_returned_at_5": 1,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 10.3,
+          "p50_ms": 0.085,
+          "p95_ms": 0.898
+        },
+        "desktop/holdout": {
+          "queries": 10,
+          "precision_returned_at_5": 1,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 10.4,
+          "p50_ms": 0.077,
+          "p95_ms": 0.098
+        },
+        "personal/all": {
+          "queries": 20,
+          "precision_returned_at_5": 1,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 10.35,
+          "p50_ms": 0.201,
+          "p95_ms": 0.24
+        },
+        "personal/development": {
+          "queries": 10,
+          "precision_returned_at_5": 1,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 10.3,
+          "p50_ms": 0.201,
+          "p95_ms": 0.24
+        },
+        "personal/holdout": {
+          "queries": 10,
+          "precision_returned_at_5": 1,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 10.4,
+          "p50_ms": 0.203,
+          "p95_ms": 0.241
+        }
+      }
+    },
+    "entity": {
+      "records": 12,
+      "corpus_sha256": "6ecab06364ca802a6f78c583bdd14268d87203dbcc16cc6cfb2bb58e065981a8",
+      "before": {
+        "desktop/all": {
+          "queries": 10,
+          "precision_returned_at_5": 1,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 16.9,
+          "p50_ms": 0.123,
+          "p95_ms": 0.514
+        },
+        "desktop/development": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        },
+        "desktop/holdout": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        }
+      },
+      "after": {
+        "desktop/all": {
+          "queries": 10,
+          "precision_returned_at_5": 1,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 16.9,
+          "p50_ms": 0.148,
+          "p95_ms": 0.452
+        },
+        "desktop/development": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        },
+        "desktop/holdout": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        }
+      }
+    },
+    "intent": {
+      "records": 17,
+      "corpus_sha256": "4afe82cf4d7611aac8481ff0e3c06e610e97d84a73549c142bff52969c4e7b96",
+      "before": {
+        "desktop/all": {
+          "queries": 12,
+          "precision_returned_at_5": 0.6818181818181818,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 40.916666666666664,
+          "p50_ms": 0.133,
+          "p95_ms": 1.939
+        },
+        "desktop/development": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        },
+        "desktop/holdout": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        },
+        "personal/all": {
+          "queries": 12,
+          "precision_returned_at_5": 0.6818181818181818,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 40.916666666666664,
+          "p50_ms": 0.633,
+          "p95_ms": 0.859
+        },
+        "personal/development": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        },
+        "personal/holdout": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        }
+      },
+      "after": {
+        "desktop/all": {
+          "queries": 12,
+          "precision_returned_at_5": 0.9375,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 27.583333333333332,
+          "p50_ms": 0.163,
+          "p95_ms": 1.907
+        },
+        "desktop/development": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        },
+        "desktop/holdout": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        },
+        "personal/all": {
+          "queries": 12,
+          "precision_returned_at_5": 0.9375,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 27.583333333333332,
+          "p50_ms": 0.796,
+          "p95_ms": 1.203
+        },
+        "personal/development": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        },
+        "personal/holdout": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        }
+      }
+    },
+    "live": {
+      "records": 101,
+      "corpus_sha256": "53d45ad72ead338200911c4173231e8f05ebca89401a9d555cbaee2ac2fa3bc8",
+      "before": {
+        "desktop/all": {
+          "queries": 16,
+          "precision_returned_at_5": 0.6190476190476191,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 608.0625,
+          "p50_ms": 2.194,
+          "p95_ms": 5.032
+        },
+        "desktop/development": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        },
+        "desktop/holdout": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        }
+      },
+      "after": {
+        "desktop/all": {
+          "queries": 16,
+          "precision_returned_at_5": 0.7647058823529411,
+          "recall_at_5": 1,
+          "mrr": 1,
+          "no_result_accuracy": 1,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 533.6875,
+          "p50_ms": 2.379,
+          "p95_ms": 5.165
+        },
+        "desktop/development": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        },
+        "desktop/holdout": {
+          "queries": 0,
+          "precision_returned_at_5": 0,
+          "recall_at_5": 0,
+          "mrr": 0,
+          "no_result_accuracy": 0,
+          "forbidden_hits": 0,
+          "mean_estimated_tokens": 0,
+          "p50_ms": 0,
+          "p95_ms": 0
+        }
+      }
+    }
+  },
+  "ui_bundle_budget": {
+    "status": "pre-existing failure on the same three routes, reproduced from HEAD UI in a separate archive",
+    "before_kib": {
+      "ChatPage": 2367.2,
+      "FilesPage": 1140.5,
+      "OrchestrationPage": 1431.3
+    },
+    "after_kib": {
+      "ChatPage": 2369.7,
+      "FilesPage": 1142.5,
+      "OrchestrationPage": 1433.3
+    },
+    "production_build": "passed",
+    "budgets_unchanged": true
+  }
+}

@@ -285,4 +285,35 @@ describe("ledger bookkeeping calls at the end of a turn", () => {
     // The closing line stays visible (it is real text), just not as THE answer.
     expect(answerText).toContain(closing);
   });
+
+  it("keeps a FAILED ledger call visible so a failed save is never mistaken for success", () => {
+    const items: FeedItem[] = [
+      makeItem({ id: "assistant:t1", kind: "assistant", turnId: "t1", body: "R".repeat(400), timestamp: "2026-11-12T10:00:00Z" }),
+      makeItem({
+        id: "tool:cp",
+        kind: "tool",
+        title: "work_context",
+        input: { action: "checkpoint" },
+        status: "failed",
+        error: "version conflict",
+        timestamp: "2026-11-12T10:00:01Z",
+      }),
+      makeItem({ id: "assistant:t1#2", kind: "assistant", turnId: "t1", body: "已保存。", timestamp: "2026-11-12T10:00:02Z" }),
+    ];
+    const grouped = groupFeedItemsIntoTurns(items);
+    const { process, answer } = splitTurnSegments(grouped[0].segments ?? []);
+    const tools = [...process, ...answer].filter((s) => s.type === "tool");
+    expect(tools).toHaveLength(1);
+    expect(tools[0].item?.error).toBe("version conflict");
+  });
+
+  it("still hides a SUCCESSFUL ledger call to keep ordinary turns quiet", () => {
+    const items: FeedItem[] = [
+      makeItem({ id: "assistant:t1", kind: "assistant", turnId: "t1", body: "done", timestamp: "2026-11-12T10:00:00Z" }),
+      ledgerCall("tool:cp", "checkpoint"),
+    ];
+    const grouped = groupFeedItemsIntoTurns(items);
+    const { process, answer } = splitTurnSegments(grouped[0].segments ?? []);
+    expect([...process, ...answer].filter((s) => s.type === "tool")).toHaveLength(0);
+  });
 });

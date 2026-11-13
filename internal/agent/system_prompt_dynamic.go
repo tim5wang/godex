@@ -369,6 +369,7 @@ func buildCapabilityCheckPromptForProfile(catalog tools.ToolCatalog, profile str
 		"# Coding Profile",
 		"Default to the lean coding workflow for this turn.",
 		"- Keep user-visible replies compact like a coding agent: lead with the result, changed files, blockers, or next action.",
+		"- Report verification by level: what you ran, what it covered, and what you did not check (interface, device, production) or deploy. A green test run is not proof the feature works in the running app.",
 		"- Avoid narration such as \"let me check\", broad progress commentary, or restating obvious tool outputs. Mention process only when it changes the user's decision.",
 		"- Read the relevant code first, make focused edits, then run the smallest useful verification.",
 	}

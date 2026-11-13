@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { RecallDiagnosticsPanel } from "./RecallDiagnosticsPanel";
 import type { SessionContextInspector, SessionContextUsage, SkillActivation, ProtocolMessage } from "../../../lib/types";
 import { useI18n } from "../../../i18n";
 import { Tag, Popover, Alert, Space, Descriptions, Card, Typography, List, Popconfirm, Button, Progress, Empty, Modal } from "antd";
@@ -513,6 +514,7 @@ export function ContextRecallPanel({
       <MemoryPreviewSection title={t("chat.contextInspectorMemoryIdentity")} items={memoryPreview.identity} />
       <MemoryPreviewSection title={t("chat.contextInspectorMemoryCore")} items={memoryPreview.core} />
       <MemoryPreviewSection title={t("chat.contextInspectorMemoryRelevant")} items={memoryPreview.relevant} />
+      <RecallDiagnosticsPanel diagnostics={inspector?.recall_diagnostics ?? []} mode={inspector?.recall_mode} />
       <Card size="small" title={t("chat.contextArchiveTitle")}>
         {inspector?.transcript_refs?.length ? (
           <List

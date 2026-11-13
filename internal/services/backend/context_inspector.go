@@ -3,11 +3,15 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
 	"github.com/tim5wang/godex/internal/core/memory"
+	"github.com/tim5wang/godex/internal/core/workcontext"
 	"github.com/tim5wang/godex/internal/domain/events"
+	"github.com/tim5wang/godex/internal/platform/retrieval"
+	"github.com/tim5wang/godex/internal/platform/textutil"
 	"github.com/tim5wang/godex/internal/tools"
 )
 
@@ -38,6 +42,8 @@ type SessionContextInspector struct {
 	TranscriptRefCount int                           `json:"transcript_ref_count"`
 	TranscriptRefs     []string                      `json:"transcript_refs,omitempty"`
 	RecallQuery        string                        `json:"recall_query,omitempty"`
+	RecallMode         string                        `json:"recall_mode,omitempty"`
+	RecallDiagnostics  []*retrieval.Diagnostics      `json:"recall_diagnostics,omitempty"`
 	MemoryPreview      MemoryContextPreview          `json:"memory_preview"`
 	HistoryRecall      *HistoryRecallDecisionSummary `json:"history_recall,omitempty"`
 }
@@ -62,17 +68,59 @@ func (s *Service) ContextInspector(ctx context.Context, sessionID string) (Sessi
 		TranscriptRefCount: len(transcriptRefs),
 		TranscriptRefs:     recentTranscriptRefs(transcriptRefs, 3),
 		RecallQuery:        summarizeInspectorText(details.RecallQuery, 160),
+		RecallMode:         details.RecallMode,
+		RecallDiagnostics:  details.MemoryLayers.Diagnostics,
 		MemoryPreview: MemoryContextPreview{
 			Identity: append([]memory.RelevantMemory{}, details.MemoryLayers.Identity...),
 			Core:     append([]memory.RelevantMemory{}, details.MemoryLayers.Core...),
 			Relevant: append([]memory.RelevantMemory{}, details.MemoryLayers.Relevant...),
 		},
 	}
+	if session.agent.AutomaticMemoryEnabled() {
+		if diagnostic := s.desktopRecallDiagnostic(ctx, session, details.RecallQuery); diagnostic != nil {
+			result.RecallDiagnostics = append(result.RecallDiagnostics, diagnostic)
+		}
+	}
 	if session.timeline != nil {
 		result.HistoryRecall = latestHistoryRecallDecision(session.timeline.Entries(snapshotTimelineLimit))
 	}
 
 	return result, nil
+}
+
+// This is an explicitly labeled live preview, not a replay of an earlier LLM
+// request. It uses the same binding and source eligibility as automatic recall.
+func (s *Service) desktopRecallDiagnostic(ctx context.Context, session *sessionState, query string) *retrieval.Diagnostics {
+	unavailable := &retrieval.Diagnostics{Query: query, Layer: "desktop", Cache: "unavailable", Rejected: map[string]int{"binding_or_source_unavailable": 1}}
+	store, err := s.WorkContexts()
+	if err != nil {
+		return unavailable
+	}
+	scope, id, err := store.SessionBinding(ctx, session.id)
+	if errors.Is(err, workcontext.ErrNotFound) || err == nil && id == "" {
+		return nil
+	}
+	if err != nil {
+		return unavailable
+	}
+	ownerCtx := memory.WithOwner(ctx, memory.Owner{TenantID: scope.TenantID, UserID: scope.OwnerID})
+	if !sessionMemoryOwnerMatches(ownerCtx, session) {
+		return unavailable
+	}
+	facts, trace, err := store.RecallCurrentWithDiagnostics(ctx, scope, id, query)
+	if err != nil {
+		return unavailable
+	}
+	ids, tokens := []string{}, 0
+	for i, f := range facts {
+		if i >= 4 {
+			break
+		}
+		ids = append(ids, f.ID)
+		tokens += len([]rune(f.Title+textutil.TruncateRunes(f.Content, 220))) / 2
+	}
+	retrieval.FinalizeSelection(&trace, ids, tokens)
+	return &trace
 }
 
 // ContextUsage returns live provider usage counters without constructing the

@@ -11,6 +11,7 @@ var queryBoilerplate = strings.NewReplacer(
 	"缺少的信息写", " ", "不要猜测", " ", "用中文输出", " ", "用中文回复", " ",
 	"用中文", " ", "简短回答", " ", "保留已有精度", " ", "当前本地时刻", " ",
 	"please", " ", "do not call tools", " ", "reply in chinese", " ",
+	"请问", " ", "帮我", " ", "一下", " ", "为什么", " ", "什么", " ", "怎么", " ", "如何", " ",
 )
 
 var genericTerms = map[string]bool{

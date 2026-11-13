@@ -1,3 +1,4 @@
+import { recallDiagnosticsZh } from "./messagesRecallDiagnostics";
 import { zhProductExtraMessages } from "./messagesZhProductExtra";
 
 export const zhProductMessages = {
@@ -213,6 +214,7 @@ export const zhProductMessages = {
       contextInspectorMemoryIdentity: "L0 身份记忆",
       contextInspectorMemoryCore: "Core 记忆",
       contextInspectorMemoryRelevant: "相关召回",
+      ...recallDiagnosticsZh,
       contextInspectorMemoryIdentityEmpty: "当前没有启用 identity 记忆。",
       contextInspectorMemoryCoreEmpty: "当前没有命中稳定的 core 记忆。",
       contextInspectorMemoryRelevantEmpty: "当前没有命中额外的相关召回。",

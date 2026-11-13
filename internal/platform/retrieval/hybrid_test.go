@@ -39,6 +39,18 @@ func TestHybridEntitiesCannotComeFromScopeOrOpaqueIDs(t *testing.T) {
 	}
 }
 
+func TestHybridAbstainsFromIsolatedFragmentsAndUnknownNamedTopics(t *testing.T) {
+	docs := []Document{{ID: "noise", Title: "参数与工具错误", Text: "什么参数设置不等于已经验证，文件读写错误"}}
+	for _, q := range []string{"附近有什么好吃的川菜馆", "PostgreSQL VACUUM 参数怎么设置", "量子纠缠贝尔不等式"} {
+		if got := Rank(q, docs, 5); len(got) != 0 {
+			t.Errorf("isolated generic fragment created relevance: %q %+v", q, got)
+		}
+	}
+	if got := Rank("参数", docs, 5); len(got) != 1 {
+		t.Fatal("an explicit short keyword query was lost", got)
+	}
+}
+
 func TestCatalogKeepsUnknownAnchorsAndBasenameSearch(t *testing.T) {
 	docs := []Document{
 		{ID: "platform", Text: "macOS tools failed"},
@@ -58,6 +70,9 @@ func TestCatalogKeepsUnknownAnchorsAndBasenameSearch(t *testing.T) {
 	}
 	if got := RankWithCatalog("pkg/one/config.go", docs, 5, catalog); len(got) != 1 || got[0].ID != "a" {
 		t.Fatal("full path matched another file", got)
+	}
+	if got := RankWithCatalog("pkg/unknown/config.go", docs, 5, catalog); len(got) != 0 {
+		t.Fatal("unknown full path fell back to a shared basename", got)
 	}
 }
 func BenchmarkHybridRank200(b *testing.B) {

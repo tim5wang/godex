@@ -601,3 +601,73 @@ func TestReplyPlanCollectorFallsBackToDeltas(t *testing.T) {
 		t.Fatalf("expected delta fallback, got %q", got)
 	}
 }
+
+// narratingBackend reproduces what a scheduled run really emits: narration deltas
+// while it works, then one completed message carrying the answer.
+type narratingBackend struct {
+	fakeBackend
+	narration []string
+	answer    string
+}
+
+func (b *narratingBackend) Submit(ctx context.Context, sessionID string, envelope message.Envelope) (*rtbackend.SubmitResult, error) {
+	_ = ctx
+	_ = envelope
+	b.mu.Lock()
+	sink := b.sinks[sessionID]
+	b.mu.Unlock()
+	if sink != nil {
+		for _, line := range b.narration {
+			sink.Emit(events.Event{
+				SessionID: sessionID,
+				Type:      events.EventAssistantTextDelta,
+				Timestamp: time.Now(),
+				Payload:   events.TextPayload{Role: "assistant", Text: line},
+			})
+		}
+		sink.Emit(events.Event{
+			SessionID: sessionID,
+			Type:      events.EventAssistantMessageComplete,
+			Timestamp: time.Now(),
+			Payload:   events.TextPayload{Role: "assistant", Text: b.answer},
+		})
+	}
+	return &rtbackend.SubmitResult{SessionID: sessionID, TurnID: "turn-1", Completed: true, UpdatedAt: time.Now()}, nil
+}
+
+// End-to-end through RunNow: the delivered plan must carry the run's answer, not
+// the narration it streamed on the way there.
+func TestRunNowDeliversAnswerNotNarration(t *testing.T) {
+	store := NewFileStore(t.TempDir())
+	backend := &narratingBackend{
+		narration: []string{"Let me check the board. ", "Now reading the cards. "},
+		answer:    "No changes since 05:40; two cards are still in review.",
+	}
+	deliverer := &fakeDeliverer{}
+	service := NewService(Config{Enabled: true, DefaultTimezone: "Asia/Shanghai"}, store, backend, deliverer)
+	job, err := service.CreateJob(CreateJobInput{
+		Name:           "board sweep",
+		Message:        "sweep the board",
+		Schedule:       Schedule{Type: ScheduleEvery, EverySeconds: 60},
+		SessionMode:    SessionModeShared,
+		DeliveryTarget: automation.DeliveryTarget{Kind: automation.DeliveryKindChannel, Channel: "weixin", Recipient: "user-1"},
+		Enabled:        true,
+	})
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	run, err := service.RunNow(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("run now: %v", err)
+	}
+	run = waitForRunStatus(t, store, job.ID, run.ID, 10*time.Second)
+	if run.Status != JobStatusCompleted {
+		t.Fatalf("expected completed run, got %s (%s)", run.Status, run.Error)
+	}
+	if len(deliverer.plans) != 1 {
+		t.Fatalf("expected exactly one delivery, got %d", len(deliverer.plans))
+	}
+	if got := deliverer.plans[0].Text; got != backend.answer {
+		t.Fatalf("expected the delivered text to be the answer, got %q", got)
+	}
+}

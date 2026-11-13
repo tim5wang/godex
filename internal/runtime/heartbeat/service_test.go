@@ -186,3 +186,15 @@ func TestDispatchDueHonorsActiveHours(t *testing.T) {
 		t.Fatalf("expected delivery inside active hours, got targets=%+v plans=%+v", deliverer.targets, deliverer.plans)
 	}
 }
+
+// Heartbeat deliveries share the cron collector's defect: concatenating every
+// delta ships the checklist narration instead of the conclusion.
+func TestHeartbeatReplyPlanCollectorPrefersFinalMessage(t *testing.T) {
+	collector := &replyPlanCollector{}
+	collector.Emit(events.Event{Type: events.EventAssistantTextDelta, Payload: events.TextPayload{Text: "Checking inbox. "}})
+	collector.Emit(events.Event{Type: events.EventAssistantMessageComplete, Payload: events.TextPayload{Text: "OK"}})
+
+	if got := collector.Plan().Text; got != "OK" {
+		t.Fatalf("expected the final message to be delivered, got %q", got)
+	}
+}

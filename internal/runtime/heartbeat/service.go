@@ -594,7 +594,9 @@ func (s *Service) ruleLocator(rule Rule, runID string) rtbackend.SessionLocator 
 }
 
 type replyPlanCollector struct {
-	builder   strings.Builder
+	// text picks what the delivery carries: the conclusion, not the concatenation
+	// of every checklist narration line (see channels.ReplyTextAssembler).
+	text      channels.ReplyTextAssembler
 	notices   []string
 	tools     []channels.ReplyTool
 	artifacts []channels.ReplyArtifact
@@ -604,7 +606,11 @@ func (c *replyPlanCollector) Emit(event events.Event) {
 	switch event.Type {
 	case events.EventAssistantTextDelta:
 		if payload, ok := event.Payload.(events.TextPayload); ok {
-			c.builder.WriteString(payload.Text)
+			c.text.Streamed(payload.Text)
+		}
+	case events.EventAssistantMessageComplete:
+		if payload, ok := event.Payload.(events.TextPayload); ok {
+			c.text.Completed(payload.Text)
 		}
 	case events.EventWarningRaised, events.EventErrorRaised:
 		if payload, ok := event.Payload.(events.NoticePayload); ok && strings.TrimSpace(payload.Message) != "" {
@@ -612,6 +618,9 @@ func (c *replyPlanCollector) Emit(event events.Event) {
 		}
 	case events.EventToolCallFinished:
 		if payload, ok := event.Payload.(events.ToolCallPayload); ok {
+			if channels.IsLedgerRecordingTool(payload.Name, payload.Input) && strings.TrimSpace(payload.Error) == "" {
+				c.text.RecordingToolCalled()
+			}
 			c.tools = append(c.tools, channels.ReplyTool{
 				ID:     payload.ID,
 				Name:   payload.Name,
@@ -635,7 +644,7 @@ func (c *replyPlanCollector) Emit(event events.Event) {
 
 func (c *replyPlanCollector) Plan() channels.ReplyPlan {
 	return channels.ReplyPlan{
-		Text:      strings.TrimSpace(c.builder.String()),
+		Text:      c.text.Text(),
 		Notices:   append([]string{}, c.notices...),
 		Tools:     append([]channels.ReplyTool{}, c.tools...),
 		Artifacts: append([]channels.ReplyArtifact{}, c.artifacts...),

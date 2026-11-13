@@ -574,3 +574,30 @@ func TestUpdateJobPreservesNextRunForMetadataOnlyChanges(t *testing.T) {
 		t.Fatalf("expected next_run_at to be preserved, got %s want %s", updated.NextRunAt, originalNextRun)
 	}
 }
+
+// A scheduled run streams narration while it works and then a final answer. The
+// delivered text must be the answer, not every "let me check…" concatenated
+// together — that concatenation is the repeated-progress noise users complained
+// about in periodic reports.
+func TestReplyPlanCollectorPrefersFinalMessageOverNarration(t *testing.T) {
+	collector := &replyPlanCollector{}
+	collector.Emit(events.Event{Type: events.EventAssistantTextDelta, Payload: events.TextPayload{Text: "Let me check the board. "}})
+	collector.Emit(events.Event{Type: events.EventAssistantTextDelta, Payload: events.TextPayload{Text: "Now running tests. "}})
+	collector.Emit(events.Event{Type: events.EventAssistantMessageComplete, Payload: events.TextPayload{Text: "No changes since 05:40."}})
+
+	if got := collector.Plan().Text; got != "No changes since 05:40." {
+		t.Fatalf("expected the final message to be delivered, got %q", got)
+	}
+}
+
+// Streaming-only backends never emit a completed message; the delta buffer stays
+// the fallback so a delivery is never empty.
+func TestReplyPlanCollectorFallsBackToDeltas(t *testing.T) {
+	collector := &replyPlanCollector{}
+	collector.Emit(events.Event{Type: events.EventAssistantTextDelta, Payload: events.TextPayload{Text: "streamed "}})
+	collector.Emit(events.Event{Type: events.EventAssistantTextDelta, Payload: events.TextPayload{Text: "reply"}})
+
+	if got := collector.Plan().Text; got != "streamed reply" {
+		t.Fatalf("expected delta fallback, got %q", got)
+	}
+}

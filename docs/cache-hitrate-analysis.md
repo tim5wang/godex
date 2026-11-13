@@ -2,13 +2,14 @@
 
 > 状态：分析报告（任务 t-1788097103296-1）
 > 日期：2026-08-31
+> 2026-11-13 更正：本文记录早期实现；当前 Responses 的显式缓存边界和原生历史回放见 [codex-cache.md](codex-cache.md)。`prompt_cache_key` 不是“整段全量匹配”的缓存开关，以下旧有 TTL/注入项/命中率描述不能直接作为当前实现依据。
 > 目标：定位 godex 在长任务下，是哪些内容没有进入 context 缓存段，导致命中率只有 ~96%，而 temp/pi、temp/deepseek-harness 能到 ~99.5%。
 
 ---
 
 ## 1. godex 的缓存模型（先厘清前提）
 
-默认模型 `deepseek.deepseek-v4-flash-vision-exp` 走 **`openai_responses`** provider（`base_url: https://api.deepseek.com`，见 `~/.godex/godex.yaml`）。该客户端（`internal/core/conversation/openai_responses_client.go`）使用 **自动前缀缓存**：`prompt_cache_retention` 下发、**不转发** `prompt_cache_key`（避免"整段全量匹配、一变全失效"的确定性缓存语义，注释明确说明）。
+当时默认模型 `deepseek.deepseek-v4-flash-vision-exp` 走 **`openai_responses`** provider。它的缓存行为由对应网关/模型实现决定；是否转发 `prompt_cache_key` 本身不能说明缓存采用全量匹配还是前缀匹配。
 
 所以 godex 的缓存靠的是**请求体字节前缀的最长匹配**。要让缓存命中率高，必须保证**请求体靠前的字节跨 turn 完全稳定**，新的内容只允许**追加在尾部**。
 

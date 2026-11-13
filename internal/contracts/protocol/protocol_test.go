@@ -6,6 +6,36 @@ import (
 	"testing"
 )
 
+func TestResponsesReplayPersistenceAndClone(t *testing.T) {
+	resp := Response{Content: []Block{TextBlock("answer")}, ResponsesReplay: &ResponsesReplay{
+		Origin: "origin:model", ContentHash: "hash", RuntimeTail: "date",
+		Output: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"opaque"}`)},
+	}}
+	msg := MessageFromResponse(resp)
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var loaded Message
+	if err := json.Unmarshal(data, &loaded); err != nil {
+		t.Fatal(err)
+	}
+	api := ToAPIMessages([]Message{loaded})[0]
+	if api.ResponsesReplay == nil || api.ResponsesReplay.RuntimeTail != "date" || len(api.ResponsesReplay.Output) != 1 {
+		t.Fatalf("replay lost: %+v", api)
+	}
+	clone := loaded.Clone()
+	clone.Metadata.ResponsesReplay.Output[0][0] = 'X'
+	clone.Metadata.ResponsesReplay.RuntimeTail = "changed"
+	if loaded.Metadata.ResponsesReplay.Output[0][0] != '{' || loaded.Metadata.ResponsesReplay.RuntimeTail != "date" {
+		t.Fatal("clone aliases original replay")
+	}
+	msg.Metadata.ResponsesReplay.Output[0][0] = 'X'
+	if resp.ResponsesReplay.Output[0][0] != '{' {
+		t.Fatal("response metadata aliased persisted message")
+	}
+}
+
 func TestMessageFromResponsePreservesTextAndToolUseBlocks(t *testing.T) {
 	resp := Response{Content: []Block{
 		TextBlock("hello "),

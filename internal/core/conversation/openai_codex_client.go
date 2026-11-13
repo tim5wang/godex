@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"io"
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/openai/openai-go/v3"
@@ -23,8 +23,10 @@ import (
 // mirrors temp/pi-go's Codex path: openai-go Responses streaming against
 // https://chatgpt.com/backend-api/codex with Codex-specific headers.
 type OpenAICodexClient struct {
-	client   openai.Client
-	official bool // true when speaking the official api.openai.com Responses API
+	client           openai.Client
+	official         bool // true when speaking the official api.openai.com Responses API
+	origin           string
+	cacheUnsupported sync.Map
 }
 
 // isOfficialResponsesBaseURL reports whether the base URL is the official
@@ -49,10 +51,8 @@ func NewOpenAICodexClient(baseURL, token string, timeout time.Duration) *OpenAIC
 //     backend only;
 //   - prompt_cache_retention IS forwarded (the official API supports it for
 //     the gpt-5.x-codex family; the OAuth endpoint rejects it with HTTP 400);
-//   - prompt_cache_key is NOT forwarded, so the request uses the official
-//     automatic prefix caching (longest-byte-prefix match, cached input billed
-//     at 0.1×) instead of deterministic prompt_cache_key caching, whose
-//     all-or-nothing semantics are unsafe for a growing agent prefix.
+//   - Cache parameters on the official endpoint are selected by model;
+//     OAuth only receives the stable session cache key.
 func NewOpenAICodexClientForEndpoint(baseURL, token string, timeout time.Duration, official bool) *OpenAICodexClient {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
@@ -76,7 +76,7 @@ func NewOpenAICodexClientForEndpoint(baseURL, token string, timeout time.Duratio
 			opts = append(opts, option.WithHeader("chatgpt-account-id", accountID))
 		}
 	}
-	return &OpenAICodexClient{client: openai.NewClient(opts...), official: official}
+	return &OpenAICodexClient{client: openai.NewClient(opts...), official: official, origin: responsesOrigin(baseURL, token)}
 }
 
 func (c *OpenAICodexClient) Call(ctx context.Context, req protocol.Request) (*protocol.Response, error) {
@@ -84,61 +84,12 @@ func (c *OpenAICodexClient) Call(ctx context.Context, req protocol.Request) (*pr
 }
 
 func (c *OpenAICodexClient) Stream(ctx context.Context, req protocol.Request, handler StreamHandler) (*protocol.Response, error) {
-	start := time.Now()
-	var finalResp *protocol.Response
-	var finalErr error
-	defer func() {
-		notifyUsage(ctx, UsageEvent{Request: req, Response: finalResp, Error: finalErr, Latency: time.Since(start), Stream: true})
-	}()
-	params := c.codexResponsesParams(req)
-
-	stream := c.client.Responses.NewStreaming(ctx, params)
-	defer stream.Close()
-
-	state := &codexResponsesStreamState{
-		toolCalls: make(map[int64]codexToolCallAcc),
-	}
-	started := false
-	for stream.Next() {
-		evt := stream.Current()
-		if !started {
-			started = true
-			// Reasoning-started signal: the ChatGPT codex backend delivers
-			// reasoning only as encrypted content (no plaintext
-			// reasoning_summary_text deltas), so frontends get a "thinking…"
-			// placeholder instead of a blank wait.
-			if handler.OnStreamStarted != nil {
-				handler.OnStreamStarted()
-			}
-		}
-		if err := applyCodexResponsesSDKEvent(state, evt, handler); err != nil {
-			finalErr = err
-			return nil, err
-		}
-	}
-	if err := stream.Err(); err != nil {
-		if ctx.Err() != nil {
-			finalErr = ctx.Err()
-			return nil, ctx.Err()
-		}
-		finalErr = err
-		return nil, err
-	}
-	response := codexStreamStateToProtocol(state)
-	if state.finishReason == "" {
-		finalErr = io.ErrUnexpectedEOF
-		return nil, finalErr
-	}
-	finalResp = response
-	return response, nil
+	return streamResponses(ctx, req, handler, c.client, c.codexResponsesParams(req), c.origin, c.official, &c.cacheUnsupported)
 }
 
 func (c *OpenAICodexClient) codexResponsesParams(req protocol.Request) responses.ResponseNewParams {
 	params := responses.ResponseNewParams{
 		Model: req.Model,
-		Input: responses.ResponseNewParamsInputUnion{
-			OfInputItemList: codexInputFromProtocol(req),
-		},
 		// store stays false on both endpoints: the ChatGPT codex OAuth
 		// endpoint rejects store=true with HTTP 400 (measured live), and the
 		// official API allows it but we keep responses out of server-side
@@ -165,18 +116,11 @@ func (c *OpenAICodexClient) codexResponsesParams(req protocol.Request) responses
 			Summary: shared.ReasoningSummaryAuto,
 		}
 	}
-	// Prompt cache affinity. On the chatgpt.com OAuth endpoint we forward the
-	// stable session cache key and nothing else: the backend rejects
-	// prompt_cache_retention with HTTP 400, and its caching is capped server
-	// side anyway. On the official api.openai.com endpoint we forward
-	// prompt_cache_retention (supported for the gpt-5.x-codex family, extends
-	// the prefix cache TTL to 24h) and deliberately do NOT forward
-	// prompt_cache_key: deterministic prompt_cache_key caching is
-	// all-or-nothing on the whole prompt and would never hit for a growing
-	// agent prefix, while the official automatic prefix caching does
-	// longest-byte-prefix matching and bills cached input at 0.1×.
+	// OAuth rejects retention/options. Official legacy models retain their
+	// existing retention policy; newer models use explicit 30m boundaries in
+	// streamResponses. A cache key is not a whole-prompt equality requirement.
 	if c.official {
-		if retention := strings.TrimSpace(req.PromptCacheRetention); retention != "" {
+		if retention := strings.TrimSpace(req.PromptCacheRetention); retention != "" && !supportsResponsesExplicitCache(req.Model) {
 			switch retention {
 			case "24h":
 				params.PromptCacheRetention = responses.ResponseNewParamsPromptCacheRetention24h
@@ -209,14 +153,23 @@ func codexInputFromProtocol(req protocol.Request) responses.ResponseInputParam {
 	for _, msg := range req.Messages {
 		role := codexResponsesRole(msg.Role)
 		var textParts []string
-		flushText := func() {
+		var content responses.ResponseInputMessageContentListParam
+		flushTextPart := func() {
 			text := strings.TrimSpace(strings.Join(textParts, "\n"))
-			if text == "" {
-				textParts = nil
-				return
+			if text != "" {
+				content = append(content, responses.ResponseInputContentParamOfInputText(text))
 			}
-			items = append(items, responses.ResponseInputItemParamOfMessage(text, role))
 			textParts = nil
+		}
+		flushMessage := func() {
+			flushTextPart()
+			if len(content) == 1 && content[0].OfInputText != nil {
+				// Preserve the existing wire shape for text-only messages.
+				items = append(items, responses.ResponseInputItemParamOfMessage(content[0].OfInputText.Text, role))
+			} else if len(content) > 0 {
+				items = append(items, responses.ResponseInputItemParamOfMessage(content, role))
+			}
+			content = nil
 		}
 		for _, block := range msg.Content {
 			switch block.Type {
@@ -225,15 +178,23 @@ func codexInputFromProtocol(req protocol.Request) responses.ResponseInputParam {
 					textParts = append(textParts, block.Text)
 				}
 			case protocol.BlockImage:
-				textParts = append(textParts, codexImagePlaceholder(block))
+				if block.Source == nil || block.Source.Data == "" {
+					textParts = append(textParts, codexImagePlaceholder(block))
+					continue
+				}
+				flushTextPart()
+				content = append(content, responses.ResponseInputContentUnionParam{OfInputImage: &responses.ResponseInputImageParam{
+					Detail:   responses.ResponseInputImageDetailAuto,
+					ImageURL: param.NewOpt("data:" + block.Source.MediaType + ";base64," + block.Source.Data),
+				}})
 			case protocol.BlockToolUse:
-				flushText()
+				flushMessage()
 				args, _ := json.Marshal(block.Input)
 				if strings.TrimSpace(block.ID) != "" {
 					items = append(items, responses.ResponseInputItemParamOfFunctionCall(string(args), block.ID, block.Name))
 				}
 			case protocol.BlockToolResult:
-				flushText()
+				flushMessage()
 				if strings.TrimSpace(block.ToolUseID) != "" {
 					lastOutputCallID = block.ToolUseID
 					lastOutput = block.Content
@@ -242,7 +203,7 @@ func codexInputFromProtocol(req protocol.Request) responses.ResponseInputParam {
 				}
 			}
 		}
-		flushText()
+		flushMessage()
 	}
 	if tail := strings.TrimSpace(req.RuntimeTail); tail != "" {
 		if lastOutputCallID != "" {
@@ -364,6 +325,7 @@ type codexResponsesStreamState struct {
 	finishReason string
 	toolCalls    map[int64]codexToolCallAcc
 	usage        *protocol.Usage
+	outputItems  map[int64]json.RawMessage
 }
 
 type codexToolCallAcc struct {
@@ -399,6 +361,12 @@ func applyCodexResponsesSDKEvent(state *codexResponsesStreamState, event respons
 			state.finishReason = "length"
 		}
 		state.usage = codexUsageToProtocol(event.Response.Usage)
+		if len(event.Response.Output) > 0 {
+			state.outputItems = make(map[int64]json.RawMessage, len(event.Response.Output))
+			for i, item := range event.Response.Output {
+				captureResponsesOutput(state, int64(i), item)
+			}
+		}
 	case "response.failed":
 		return newProviderStreamError(string(event.Response.Error.Code), event.Response.Error.Message)
 	case "response.function_call_arguments.delta":
@@ -406,13 +374,36 @@ func applyCodexResponsesSDKEvent(state *codexResponsesStreamState, event respons
 	case "response.function_call_arguments.done":
 		updateCodexResponsesToolCall(state, event.OutputIndex, "", event.Name, event.Arguments, false)
 	case "response.output_item.added":
-		call := event.Item.AsFunctionCall()
-		updateCodexResponsesToolCall(state, event.OutputIndex, call.CallID, call.Name, "", false)
+		if event.Item.Type == "function_call" {
+			call := event.Item.AsFunctionCall()
+			updateCodexResponsesToolCall(state, event.OutputIndex, call.CallID, call.Name, "", false)
+		}
 	case "response.output_item.done":
-		call := event.Item.AsFunctionCall()
-		updateCodexResponsesToolCall(state, event.OutputIndex, call.CallID, call.Name, call.Arguments, false)
+		captureResponsesOutput(state, event.OutputIndex, event.Item)
 	}
 	return nil
+}
+
+func captureResponsesOutput(state *codexResponsesStreamState, index int64, item responses.ResponseOutputItemUnion) {
+	if raw := item.RawJSON(); raw != "" {
+		if state.outputItems == nil {
+			state.outputItems = make(map[int64]json.RawMessage)
+		}
+		state.outputItems[index] = json.RawMessage(raw)
+	}
+	if item.Type == "function_call" {
+		call := item.AsFunctionCall()
+		updateCodexResponsesToolCall(state, index, call.CallID, call.Name, call.Arguments, false)
+	}
+}
+
+func sortedResponsesOutputIndices(items map[int64]json.RawMessage) []int64 {
+	indices := make([]int64, 0, len(items))
+	for index := range items {
+		indices = append(indices, index)
+	}
+	sort.Slice(indices, func(i, j int) bool { return indices[i] < indices[j] })
+	return indices
 }
 
 func updateCodexResponsesToolCall(state *codexResponsesStreamState, idx int64, id, name, arguments string, appendArguments bool) {
@@ -434,6 +425,23 @@ func updateCodexResponsesToolCall(state *codexResponsesStreamState, idx int64, i
 }
 
 func codexStreamStateToProtocol(state *codexResponsesStreamState) *protocol.Response {
+	// Some compatible endpoints only send the final output array. Recover
+	// visible content without emitting duplicate deltas or duplicate tool calls.
+	if state.text.Len() == 0 {
+		for _, index := range sortedResponsesOutputIndices(state.outputItems) {
+			var item struct {
+				Type    string
+				Content []struct{ Type, Text string }
+			}
+			if json.Unmarshal(state.outputItems[index], &item) == nil && item.Type == "message" {
+				for _, part := range item.Content {
+					if part.Type == "output_text" {
+						state.text.WriteString(part.Text)
+					}
+				}
+			}
+		}
+	}
 	blocks := make([]protocol.Block, 0, 2+len(state.toolCalls))
 	if reasoning := strings.TrimSpace(state.reasoning.String()); reasoning != "" {
 		blocks = append(blocks, protocol.ThinkingBlock(reasoning, "", false))
@@ -465,21 +473,26 @@ func codexStreamStateToProtocol(state *codexResponsesStreamState) *protocol.Resp
 // struct with a CachedTokens field (OpenAI prompt caching). We also pick up
 // output_tokens / total_tokens so the rest of the system can rely on a
 // complete usage record. The Responses API input_tokens INCLUDES the cached
-// portion; we subtract it so protocol.Usage.InputTokens always counts only
-// the uncached input, matching the Anthropic convention.
+// and cache-write portions; we subtract both so protocol.Usage.InputTokens
+// counts only ordinary uncached input, matching the Anthropic convention.
 func codexUsageToProtocol(usage responses.ResponseUsage) *protocol.Usage {
 	if usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.TotalTokens == 0 && usage.InputTokensDetails.CachedTokens == 0 {
 		return nil
 	}
-	cacheRead := int(usage.InputTokensDetails.CachedTokens)
-	input := int(usage.InputTokens)
-	if cacheRead > 0 && input >= cacheRead {
-		input -= cacheRead
+	var details struct {
+		CacheWriteTokens int `json:"cache_write_tokens"`
 	}
+	_ = json.Unmarshal([]byte(usage.InputTokensDetails.RawJSON()), &details)
+	input := max(0, int(usage.InputTokens))
+	cacheRead := min(input, max(0, int(usage.InputTokensDetails.CachedTokens)))
+	cacheWrite := min(input-cacheRead, max(0, details.CacheWriteTokens))
+	input -= cacheRead + cacheWrite
 	return &protocol.Usage{
-		InputTokens:     input,
-		OutputTokens:    int(usage.OutputTokens),
-		CacheReadTokens: cacheRead,
+		InputTokens:      input,
+		OutputTokens:     max(0, int(usage.OutputTokens)),
+		ReasoningTokens:  min(max(0, int(usage.OutputTokens)), max(0, int(usage.OutputTokensDetails.ReasoningTokens))),
+		CacheReadTokens:  cacheRead,
+		CacheWriteTokens: cacheWrite,
 	}
 }
 

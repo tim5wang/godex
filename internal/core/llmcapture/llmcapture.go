@@ -23,18 +23,19 @@ import (
 // in-memory ring buffer so the web UI can browse recent records without
 // re-reading the file on every request.
 type Record struct {
-	ID        string             `json:"id"`
-	Timestamp time.Time          `json:"timestamp"`
-	SessionID string             `json:"session_id,omitempty"`
-	TurnID    string             `json:"turn_id,omitempty"`
-	JobID     string             `json:"job_id,omitempty"`
-	Channel   string             `json:"channel,omitempty"`
-	Model     string             `json:"model,omitempty"`
-	Stream    bool               `json:"stream"`
-	LatencyMS int64              `json:"latency_ms"`
-	Error     string             `json:"error,omitempty"`
-	Request   protocol.Request   `json:"request"`
-	Response  *protocol.Response `json:"response,omitempty"`
+	ID          string                           `json:"id"`
+	Timestamp   time.Time                        `json:"timestamp"`
+	SessionID   string                           `json:"session_id,omitempty"`
+	TurnID      string                           `json:"turn_id,omitempty"`
+	JobID       string                           `json:"job_id,omitempty"`
+	Channel     string                           `json:"channel,omitempty"`
+	Model       string                           `json:"model,omitempty"`
+	Stream      bool                             `json:"stream"`
+	LatencyMS   int64                            `json:"latency_ms"`
+	Error       string                           `json:"error,omitempty"`
+	Request     protocol.Request                 `json:"request"`
+	Response    *protocol.Response               `json:"response,omitempty"`
+	Diagnostics *conversation.RequestDiagnostics `json:"request_diagnostics,omitempty"`
 }
 
 // Options controls where the capture dump lives and how many records are kept
@@ -50,13 +51,13 @@ type Options struct {
 // Capture owns the enabled flag, the jsonl sink and the in-memory record ring.
 // It subscribes to the conversation package usage hooks once at construction.
 type Capture struct {
-	enabled    atomic.Bool
-	dumpPath   string
-	writeMu    sync.Mutex
-	file       *os.File
-	mu         sync.RWMutex
-	records    []*Record
-	maxMem     int
+	enabled     atomic.Bool
+	dumpPath    string
+	writeMu     sync.Mutex
+	file        *os.File
+	mu          sync.RWMutex
+	records     []*Record
+	maxMem      int
 	unsubscribe func()
 }
 
@@ -147,6 +148,10 @@ func (c *Capture) onUsage(_ context.Context, ev conversation.UsageEvent) {
 	if rec.Model == "" {
 		rec.Model = ev.Context.TargetModel
 	}
+	if ev.RequestDiagnostics != nil {
+		rec.Diagnostics = ev.RequestDiagnostics()
+		c.compareRequestPrefix(rec)
+	}
 
 	c.write(rec)
 
@@ -158,6 +163,37 @@ func (c *Capture) onUsage(_ context.Context, ev conversation.UsageEvent) {
 		c.records = append([]*Record(nil), c.records[overflow:]...)
 	}
 	c.mu.Unlock()
+}
+
+func (c *Capture) compareRequestPrefix(rec *Record) {
+	d := rec.Diagnostics
+	if d == nil {
+		return
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for i := len(c.records) - 1; i >= 0; i-- {
+		previous := c.records[i]
+		p := previous.Diagnostics
+		if p == nil || previous.SessionID != rec.SessionID || previous.JobID != rec.JobID ||
+			previous.Model != rec.Model || p.Origin != d.Origin {
+			continue
+		}
+		d.ComparedWith = previous.ID
+		if p.SystemHash == d.SystemHash && p.ToolsHash == d.ToolsHash && p.SettingsHash == d.SettingsHash {
+			for j := 0; j < len(p.InputHashes) && j < len(d.InputHashes); j++ {
+				if p.InputHashes[j] != d.InputHashes[j] {
+					break
+				}
+				d.CommonPrefixItems++
+			}
+		}
+		if d.CommonPrefixItems < len(p.InputHashes) || d.CommonPrefixItems < len(d.InputHashes) {
+			index := d.CommonPrefixItems
+			d.FirstChangedItem = &index
+		}
+		return
+	}
 }
 
 func (c *Capture) write(rec *Record) {
@@ -191,16 +227,16 @@ func (c *Capture) List(limit int) []Summary {
 	for i := len(c.records) - 1; i >= 0 && len(out) < limit; i-- {
 		rec := c.records[i]
 		out = append(out, Summary{
-			ID:        rec.ID,
-			Timestamp: rec.Timestamp,
-			SessionID: rec.SessionID,
-			TurnID:    rec.TurnID,
-			Model:     rec.Model,
-			Stream:    rec.Stream,
-			LatencyMS: rec.LatencyMS,
-			Error:     rec.Error,
+			ID:          rec.ID,
+			Timestamp:   rec.Timestamp,
+			SessionID:   rec.SessionID,
+			TurnID:      rec.TurnID,
+			Model:       rec.Model,
+			Stream:      rec.Stream,
+			LatencyMS:   rec.LatencyMS,
+			Error:       rec.Error,
 			HasResponse: rec.Response != nil,
-			InputTokens:   tokenCount(rec.Response),
+			InputTokens: tokenCount(rec.Response),
 		})
 	}
 	return out
@@ -230,7 +266,7 @@ func tokenCount(resp *protocol.Response) int {
 	if resp == nil || resp.Usage == nil {
 		return 0
 	}
-	return resp.Usage.InputTokens + resp.Usage.OutputTokens
+	return resp.Usage.InputTokens + resp.Usage.CacheReadTokens + resp.Usage.CacheWriteTokens + resp.Usage.OutputTokens
 }
 
 // Summary is the lightweight list entry served to the web UI.

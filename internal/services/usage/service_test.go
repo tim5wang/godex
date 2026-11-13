@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"github.com/tim5wang/godex/internal/core/conversation"
 )
 
 func TestCreateKeyReturnsSecret(t *testing.T) {
@@ -606,7 +606,7 @@ func TestCacheStatsHitRateIsCallLevel(t *testing.T) {
 	calls := []*UsageCall{
 		{APIKeyID: key.Key.ID, PublicModel: "m", TargetModel: "m", InputTokens: 100, CacheReadTokens: 50, Status: "success"},
 		{APIKeyID: key.Key.ID, PublicModel: "m", TargetModel: "m", InputTokens: 100, CacheReadTokens: 50, Status: "success"},
-		{APIKeyID: key.Key.ID, PublicModel: "m", TargetModel: "m", InputTokens: 100, CacheReadTokens: 0, Status: "success"},
+		{APIKeyID: key.Key.ID, PublicModel: "m", TargetModel: "m", InputTokens: 100, CacheReadTokens: 0, CacheWriteTokens: 100, Status: "success"},
 		{APIKeyID: key.Key.ID, PublicModel: "m", TargetModel: "m", InputTokens: 0, CacheReadTokens: 200, Status: "success"},
 	}
 	for _, c := range calls {
@@ -636,11 +636,11 @@ func TestCacheStatsHitRateIsCallLevel(t *testing.T) {
 		t.Errorf("expected call-level HitRate=75.0, got %.2f", got.HitRate)
 	}
 	// Token-level: total input = 300, total cache_read = 300
-	// (50+50+0+200). Efficiency = 300 / (300+300) = 50.00%.
+	// (50+50+0+200), writes = 100. Efficiency = 300 / 700 = 42.86%.
 	// This is the field the dashboard renders as the
 	// cost-saving story.
-	if got.CacheEfficiency != 50.0 {
-		t.Errorf("expected CacheEfficiency=50.0, got %.2f", got.CacheEfficiency)
+	if got.CacheEfficiency != 42.86 {
+		t.Errorf("expected CacheEfficiency=42.86, got %.2f", got.CacheEfficiency)
 	}
 	if got.InputTokens != 300 {
 		t.Errorf("expected InputTokens=300, got %d", got.InputTokens)
@@ -648,8 +648,8 @@ func TestCacheStatsHitRateIsCallLevel(t *testing.T) {
 	if got.CacheReadTokens != 300 {
 		t.Errorf("expected CacheReadTokens=300, got %d", got.CacheReadTokens)
 	}
-	if got.CacheWriteTokens != 0 {
-		t.Errorf("expected CacheWriteTokens=0, got %d", got.CacheWriteTokens)
+	if got.CacheWriteTokens != 100 {
+		t.Errorf("expected CacheWriteTokens=100, got %d", got.CacheWriteTokens)
 	}
 }
 

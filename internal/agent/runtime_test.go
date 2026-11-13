@@ -1222,8 +1222,8 @@ func TestExportRestoreStatePersistsCacheAndUsage(t *testing.T) {
 	if snap.Calls != 3 || snap.CacheReadTokens != 9000 {
 		t.Fatalf("expected restored cache stats, got %+v", snap)
 	}
-	if snap.HitRatePercent < 89.9 || snap.HitRatePercent > 90.1 {
-		t.Fatalf("expected restored hit rate ~90%%, got %.2f", snap.HitRatePercent)
+	if want := float64(9000) / 10100 * 100; snap.HitRatePercent < want-0.01 || snap.HitRatePercent > want+0.01 {
+		t.Fatalf("expected restored hit rate %.2f%%, got %.2f", want, snap.HitRatePercent)
 	}
 	in, out := restored.cumulativeTokenUsage()
 	if in != 10100 || out != 130 {

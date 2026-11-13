@@ -55,19 +55,20 @@ const (
 )
 
 type Metadata struct {
-	Kind             MessageKind   `json:"kind,omitempty"`
-	Ephemeral        bool          `json:"ephemeral,omitempty"`
-	Transcript       string        `json:"transcript,omitempty"`
-	Source           string        `json:"source,omitempty"`
-	Sender           string        `json:"sender,omitempty"`
-	Timestamp        string        `json:"timestamp,omitempty"`
-	Text             string        `json:"text,omitempty"`
-	Parts            []ContentPart `json:"parts,omitempty"`
-	Attachments      []Attachment  `json:"attachments,omitempty"`
-	AppObjectType    string        `json:"app_object_type,omitempty"`
-	AppObjectID      string        `json:"app_object_id,omitempty"`
-	AppObjectTitle   string        `json:"app_object_title,omitempty"`
-	ReasoningContent string        `json:"reasoning_content,omitempty"`
+	Kind             MessageKind      `json:"kind,omitempty"`
+	Ephemeral        bool             `json:"ephemeral,omitempty"`
+	Transcript       string           `json:"transcript,omitempty"`
+	Source           string           `json:"source,omitempty"`
+	Sender           string           `json:"sender,omitempty"`
+	Timestamp        string           `json:"timestamp,omitempty"`
+	Text             string           `json:"text,omitempty"`
+	Parts            []ContentPart    `json:"parts,omitempty"`
+	Attachments      []Attachment     `json:"attachments,omitempty"`
+	AppObjectType    string           `json:"app_object_type,omitempty"`
+	AppObjectID      string           `json:"app_object_id,omitempty"`
+	AppObjectTitle   string           `json:"app_object_title,omitempty"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	ResponsesReplay  *ResponsesReplay `json:"responses_replay,omitempty"`
 }
 
 type ContentPart struct {
@@ -137,9 +138,32 @@ type Message struct {
 }
 
 type APIMessage struct {
-	Role             string  `json:"role"`
-	Content          []Block `json:"content"`
-	ReasoningContent string  `json:"reasoning_content,omitempty"`
+	Role             string           `json:"role"`
+	Content          []Block          `json:"content"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	ResponsesReplay  *ResponsesReplay `json:"responses_replay,omitempty"`
+}
+
+// ResponsesReplay keeps opaque Responses output and its originating runtime
+// input out of visible conversation blocks. Origin binds it to an endpoint,
+// credential and model; ContentHash prevents replay after a history edit.
+type ResponsesReplay struct {
+	Origin      string            `json:"origin"`
+	ContentHash string            `json:"content_hash"`
+	RuntimeTail string            `json:"runtime_tail,omitempty"`
+	Output      []json.RawMessage `json:"output,omitempty"`
+}
+
+func (r *ResponsesReplay) Clone() *ResponsesReplay {
+	if r == nil {
+		return nil
+	}
+	next := *r
+	next.Output = make([]json.RawMessage, len(r.Output))
+	for i, item := range r.Output {
+		next.Output[i] = append(json.RawMessage(nil), item...)
+	}
+	return &next
 }
 
 type ToolSchema struct {
@@ -148,10 +172,11 @@ type ToolSchema struct {
 	InputSchema map[string]interface{} `json:"input_schema"`
 }
 
-// CacheRetentionShort is the default cache retention duration (~5 minutes).
+// CacheRetentionShort requests the provider's default cache lifetime.
 const CacheRetentionShort = "short"
 
-// CacheRetentionLong requests 24-hour cache retention where supported.
+// CacheRetentionLong requests longer retention where supported. Responses
+// providers apply a model-aware policy (legacy 24h, modern agent default 30m).
 const CacheRetentionLong = "24h"
 
 type Request struct {
@@ -166,9 +191,9 @@ type Request struct {
 	PromptCacheRetention string       `json:"prompt_cache_retention,omitempty"`
 	// RuntimeTail carries per-turn volatile runtime context (memory recall,
 	// project ledger, todos, date). Wire serializers place it at the prompt
-	// tail using a provider-appropriate representation, keeping it out of
-	// persisted conversation history and minimizing disruption to prefix
-	// caching.
+	// tail using a provider-appropriate representation. OpenAI native replay
+	// retains already-sent tails in hidden assistant metadata to preserve the
+	// originating reasoning prefix; they are not visible chat messages.
 	RuntimeTail string `json:"-"`
 	// ContextSources is capture-only attribution; provider serializers omit it.
 	ContextSources []ContextSource `json:"-"`
@@ -193,20 +218,23 @@ type ContextSource struct {
 }
 
 type Response struct {
-	Content          []Block `json:"content"`
-	StopReason       string  `json:"stop_reason"`
-	ReasoningContent string  `json:"reasoning_content,omitempty"`
-	Usage            *Usage  `json:"usage,omitempty"`
+	Content          []Block          `json:"content"`
+	StopReason       string           `json:"stop_reason"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	Usage            *Usage           `json:"usage,omitempty"`
+	ResponsesReplay  *ResponsesReplay `json:"responses_replay,omitempty"`
 }
 
 type Usage struct {
 	// InputTokens counts only the UNCACHED prompt/input tokens (the
 	// Anthropic convention). OpenAI-style provider adapters subtract the
-	// cached portion from the reported total, so downstream code can
+	// cached/read and newly written portions from the reported total, so downstream code can
 	// always compute the cache hit rate as
-	// CacheReadTokens / (InputTokens + CacheReadTokens).
+	// CacheReadTokens / (InputTokens + CacheReadTokens + CacheWriteTokens).
 	InputTokens  int `json:"input_tokens,omitempty"`
 	OutputTokens int `json:"output_tokens,omitempty"`
+	// ReasoningTokens is a subset of OutputTokens, never an additional charge.
+	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
 	// CacheReadTokens is the canonical cache-read field used by OpenAI-style
 	// providers (cached_tokens / cache_read_tokens) and is also what the
 	// usage reporting layer aggregates. The Anthropic alias
@@ -318,6 +346,12 @@ func MessageFromResponse(resp Response) Message {
 	if strings.TrimSpace(resp.ReasoningContent) != "" {
 		msg.Metadata = &Metadata{ReasoningContent: resp.ReasoningContent}
 	}
+	if resp.ResponsesReplay != nil {
+		if msg.Metadata == nil {
+			msg.Metadata = &Metadata{}
+		}
+		msg.Metadata.ResponsesReplay = resp.ResponsesReplay.Clone()
+	}
 	return msg
 }
 
@@ -421,6 +455,7 @@ func ToAPIMessages(messages []Message) []APIMessage {
 		apiMessage := APIMessage{Role: msg.Role, Content: content}
 		if msg.Metadata != nil && msg.Role == RoleAssistant {
 			apiMessage.ReasoningContent = msg.Metadata.ReasoningContent
+			apiMessage.ResponsesReplay = msg.Metadata.ResponsesReplay
 		}
 		apiMessages = append(apiMessages, apiMessage)
 	}
@@ -519,6 +554,7 @@ func cloneMetadata(metadata *Metadata) *Metadata {
 		return nil
 	}
 	cloned := *metadata
+	cloned.ResponsesReplay = metadata.ResponsesReplay.Clone()
 	if len(metadata.Parts) > 0 {
 		cloned.Parts = make([]ContentPart, 0, len(metadata.Parts))
 		for _, part := range metadata.Parts {

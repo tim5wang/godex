@@ -85,10 +85,39 @@ func TestCaptureDisabledDoesNotCapture(t *testing.T) {
 
 	ctx := conversation.WithUsageContext(context.Background(), conversation.UsageContext{SessionID: "s"})
 	conversation.NotifyUsageHooksForTest(ctx, conversation.UsageEvent{
-		Request: protocol.Request{Model: "m"},
+		Request:            protocol.Request{Model: "m"},
+		RequestDiagnostics: func() *conversation.RequestDiagnostics { t.Error("disabled capture evaluated diagnostics"); return nil },
 	})
 	if got := c.List(10); len(got) != 0 {
 		t.Fatalf("captured %d records while disabled", len(got))
+	}
+}
+
+func TestCaptureComparesWirePrefixesAndPersistsDiagnostics(t *testing.T) {
+	c := New(Options{DumpDir: t.TempDir()})
+	defer c.Close()
+	if err := c.SetEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	for _, hashes := range [][]string{{"a", "b"}, {"a", "b", "c"}, {"a", "changed"}} {
+		c.onUsage(context.Background(), conversation.UsageEvent{
+			Context: conversation.UsageContext{SessionID: "s", JobID: "j"}, Request: protocol.Request{Model: "m"},
+			RequestDiagnostics: func() *conversation.RequestDiagnostics {
+				return &conversation.RequestDiagnostics{Origin: "o", SystemHash: "s", ToolsHash: "t", SettingsHash: "p", InputHashes: hashes}
+			},
+		})
+	}
+	list := c.List(3)
+	d := c.Get(list[0].ID).Diagnostics
+	if d.ComparedWith != list[1].ID || d.CommonPrefixItems != 1 || d.FirstChangedItem == nil || *d.FirstChangedItem != 1 {
+		t.Fatalf("wrong prefix diff: %+v", d)
+	}
+	if got := c.Get(list[1].ID).Diagnostics.CommonPrefixItems; got != 2 {
+		t.Fatalf("append-only prefix=%d", got)
+	}
+	records, err := ReadAllFromFile(c.DumpPath())
+	if err != nil || len(records) != 3 || records[2].Diagnostics.CommonPrefixItems != 1 {
+		t.Fatalf("diagnostics not persisted: %v %+v", err, records)
 	}
 }
 

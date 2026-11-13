@@ -786,7 +786,7 @@ func (s *SQLiteStore) GetCacheStats(query CacheStatsQuery) ([]CacheStats, error)
 		// that drives the cost-saving story because cached
 		// tokens are billed at a steep discount by every
 		// provider that supports prompt caching.
-		efficiencyDenominator := inputTokens + cacheRead
+		efficiencyDenominator := inputTokens + cacheRead + cacheWrite
 		if efficiencyDenominator > 0 {
 			stat.CacheEfficiency = roundPercent(float64(cacheRead) / float64(efficiencyDenominator) * 100.0)
 		}

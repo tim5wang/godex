@@ -102,6 +102,7 @@ type ModelRequestPayload struct {
 	OutputTokens     int       `json:"output_tokens,omitempty"`
 	CacheReadTokens  int       `json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens int       `json:"cache_write_tokens,omitempty"`
+	ReasoningTokens  int       `json:"reasoning_tokens,omitempty"`
 	StartedAt        time.Time `json:"started_at,omitempty"`
 	FirstTokenAt     time.Time `json:"first_token_at,omitempty"`
 	CompletedAt      time.Time `json:"completed_at,omitempty"`

@@ -48,13 +48,14 @@ export function CacheStatsTab({ token, keyOptions, selectedKeyId, onKeyIdChange 
     for (const s of data) {
       const existing = modelMap.get(s.model);
       if (existing) {
-        existing.inputTokens += s.input_tokens;
+        // The blue bucket is all non-read input: ordinary + cache writes.
+        existing.inputTokens += s.input_tokens + (s.cache_write_tokens ?? 0);
         existing.cacheRead += s.cache_read_tokens;
         existing.totalCalls += s.total_calls;
       } else {
         modelMap.set(s.model, {
           model: s.model,
-          inputTokens: s.input_tokens,
+          inputTokens: s.input_tokens + (s.cache_write_tokens ?? 0),
           cacheRead: s.cache_read_tokens,
           totalCalls: s.total_calls,
         });

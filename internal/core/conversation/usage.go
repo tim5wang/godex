@@ -33,6 +33,9 @@ type UsageEvent struct {
 	Error    error
 	Latency  time.Duration
 	Stream   bool
+	// RequestDiagnostics is evaluated only by opt-in capture. It fingerprints
+	// the final serialized request, including compatibility fallbacks.
+	RequestDiagnostics func() *RequestDiagnostics
 }
 
 type UsageObserver func(context.Context, UsageEvent)

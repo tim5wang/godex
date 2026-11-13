@@ -411,6 +411,9 @@ func SanitizeMessagesForProvider(messages []protocol.APIMessage) []protocol.APIM
 		apiMessage := protocol.APIMessage{Role: role, Content: blocks}
 		if role == protocol.RoleAssistant {
 			apiMessage.ReasoningContent = msg.ReasoningContent
+			// Preserve opaque Responses replay through provider sanitization.
+			// The serializer checks ContentHash if blocks were repaired/dropped.
+			apiMessage.ResponsesReplay = msg.ResponsesReplay
 		}
 		out = append(out, apiMessage)
 	}

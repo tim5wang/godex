@@ -37,8 +37,8 @@ func TestSessionCacheStatsRecordUsage(t *testing.T) {
 	if snap.InputTokens != 3000 || snap.CacheReadTokens != 10000 || snap.CacheWriteTokens != 500 {
 		t.Fatalf("unexpected aggregates: %+v", snap)
 	}
-	// hit rate = cache_read / (input + cache_read) = 10000 / 13000 ≈ 76.9%
-	want := float64(10000) / float64(13000) * 100
+	// Ordinary input, cache reads and cache writes are disjoint categories.
+	want := float64(10000) / float64(13500) * 100
 	if snap.HitRatePercent < want-0.01 || snap.HitRatePercent > want+0.01 {
 		t.Fatalf("expected hit rate ~%.2f, got %.2f", want, snap.HitRatePercent)
 	}
@@ -143,7 +143,7 @@ func TestInspectContextIncludesCacheUsage(t *testing.T) {
 	if inspection.CacheUsage.Calls != 3 || inspection.CacheUsage.CacheReadTokens != 9000 {
 		t.Fatalf("expected cache usage surfaced in inspection, got %+v", inspection.CacheUsage)
 	}
-	if inspection.CacheUsage.HitRatePercent != 90 {
-		t.Fatalf("expected 90%% hit rate, got %.2f", inspection.CacheUsage.HitRatePercent)
+	if want := float64(9000) / 10100 * 100; inspection.CacheUsage.HitRatePercent != want {
+		t.Fatalf("expected %.2f%% hit rate, got %.2f", want, inspection.CacheUsage.HitRatePercent)
 	}
 }

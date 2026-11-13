@@ -475,19 +475,21 @@ func responsesStatus(resp *protocol.Response) string {
 
 // protocolUsageToResponses converts protocol.Usage to the Responses usage
 // shape. The Responses API input_tokens INCLUDES cached tokens (the SDK
-// subtracts them internally), so we add the cached portion back — mirroring
+// subtracts them internally), so we add cache reads and writes back — mirroring
 // how the chat.completions gateway restores prompt_tokens.
 func protocolUsageToResponses(usage *protocol.Usage) map[string]interface{} {
 	if usage == nil {
 		return nil
 	}
 	return map[string]interface{}{
-		"input_tokens":  usage.InputTokens + usage.CacheReadTokens,
+		"input_tokens":  usage.InputTokens + usage.CacheReadTokens + usage.CacheWriteTokens,
 		"output_tokens": usage.OutputTokens,
-		"total_tokens":  usage.InputTokens + usage.CacheReadTokens + usage.OutputTokens,
+		"total_tokens":  usage.InputTokens + usage.CacheReadTokens + usage.CacheWriteTokens + usage.OutputTokens,
 		"input_tokens_details": map[string]interface{}{
-			"cached_tokens": usage.CacheReadTokens,
+			"cached_tokens":      usage.CacheReadTokens,
+			"cache_write_tokens": usage.CacheWriteTokens,
 		},
+		"output_tokens_details": map[string]interface{}{"reasoning_tokens": usage.ReasoningTokens},
 	}
 }
 

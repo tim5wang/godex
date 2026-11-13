@@ -282,12 +282,14 @@ func TestProtocolToResponsesResponseMarksIncompleteOnLength(t *testing.T) {
 
 func TestProtocolUsageToResponsesAddsCachedBack(t *testing.T) {
 	usage := protocolUsageToResponses(&protocol.Usage{
-		InputTokens:     10,
-		OutputTokens:    5,
-		CacheReadTokens: 7,
+		InputTokens:      10,
+		OutputTokens:     5,
+		CacheReadTokens:  7,
+		CacheWriteTokens: 3,
+		ReasoningTokens:  4,
 	})
-	if usage["input_tokens"] != 17 {
-		t.Fatalf("expected input_tokens 17 (10+7 cached), got %#v", usage["input_tokens"])
+	if usage["input_tokens"] != 20 {
+		t.Fatalf("expected input_tokens 20 (10+7 read+3 write), got %#v", usage["input_tokens"])
 	}
 	if usage["output_tokens"] != 5 {
 		t.Fatalf("expected output_tokens 5, got %#v", usage["output_tokens"])
@@ -295,6 +297,13 @@ func TestProtocolUsageToResponsesAddsCachedBack(t *testing.T) {
 	details, _ := usage["input_tokens_details"].(map[string]interface{})
 	if details["cached_tokens"] != 7 {
 		t.Fatalf("expected cached_tokens 7, got %#v", details)
+	}
+	if details["cache_write_tokens"] != 3 || usage["total_tokens"] != 25 {
+		t.Fatalf("cache writes double counted or lost: %+v", usage)
+	}
+	outputDetails := usage["output_tokens_details"].(map[string]interface{})
+	if outputDetails["reasoning_tokens"] != 4 {
+		t.Fatalf("reasoning detail lost: %+v", usage)
 	}
 }
 

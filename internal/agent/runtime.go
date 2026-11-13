@@ -1023,6 +1023,7 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 					payload.OutputTokens = resp.Usage.OutputTokens
 					payload.CacheReadTokens = resp.Usage.CacheReadTokens
 					payload.CacheWriteTokens = resp.Usage.CacheWriteTokens
+					payload.ReasoningTokens = resp.Usage.ReasoningTokens
 				}
 			}
 			emit(events.EventModelRequestCompleted, payload)

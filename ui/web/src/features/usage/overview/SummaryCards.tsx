@@ -1,4 +1,5 @@
 import { Card, Col, Row, Statistic } from "antd";
+import { godexPalette } from "../../../theme/palette";
 import {
   ApiOutlined,
   ThunderboltOutlined,
@@ -48,7 +49,7 @@ export function SummaryCards({ data, loading }: SummaryCardsProps) {
             title={t("usage.overviewTab.totalCalls")}
             value={d.totalCalls}
             prefix={<ApiOutlined />}
-            valueStyle={{ color: "#1677ff" }}
+            valueStyle={{ color: godexPalette.info }}
           />
         </Card>
       </Col>
@@ -58,7 +59,7 @@ export function SummaryCards({ data, loading }: SummaryCardsProps) {
             title={t("usage.overviewTab.totalTokens")}
             value={d.totalTokens}
             prefix={<NumberOutlined />}
-            valueStyle={{ color: "#52c41a" }}
+            valueStyle={{ color: godexPalette.success }}
           />
         </Card>
       </Col>
@@ -69,7 +70,7 @@ export function SummaryCards({ data, loading }: SummaryCardsProps) {
             value={d.totalCredits}
             prefix={<ThunderboltOutlined />}
             precision={2}
-            valueStyle={{ color: "#fa8c16" }}
+            valueStyle={{ color: godexPalette.warning }}
           />
         </Card>
       </Col>
@@ -81,7 +82,7 @@ export function SummaryCards({ data, loading }: SummaryCardsProps) {
             suffix="%"
             precision={2}
             prefix={<WarningOutlined />}
-            valueStyle={{ color: d.errorRate > 5 ? "#ff4d4f" : "#52c41a" }}
+            valueStyle={{ color: d.errorRate > 5 ? godexPalette.danger : godexPalette.success }}
           />
         </Card>
       </Col>
@@ -91,7 +92,7 @@ export function SummaryCards({ data, loading }: SummaryCardsProps) {
             title={t("usage.overviewTab.cacheSaved")}
             value={d.tokensSaved}
             prefix={<SaveOutlined />}
-            valueStyle={{ color: "#722ed1" }}
+            valueStyle={{ color: godexPalette.purple }}
           />
         </Card>
       </Col>
@@ -102,7 +103,7 @@ export function SummaryCards({ data, loading }: SummaryCardsProps) {
             value={d.cacheHitRate}
             suffix="%"
             precision={1}
-            valueStyle={{ color: d.cacheHitRate > 50 ? "#52c41a" : "#fa8c16" }}
+            valueStyle={{ color: d.cacheHitRate > 50 ? godexPalette.success : godexPalette.warning }}
           />
         </Card>
       </Col>

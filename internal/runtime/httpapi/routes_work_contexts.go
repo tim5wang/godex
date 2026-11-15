@@ -172,6 +172,9 @@ func registerWorkContextRoutes(mux *http.ServeMux, service *backend.Service, pro
 		}
 		return service.LinkWorkSession(r.Context(), scope, id(r), input)
 	})
+	handle("POST /v1/work-contexts/{id}/sessions/{sessionID}/main", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
+		return s.SetMainSession(r.Context(), scope, id(r), r.PathValue("sessionID"))
+	})
 	handle("DELETE /v1/work-contexts/{id}/sessions/{sessionID}", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
 		err := s.UnlinkSession(r.Context(), scope, id(r), r.PathValue("sessionID"))
 		return map[string]bool{"ok": err == nil}, err
@@ -231,6 +234,9 @@ func registerWorkContextRoutes(mux *http.ServeMux, service *backend.Service, pro
 	})
 	handle("GET /v1/work-contexts/{id}/memory/runs", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
 		return s.DreamRuns(r.Context(), scope, id(r))
+	})
+	handle("GET /v1/work-contexts/{id}/events/{eventID}", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
+		return s.EventDetail(r.Context(), scope, id(r), r.PathValue("eventID"))
 	})
 	handle("GET /v1/work-contexts/{id}/events", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
 		detail, err := s.Get(r.Context(), scope, id(r))

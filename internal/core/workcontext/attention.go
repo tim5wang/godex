@@ -3,6 +3,7 @@ package workcontext
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"strings"
 	"time"
 )
@@ -48,7 +49,7 @@ func (s *Store) ListOwnedScopes(ctx context.Context) ([]OwnedScope, error) {
 // the boolean as an idempotency gate: only the first write for a dedup key
 // should trigger a side effect (a push), so a sweep that runs every minute does
 // not re-notify about the same card version.
-func (s *Store) RecordEventIfNew(ctx context.Context, scope Scope, contextID, kind, title, source, dedup string) (bool, error) {
+func (s *Store) RecordEventIfNew(ctx context.Context, scope Scope, contextID, kind, title, source, dedup string, details ...EventDetail) (bool, error) {
 	tenantID, ownerID := scopeArgs(scope)
 	contextID = strings.TrimSpace(contextID)
 	if err := requiredText("kind", kind); err != nil {
@@ -68,6 +69,15 @@ func (s *Store) RecordEventIfNew(ctx context.Context, scope Scope, contextID, ki
 	inserted, err := recordEventIfNewTx(ctx, tx, tenantID, contextID, kind, title, source, dedup, nowRFC3339())
 	if err != nil {
 		return false, err
+	}
+	if inserted && len(details) > 0 {
+		raw, err := json.Marshal(details[0])
+		if err != nil {
+			return false, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE wc_events SET detail_json=? WHERE tenant_id=? AND context_id=? AND dedup_key=?`, string(raw), tenantID, contextID, dedup); err != nil {
+			return false, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return false, err

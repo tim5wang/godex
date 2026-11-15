@@ -628,6 +628,9 @@ export function useChatSessionState(layout: ChatLayoutState) {
             // Refresh list metadata once per completed turn (title, activity,
             // running badge), not on every snapshot/tool checkpoint.
             if (event.type === "turn_completed") {
+              // Agent-maintained resources/plan/checkpoint live on the desktop,
+              // not in the chat snapshot. Refresh the same node's active views.
+              void queryClient.invalidateQueries({ queryKey: ["work-context", token ?? "", remoteNodeID ?? ""] });
               queryClient.setQueryData<ListedSession[]>(["sessions", token, remoteNodeID], (current) =>
                 current?.map((item) => (item.session_id === sessionId ? { ...item, running: false } : item)) ?? current,
               );

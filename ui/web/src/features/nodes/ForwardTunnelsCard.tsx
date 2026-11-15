@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { godexPalette } from "../../theme/palette";
 import {
   Alert,
   App,
@@ -259,9 +260,9 @@ export function ForwardTunnelsCard({ nodeID, token }: Props) {
             {checkResult.steps.map((step, index) => (
               <Space key={`${step.name}-${index}`} align="start" style={{ width: "100%" }}>
                 {step.ok ? (
-                  <CheckCircleOutlined style={{ color: "#52c41a", marginTop: 4 }} />
+                  <CheckCircleOutlined style={{ color: godexPalette.success, marginTop: 4 }} />
                 ) : (
-                  <CloseCircleOutlined style={{ color: "#ff4d4f", marginTop: 4 }} />
+                  <CloseCircleOutlined style={{ color: godexPalette.danger, marginTop: 4 }} />
                 )}
                 <Space direction="vertical" size={0}>
                   <Typography.Text strong>

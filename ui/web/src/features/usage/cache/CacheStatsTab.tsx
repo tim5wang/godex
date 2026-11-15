@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { godexPalette } from "../../../theme/palette";
 import { useQuery } from "@tanstack/react-query";
 import { Card, Select, Space, Tag, Button } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
@@ -165,14 +166,14 @@ export function CacheStatsTab({ token, keyOptions, selectedKeyId, onKeyIdChange 
                 dataKey="inputTokens"
                 name={t("usage.cachePanel.inputTokens")}
                 stackId="a"
-                fill="#1677ff"
+                fill={godexPalette.info}
                 isAnimationActive={false}
               />
               <Bar
                 dataKey="cacheRead"
                 name={t("usage.cachePanel.cacheRead")}
                 stackId="a"
-                fill="#52c41a"
+                fill={godexPalette.success}
                 isAnimationActive={false}
               />
             </BarChart>

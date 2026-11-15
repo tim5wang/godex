@@ -90,7 +90,7 @@ const SessionTurnEventKind = "session_turn"
 func (s *Store) SessionIndex(ctx context.Context, scope Scope) (map[string][]SessionLink, error) {
 	tenantID, ownerID := scopeArgs(scope)
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT s.context_id, s.id, s.session_id, s.topic, s.created_at
+		SELECT s.context_id, s.id, s.session_id, s.topic, s.created_at, s.role
 		FROM wc_context_sessions s
 		JOIN wc_contexts c ON c.tenant_id = s.tenant_id AND c.id = s.context_id
 		WHERE s.tenant_id = ? AND c.owner_id = ? AND c.status <> 'archived'
@@ -103,7 +103,7 @@ func (s *Store) SessionIndex(ctx context.Context, scope Scope) (map[string][]Ses
 	for rows.Next() {
 		var contextID string
 		var item SessionLink
-		if err := rows.Scan(&contextID, &item.ID, &item.SessionID, &item.Topic, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&contextID, &item.ID, &item.SessionID, &item.Topic, &item.CreatedAt, &item.Role); err != nil {
 			return nil, err
 		}
 		out[contextID] = append(out[contextID], item)

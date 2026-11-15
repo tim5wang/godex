@@ -2,7 +2,11 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
+
+	"github.com/tim5wang/godex/internal/core/memory"
+	"github.com/tim5wang/godex/internal/core/workcontext"
 	"strings"
 
 	"github.com/tim5wang/godex/internal/domain/message"
@@ -47,6 +51,33 @@ func NewTaskboardExecutor(service *Service, ledger *taskboard.Ledger) *Taskboard
 // required.
 func (e *TaskboardExecutor) Execute(ctx context.Context, card taskboard.Card) (string, string, error) {
 	rootDir := e.cardWorkDir(card)
+	// Resolve ownership from the persisted desktop delegation, not card prose.
+	store, err := e.service.WorkContexts()
+	if err != nil {
+		return "", "", err
+	}
+	workScope, workID, bindErr := store.DelegationBinding(ctx, card.ID)
+	if bindErr != nil && !errors.Is(bindErr, workcontext.ErrNotFound) {
+		return "", "", bindErr
+	}
+	if workID != "" {
+		owner := memory.Owner{TenantID: workScope.TenantID, UserID: workScope.OwnerID}
+		if caller, ok := memory.OwnerFromContext(ctx); ok && caller != owner {
+			return "", "", workcontext.ErrNotFound
+		}
+		if card.CreatedBy != workActor(workScope) {
+			return "", "", workcontext.ErrConflict
+		}
+		if _, err := store.PromptState(ctx, workScope, workID); err != nil {
+			return "", "", err
+		}
+		ctx = memory.WithOwner(ctx, owner)
+	}
+	// Keep the dispatch conflict gate on the shared execution funnel, including
+	// callers that dispatch through work_context rather than the taskboard tool.
+	if err := e.ledger.PrecheckDispatchConflicts(card); err != nil {
+		return "", "", err
+	}
 	templateID := strings.TrimSpace(card.TemplateID)
 	executionID := "exec-" + card.ID + "-" + e.service.now().Format("20060102150405.000")
 	if templateID != "" {
@@ -72,6 +103,11 @@ func (e *TaskboardExecutor) Execute(ctx context.Context, card taskboard.Card) (s
 		return "", "", fmt.Errorf("taskboard: 打开执行会话失败: %w", err)
 	}
 	sessionID := opened.SessionID
+	if workID != "" {
+		if _, err := store.LinkSession(ctx, workScope, workID, workcontext.SessionLink{SessionID: sessionID, Topic: card.Title, Role: "worker"}); err != nil {
+			return "", "", fmt.Errorf("taskboard: bind execution to work desktop: %w", err)
+		}
+	}
 	// A card keeps one stable execution session. If PJM explicitly changes the
 	// template on a later dispatch, apply the new template to that reused
 	// session as well as persisting it in the locator.

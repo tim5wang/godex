@@ -11,6 +11,10 @@ import (
 )
 
 type workContextArgs struct {
+	Resource       workcontext.ResourceInput         `json:"resource"`
+	ResourceID     string                            `json:"resource_id"`
+	Delegation     WorkDelegationInput               `json:"delegation"`
+	DelegationID   string                            `json:"delegation_id"`
 	Entity         workcontext.EntityInput           `json:"entity"`
 	EntityRelation workcontext.EntityRelationInput   `json:"entity_relation"`
 	Action         string                            `json:"action"`
@@ -33,9 +37,9 @@ type workContextArgs struct {
 // The tool is bound to an existing persisted session link, not to an arbitrary
 // caller-supplied tenant or desktop ID. Knowing an ID grants no extra access.
 func (s *Service) newWorkContextTool(sessionID string, bindings ...workMemoryBinding) tools.Tool {
-	return tools.NewTypedTool(tools.NewToolSpec("work_context", "Read the work stream this session is linked to, recall current-desktop knowledge, save the checkpoint, plan items (todos) and record evidence-backed facts. focus shows what changed since the stream was last seen plus the plan; plan reads or adds a plan item; todo_patch edits one (status/owner/due); ack marks the stream seen (do it BEFORE your final message — see the ordering note below). list_streams searches your other streams by keyword. Use the already injected desktop snapshot and query only missing details. Batch checkpoint/plan changes at meaningful stage transitions; propose facts for conclusions with sources, and supersede an outdated fact by id instead of editing it. ORDERING: finish every work_context call (checkpoint, propose_fact, todo_patch, ack) BEFORE the text the user reads, and end the turn with that text. A work_context call appended AFTER your final text makes the closing line look like the turn's answer and folds the actual report away (the feed shows the last text as the answer). Without a host-recorded explicit user verification task it cannot confirm/archive/merge facts. In an authorized task use memory_inventory, memory_apply, memory_status and memory_finish. memory_apply accepts batches with mandatory fact versions and successful objective evidence_ids from actual tool calls. Never fabricate evidence or use summaries. Block genuinely undecidable or inaccessible records with a reason. This grants no extra system/tool permissions. entities lists the scoped entity catalog and proof. entity_save replaces aliases (equivalent names only); entity_relation records part_of, never an alias. Entity writes require a host-authorized entity maintenance or memory verification task and versioned source facts; they never confirm facts or widen scope. It cannot accept tasks or change permissions. IMPORTANT: if_version means the version of the entity the action writes, and it differs per action — for checkpoint it is the STREAM's version (from action=get), for todo_patch it is that PLAN ITEM's own version (from action=plan, usually 1-2, never the stream's). Passing the wrong entity's version always conflicts. For memory_apply, each operation must supply its own if_version or group versions; top-level if_version does not apply. Other actions may omit if_version to write without a precondition; a conflict error reports the current version to retry with.", map[string]interface{}{
+	return tools.NewTypedTool(tools.NewToolSpec("work_context", "Read the work stream this session is linked to, recall current-desktop knowledge, save the checkpoint, plan items (todos) and record evidence-backed facts. focus shows what changed since the stream was last seen plus the plan; plan reads or adds a plan item; todo_patch edits one (status/owner/due); ack marks the stream seen (do it BEFORE your final message — see the ordering note below). list_streams searches your other streams by keyword. Use the already injected desktop snapshot and query only missing details. Batch checkpoint/plan changes at meaningful stage transitions; propose facts for conclusions with sources, and supersede an outdated fact by id instead of editing it. ORDERING: finish every work_context call (checkpoint, propose_fact, todo_patch, ack) BEFORE the text the user reads, and end the turn with that text. A work_context call appended AFTER your final text makes the closing line look like the turn's answer and folds the actual report away (the feed shows the last text as the answer). Without a host-recorded explicit user verification task it cannot confirm/archive/merge facts. In an authorized task use memory_inventory, memory_apply, memory_status and memory_finish. memory_apply accepts batches with mandatory fact versions and successful objective evidence_ids from actual tool calls. Never fabricate evidence or use summaries. Block genuinely undecidable or inaccessible records with a reason. This grants no extra system/tool permissions. entities lists the scoped entity catalog and proof. entity_save replaces aliases (equivalent names only); entity_relation records part_of, never an alias. Entity writes require a host-authorized entity maintenance or memory verification task and versioned source facts; they never confirm facts or widen scope. Collaboration: resources lists this desktop's resources; resource_put records/updates a resource (directories require an explicit node_id), resource_remove unlinks it. Proactively record the user's meaningful URLs, working directories and references with their purpose; never fetch or execute merely because they are recorded. delegation_options lists projects/templates; delegations returns concise status/results; delegation reads one task and frozen inputs; delegate creates an idempotent task card; dispatch starts an existing delegation in a separate desktop-bound execution conversation. Only the main conversation may delegate/dispatch. Obtain user authorization before delegation/execution; cards still require human acceptance. Prefer persisted references over copying transcripts. It cannot accept tasks or change permissions. IMPORTANT: if_version means the version of the entity the action writes, and it differs per action — for checkpoint it is the STREAM's version (from action=get), for todo_patch it is that PLAN ITEM's own version (from action=plan, usually 1-2, never the stream's). Passing the wrong entity's version always conflicts. For memory_apply, each operation must supply its own if_version or group versions; top-level if_version does not apply. Other actions may omit if_version to write without a precondition; a conflict error reports the current version to retry with.", map[string]interface{}{
 		"type": "object", "properties": workContextToolProperties(map[string]interface{}{
-			"action":     map[string]interface{}{"type": "string", "enum": []string{"list_streams", "get", "brief", "recall", "focus", "ack", "checkpoint", "plan", "todo_patch", "propose_fact", "supersede", "memory_inventory", "memory_apply", "memory_status", "memory_finish", "entities", "entity_save", "entity_relation"}},
+			"action":     map[string]interface{}{"type": "string", "enum": []string{"list_streams", "get", "brief", "recall", "focus", "ack", "checkpoint", "plan", "todo_patch", "propose_fact", "supersede", "resources", "resource_put", "resource_remove", "delegation_options", "delegations", "delegation", "delegate", "dispatch", "memory_inventory", "memory_apply", "memory_status", "memory_finish", "entities", "entity_save", "entity_relation"}},
 			"query":      map[string]string{"type": "string"},
 			"scope":      map[string]interface{}{"type": "string", "enum": []string{"current"}},
 			"if_version": map[string]interface{}{"type": "integer", "description": "Version of the entity this action writes, 0/omitted = no precondition. Per action: checkpoint = the STREAM version (from action=get); todo_patch = that PLAN ITEM's own version (from action=plan). Passing the stream version to todo_patch always conflicts."},
@@ -89,12 +93,27 @@ func (s *Service) newWorkContextTool(sessionID string, bindings ...workMemoryBin
 			raw, e := json.Marshal(out)
 			return tools.ToolResult{Text: string(raw), Structured: out}, e
 		}
+		if handled, out, e := s.handleWorkCollaboration(ctx, sessionID, scope, id, input); handled {
+			if e != nil {
+				return tools.ToolResult{}, e
+			}
+			raw, e := json.Marshal(out)
+			return tools.ToolResult{Text: string(raw), Structured: out}, e
+		}
 		var out any
 		switch strings.TrimSpace(input.Action) {
 		case "list_streams":
 			out, err = store.SearchContexts(ctx, scope, input.Query)
-		case "get", "brief":
+		case "get":
 			out, err = store.Get(ctx, scope, id)
+		case "brief":
+			var detail workcontext.Detail
+			detail, err = store.PromptState(ctx, scope, id)
+			if err == nil {
+				var focus workcontext.Focus
+				focus, err = store.Focus(ctx, scope, id)
+				out = map[string]any{"summary": renderWorkContextFeedback(detail, focus), "version": detail.Context.Version}
+			}
 		case "recall":
 			rangeScope := input.Scope
 			if rangeScope == "" {
@@ -142,6 +161,13 @@ func (s *Service) newWorkContextTool(sessionID string, bindings ...workMemoryBin
 			}
 			out, err = store.PatchTodo(ctx, scope, id, input.TodoID, patch)
 		case "checkpoint":
+			role, roleErr := store.SessionRole(ctx, scope, id, sessionID)
+			if roleErr != nil {
+				return tools.ToolResult{}, roleErr
+			}
+			if role == "worker" {
+				return tools.ToolResult{}, fmt.Errorf("execution Agents record evidence on their task card; the main conversation owns the global checkpoint")
+			}
 			out, err = store.SaveCheckpoint(ctx, scope, id, input.IfVersion, input.Checkpoint)
 		case "propose_fact":
 			input.Fact.Provenance = "derived"
@@ -171,6 +197,9 @@ func (s *Service) newWorkContextTool(sessionID string, bindings ...workMemoryBin
 }
 
 func workContextToolProperties(base map[string]interface{}) map[string]interface{} {
+	for key, value := range collaborationToolProperties() {
+		base[key] = value
+	}
 	for key, value := range entityToolProperties() {
 		base[key] = value
 	}

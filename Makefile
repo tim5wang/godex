@@ -94,7 +94,7 @@ dev: web
 		&& mv $(APP).new $(APP) \
 		&& (./$(APP) service install --addr $(DEV_ADDR) \
 			&& (./$(APP) service stop 2>/dev/null || true) \
-			&& ./$(APP) service start $(PPROF_FLAG))
+			&& sleep 10 && ./$(APP) service start $(PPROF_FLAG))
 
 ## dev-voice: Start local voice-engine, rebuild/restart Godex, and supervise the engine until Ctrl-C
 VOICE_ENGINE_DIR ?= ../voice-engine

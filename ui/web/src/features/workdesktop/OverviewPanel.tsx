@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Button, Empty, Space, Tag, Typography } from "antd";
 import { CheckCircleOutlined, ClockCircleOutlined, FileTextOutlined, PauseCircleOutlined, PlayCircleOutlined, ProfileOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { WorkEventEntry } from "./WorkEventEntry";
 import { InlineEdit } from "./workDesktopInline";
 import { InfoHint } from "./workDesktopHints";
 import { FoldCard } from "./workDesktopFold";
@@ -28,6 +29,7 @@ import type { CheckpointInput, WorkCheckpoint, WorkEvent } from "../../lib/apiWo
  * so what the user types and what they read agree on the format.
  */
 export function OverviewPanel(props: {
+  contextId?: string;
   background: string;
   goal: string;
   checkpoint: WorkCheckpoint;
@@ -120,7 +122,7 @@ export function OverviewPanel(props: {
     </FoldCard>
 
     <FoldCard {...foldProps} title={<Space size={6}><ClockCircleOutlined aria-hidden="true" />{tr("changes")}<InfoHint title={tr("showHint")} text={tr("changesHint")} /></Space>}>
-      {events.length ? <div className="wd-stack">{events.slice(0, 3).map((event) => <div key={event.id}><Typography.Text>{event.title}</Typography.Text><div className="wd-muted">{formatTimestamp(event.created_at)}</div></div>)}</div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={tr("noChanges")} />}
+      {events.length ? <div className="wd-stack">{events.slice(0, 3).map((event) => <div key={event.id}><WorkEventEntry contextId={props.contextId ?? event.context_id} event={event} /></div>)}</div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={tr("noChanges")} />}
     </FoldCard>
 
     <FoldCard {...foldProps} title={<Space><ProfileOutlined aria-hidden="true" />{tr("checkpointEvidenceRefs")}</Space>}>
@@ -135,7 +137,7 @@ export function OverviewPanel(props: {
         title={<Space size={6}><ThunderboltOutlined aria-hidden="true" />{tr("changesSinceTitle")}<span className="wd-muted">{seenLabel}</span></Space>}
         extra={!readOnly && focusChanges.length > 0 ? <Button size="small" loading={markSeenPending} onClick={onMarkSeen}>{tr("markSeen")}</Button> : null}
       >
-        {focusChanges.length ? <div className="wd-stack">{focusChanges.slice(0, 8).map((event) => <div key={event.id}><Typography.Text>{event.title}</Typography.Text><div className="wd-muted">{event.kind} · {formatTimestamp(event.created_at)}</div></div>)}</div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={tr("noChanges")} />}
+        {focusChanges.length ? <div className="wd-stack">{focusChanges.slice(0, 8).map((event) => <div key={event.id}><WorkEventEntry contextId={props.contextId ?? event.context_id} event={event} /></div>)}</div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={tr("noChanges")} />}
       </FoldCard>
     </div>
 

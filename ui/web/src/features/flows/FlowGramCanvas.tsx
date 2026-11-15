@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Empty, Spin, Space, Tag, Typography } from "antd";
+import { godexPalette } from "../../theme/palette";
 import type { FlowDefinition, FlowRunEvent } from "../../lib/api";
 
 // ---------------------------------------------------------------------------
@@ -104,10 +105,10 @@ export function statusFromEvents(events: FlowRunEvent[]): Map<string, { status: 
 export function toFlowMermaidSource(def: FlowDefinition, events?: FlowRunEvent[]): string {
   const lines: string[] = ["flowchart LR"];
   lines.push("  classDef gx-pending fill:#e8e8e8,stroke:#8c8c8c,color:#555");
-  lines.push("  classDef gx-running fill:#e6f4ff,stroke:#1677ff,color:#0958d9");
-  lines.push("  classDef gx-completed fill:#f6ffed,stroke:#52c41a,color:#237804");
-  lines.push("  classDef gx-failed fill:#fff2f0,stroke:#ff4d4f,color:#cf1322");
-  lines.push("  classDef gx-blocked fill:#fff7e6,stroke:#fa8c16,color:#ad4e00");
+  lines.push(`  classDef gx-running fill:#e6f4ff,stroke:${godexPalette.info},color:#0958d9`);
+  lines.push(`  classDef gx-completed fill:#f6ffed,stroke:${godexPalette.success},color:#237804`);
+  lines.push(`  classDef gx-failed fill:#fff2f0,stroke:${godexPalette.danger},color:#cf1322`);
+  lines.push(`  classDef gx-blocked fill:#fff7e6,stroke:${godexPalette.warning},color:#ad4e00`);
   lines.push("  classDef gx-unknown fill:#fafafa,stroke:#8c8c8c,color:#595959");
 
   const statuses = events ? statusFromEvents(events) : new Map<string, { status: string; confidence?: number; choice?: string }>();

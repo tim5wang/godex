@@ -123,7 +123,7 @@ func (s *Store) CompleteDelegation(ctx context.Context, scope Scope, contextID, 
 		return Delegation{}, err
 	}
 	if err := recordEventTx(ctx, tx, tenantID, contextID, "delegation_completed",
-		fmt.Sprintf("委派已建卡 %s", item.CardID), "store", "delegation_complete:"+id+":"+item.CardID, now); err != nil {
+		"委派已建卡："+item.Title, "taskboard://"+item.CardID, "delegation_complete:"+id+":"+item.CardID, now); err != nil {
 		return Delegation{}, err
 	}
 	if err := tx.Commit(); err != nil {

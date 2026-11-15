@@ -28,7 +28,7 @@ func (a *Agent) SetWorkContextTool(tool tools.Tool) {
 	}
 	a.registerToolTo(a.toolHandler, tool, tools.ToolMeta{
 		Bundle:        bundleWorkContext,
-		Summary:       "work desktop ledger: stream checkpoint, plan items (owner/due) and evidence-backed facts",
+		Summary:       "work desktop: state, resources, main-agent delegation and evidence-backed memory",
 		DefaultActive: true,
 	})
 	// registerWithMetaLocked only auto-activates AlwaysActive tools, and

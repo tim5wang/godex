@@ -40,6 +40,7 @@ export interface WorkResource {
   locator: string;
   node_id: string;
   purpose: string;
+  source?: string;
   context_ids: string[];
   created_at: string;
 }
@@ -48,6 +49,7 @@ export interface WorkSessionLink {
   id: string;
   session_id: string;
   topic: string;
+  role?: "lead" | "member" | "worker";
   created_at: string;
 }
 
@@ -90,6 +92,24 @@ export interface WorkEvent {
   title: string;
   source: string;
   created_at: string;
+}
+
+export interface WorkEventDetail extends WorkEvent {
+  checkpoint?: WorkCheckpoint;
+  session_id?: string;
+  turn_id?: string;
+  request?: string;
+  result?: string;
+  status?: string;
+  target?: string;
+}
+
+export function getWorkEvent(token: string | null, contextId: string, eventId: string) {
+  return request<WorkEventDetail>(`/v1/work-contexts/${encodeURIComponent(contextId)}/events/${encodeURIComponent(eventId)}`, { method: "GET" }, token);
+}
+
+export function setWorkMainSession(token: string | null, contextId: string, sessionId: string) {
+  return request<WorkSessionLink>(`/v1/work-contexts/${encodeURIComponent(contextId)}/sessions/${encodeURIComponent(sessionId)}/main`, { method: "POST" }, token);
 }
 
 export interface WorkDelegation {

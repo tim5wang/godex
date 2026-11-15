@@ -325,7 +325,7 @@ func (s *Store) SaveCheckpoint(ctx context.Context, scope Scope, id string, ifVe
 		return Context{}, err
 	}
 	if err := recordEventTx(ctx, tx, tenantID, id, "checkpoint_saved",
-		fmt.Sprintf("保存检查点 r%d", stored.Revision), "store",
+		fmt.Sprintf("保存检查点 r%d · %s", stored.Revision, eventPreview(stored.Summary)), "store",
 		fmt.Sprintf("checkpoint:%d", stored.Revision), now); err != nil {
 		return Context{}, err
 	}

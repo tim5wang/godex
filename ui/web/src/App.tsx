@@ -24,6 +24,8 @@ import { useI18n } from "./i18n";
 import { ResizeHandle } from "./components/ResizeHandle";
 import { WorkspaceShell, buildWorkspaceShellClassName } from "./components/workspace/WorkspaceShell";
 import { useResizableWidth } from "./hooks/useResizableWidth";
+import { usePrefersDark } from "./hooks/usePrefersDark";
+import { godexPalette, godexStatus, godexSurfaces } from "./theme/palette";
 import { useTerminalShortcut } from "./hooks/useGlobalKey";
 import { getMeta, listProviders } from "./lib/api";
 import { getAuthProfile } from "./lib/apiAuth";
@@ -56,6 +58,34 @@ export default function App() {
   const setWebToken = useSettingsStore((state) => state.setToken);
   const clearToken = useSettingsStore((state) => state.clearToken);
   const screens = Grid.useBreakpoint();
+  // The CSS in stylesFoundation.css already flips --godex-* on prefers-color-scheme.
+  // antd was pinned to defaultAlgorithm, so on a dark OS the custom panels went dark
+  // while every antd control stayed light — the split this hook now closes.
+  const prefersDark = usePrefersDark();
+  const surface = prefersDark ? godexSurfaces.dark : godexSurfaces.light;
+  const appTheme = useMemo(
+    () => ({
+      algorithm: prefersDark ? theme.darkAlgorithm : theme.defaultAlgorithm,
+      token: {
+        colorPrimary: godexPalette.accent,
+        borderRadius: 8,
+        colorInfo: godexPalette.info,
+        colorWarning: godexStatus.warning,
+        colorError: godexStatus.error,
+        // Keep antd's surfaces on the same values as --godex-* so a dark OS does not
+        // produce two different dark greys side by side.
+        colorBgBase: surface.bg,
+        colorBgContainer: surface.panel,
+        colorBgLayout: surface.bg,
+        colorBorder: surface.border,
+        colorText: surface.text,
+        colorTextSecondary: surface.muted,
+        fontFamily:
+          'Inter, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei", system-ui, sans-serif',
+      },
+    }),
+    [prefersDark, surface],
+  );
   // The legacy layout drawer flag is now only used to keep the PC inspector in sync when
   // the mobile nav sheet opens (see setMobileNavOpen). PC TaskCenter lives inside
   // ChatPage's shared inspector panel, not in an App-level Drawer.
@@ -250,7 +280,7 @@ export default function App() {
   // it, and every panel would just surface the same 401.
   if (showLoginGate) {
     return (
-      <ConfigProvider locale={locale === "zh" ? zhCN : enUS} theme={{ algorithm: theme.defaultAlgorithm }}>
+      <ConfigProvider locale={locale === "zh" ? zhCN : enUS} theme={appTheme}>
         <AntApp>
           <LoginPage
             notice={sessionRejected ? t("auth.sessionExpired") : undefined}
@@ -272,18 +302,7 @@ export default function App() {
   return (
     <ConfigProvider
       locale={locale === "zh" ? zhCN : enUS}
-      theme={{
-        algorithm: theme.defaultAlgorithm,
-        token: {
-          colorPrimary: "#0f766e",
-          borderRadius: 8,
-          colorInfo: "#2563eb",
-          colorWarning: "#b45309",
-          colorError: "#b42318",
-          fontFamily:
-            'Inter, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei", system-ui, sans-serif',
-        },
-      }}
+      theme={appTheme}
     >
       <AntApp>
         <WorkspaceShell

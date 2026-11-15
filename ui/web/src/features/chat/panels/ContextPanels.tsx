@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { godexPalette } from "../../../theme/palette";
 import { RecallDiagnosticsPanel } from "./RecallDiagnosticsPanel";
 import type { SessionContextInspector, SessionContextUsage, SkillActivation, ProtocolMessage } from "../../../lib/types";
 import { useI18n } from "../../../i18n";
@@ -228,10 +229,10 @@ export function ContextStatusInline({ summary, inspector, usage }: { summary: Co
 }
 
 const TOKEN_LAYER_COLORS: Record<string, string> = {
-  system: "#1677ff",
-  history: "#52c41a",
-  memory: "#722ed1",
-  runtime: "#fa8c16",
+  system: godexPalette.info,
+  history: godexPalette.success,
+  memory: godexPalette.purple,
+  runtime: godexPalette.warning,
   tool_schemas: "#13c2c2",
   tool_results: "#eb2f96",
   attachments: "#8c8c8c",

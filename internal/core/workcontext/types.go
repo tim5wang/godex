@@ -72,6 +72,7 @@ type Resource struct {
 	Locator    string   `json:"locator"`
 	NodeID     string   `json:"node_id"`
 	Purpose    string   `json:"purpose"`
+	Source     string   `json:"source,omitempty"`
 	ContextIDs []string `json:"context_ids"`
 	CreatedAt  string   `json:"created_at"`
 }
@@ -82,11 +83,13 @@ type ResourceInput struct {
 	Locator string `json:"locator"`
 	NodeID  string `json:"node_id"`
 	Purpose string `json:"purpose"`
+	Source  string `json:"source,omitempty"`
 }
 type SessionLink struct {
 	ID        string `json:"id"`
 	SessionID string `json:"session_id"`
 	Topic     string `json:"topic"`
+	Role      string `json:"role"`
 	CreatedAt string `json:"created_at"`
 }
 

@@ -131,6 +131,8 @@ export function ResourceChips(props: {
                     onSave={(next) => onUpdate(resource, { purpose: next })}
                   />
                 </div>
+                {resource.node_id && <div className="wd-muted wd-wrap">{tr("resourceNode")} · {resource.node_id}</div>}
+                {resource.source && <div className="wd-muted wd-wrap">{tr("resourceSource")} · {resource.source}</div>}
                 <div className="wd-muted wd-chip-created">
                   {tr("resourceCreated")} · {formatTimestamp(resource.created_at)}
                 </div>

@@ -590,6 +590,7 @@ func (s *Service) startUserTurnLocked(session *sessionState, envelope message.En
 	attachSessionGraphContext(session, &runtimeCtx)
 	runtimeCtx.ProjectLedger, runtimeCtx.ProjectLedgerUpdatedAt = s.projectLedgerForRuntimeContext(sessionID)
 	s.refreshWorkContextFeedback(session, envelope.BodyText())
+	s.captureWorkResources(session, envelope, turnID)
 	memoryGrant, err := s.prepareMemoryVerificationGrant(session, envelope, now)
 	if err != nil {
 		return preparedUserTurn{}, nil, err
@@ -912,6 +913,9 @@ func (s *Service) finishAgentTurnLocked(ctx context.Context, session *sessionSta
 		},
 	})
 
+	// Persist the desktop event before notifying clients to refresh their panels,
+	// otherwise a fast turn_completed listener can re-read the old timeline.
+	s.recordWorkContextSessionTurn(session, turnID, status)
 	session.events.Emit(events.Event{
 		SessionID: sessionID,
 		TurnID:    turnID,
@@ -920,10 +924,6 @@ func (s *Service) finishAgentTurnLocked(ctx context.Context, session *sessionSta
 		Payload:   events.TurnPayload{Status: status},
 	})
 	s.captureTurnMemories(session, updatedAt, turnID, status, priorMessageCount)
-	// Make a backgrounded conversation's completion visible on its work stream: this is
-	// the event behind the desktop list's status, and the reason a user who left a
-	// desktop in the background can see that its conversation moved.
-	s.recordWorkContextSessionTurn(session, turnID, status)
 	_ = s.writeSessionTimeline(session)
 
 	// The turn reached a terminal status and the last persist above captured

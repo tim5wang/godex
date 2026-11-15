@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { godexPalette } from "../../theme/palette";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
@@ -293,7 +294,7 @@ export function UsagePage() {
           <EyeOutlined
             aria-label={`Reveal new secret for ${record.name}`}
             title="Rotate this key and reveal the new plaintext secret — the masked prefix above is not the full key"
-            style={{ cursor: "pointer", color: "#1677ff", fontSize: 13 }}
+            style={{ cursor: "pointer", color: godexPalette.info, fontSize: 13 }}
             onClick={() => handleResetKey(record)}
           />
         </Space>

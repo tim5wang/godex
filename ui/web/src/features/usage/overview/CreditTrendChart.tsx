@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { godexPalette } from "../../../theme/palette";
 import { Card } from "antd";
 import {
   Bar,
@@ -55,7 +56,7 @@ export function CreditTrendChart({ data, loading }: CreditTrendChartProps) {
               yAxisId="left"
               dataKey="credits"
               name={t("usage.creditChart.credits")}
-              fill="#fa8c16"
+              fill={godexPalette.warning}
               radius={[2, 2, 0, 0]}
               isAnimationActive={false}
             />
@@ -64,7 +65,7 @@ export function CreditTrendChart({ data, loading }: CreditTrendChartProps) {
               type="monotone"
               dataKey="cumulative"
               name={t("usage.creditChart.cumulative")}
-              stroke="#1677ff"
+              stroke={godexPalette.info}
               strokeWidth={2}
               dot={false}
               isAnimationActive={false}

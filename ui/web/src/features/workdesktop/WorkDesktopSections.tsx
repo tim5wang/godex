@@ -13,6 +13,7 @@ import {
   ThunderboltOutlined,
 } from "@ant-design/icons";
 import { InfoHint } from "./workDesktopHints";
+import { WorkEventEntry } from "./WorkEventEntry";
 import { AcceptancePanel } from "./AcceptancePanel";
 import { AttentionInbox } from "./AttentionInbox";
 import { AttentionLedger } from "./AttentionLedger";
@@ -150,6 +151,7 @@ export function WorkDesktopSectionBoard(props: { section: string; data: WorkDesk
         />
         {delegations.length ? delegations.map((delegation) => {
           const card = delegation.card ?? undefined;
+          const executionSession = card?.executions?.at(-1)?.host?.session_id;
           return <Card size="small" className="wd-task" key={delegation.id} title={<Space wrap><span>{delegation.title}</span>{card && <Tag color={cardStatusColor[card.status] ?? "default"}>{trLabel("cardStatus", card.status)}</Tag>}</Space>}>
             {/* The acceptance package, not just the criterion text: what was done, how
                 it was verified, what the run touched, and what is still open — assembled
@@ -159,6 +161,7 @@ export function WorkDesktopSectionBoard(props: { section: string; data: WorkDesk
             {!card && <Alert type="warning" showIcon title={tr("cardMissing")} />}
             {card && <div className="wd-muted">{tr("cardState")} · {trLabel("cardStatus", card.status)} · {card.id}</div>}
             <Space wrap style={{ marginTop: 12 }}>
+              {executionSession && <Button size="small" onClick={() => void openConversation(executionSession)}>{tr("openExecution")}</Button>}
               {card && !readOnly && <Button size="small" type="primary" icon={<ThunderboltOutlined aria-hidden="true" />} onClick={() => data.executeMutation.mutate(card.id)}>{tr("execute")}</Button>}
               {card && !readOnly && card.status === "in_review" && <>
                 <Button size="small" onClick={() => data.reviewCardMutation.mutate({ cardId: card.id, version: card.version, action: "complete" })}>{tr("reviewAccept")}</Button>
@@ -175,7 +178,7 @@ export function WorkDesktopSectionBoard(props: { section: string; data: WorkDesk
     return (
       <div className="wd-stack">
         <SectionHead icon={<ClockCircleOutlined aria-hidden="true" />} title={tr("timeline")} hint={<InfoHint title={tr("showHint")} text={tr("timelineHint")} />} />
-        {events.length ? <Timeline items={events.map((event) => ({ content: <div><Typography.Text strong>{event.title}</Typography.Text><div className="wd-muted">{event.source || tr("noItems")} · {formatTimestamp(event.created_at)}</div></div> }))} /> : <Empty description={tr("noChanges")} />}
+        {events.length ? <Timeline items={events.map((event) => ({ content: <WorkEventEntry contextId={contextId!} event={event} /> }))} /> : <Empty description={tr("noChanges")} />}
       </div>
     );
   }
@@ -214,9 +217,11 @@ export function WorkDesktopSectionBoard(props: { section: string; data: WorkDesk
         {sessions.length ? <div className="wd-topic-records">{sessions.map((link) => (
           <div className="wd-session-row" key={link.id}>
             <InlineEdit className="wd-title-edit" ariaLabel={tr("topicName")} editIconLabel={tr("editTopic")} value={link.topic} disabled={readOnly} required render={(value) => <span>{value || tr("topicName")}</span>} onSave={(next) => data.topicMutation.mutateAsync({ sessionId: link.session_id, topic: next })} />
+            <Space>{link.role === "lead" && <Tag color="blue">{tr("mainConversation")}</Tag>}{link.role === "worker" && <Tag>{tr("workerConversation")}</Tag>}</Space>
             <div className="wd-muted wd-wrap">{link.session_id}</div>
             <Space size={4} wrap>
               <Button size="small" icon={<CommentOutlined aria-hidden="true" />} onClick={() => void openConversation(link.session_id)}>{tr("openConversation")}</Button>
+              {!readOnly && link.role !== "worker" && link.role !== "lead" && <Button size="small" loading={data.mainSessionMutation.isPending} onClick={() => data.mainSessionMutation.mutate(link.session_id)}>{tr("setMainConversation")}</Button>}
               {!readOnly && <Button size="small" danger onClick={() => { if (window.confirm(tr("unlinkConfirm"))) data.unlinkSessionMutation.mutate(link.session_id); }}>{tr("unlinkSession")}</Button>}
             </Space>
           </div>
@@ -258,6 +263,7 @@ export function WorkDesktopSectionBoard(props: { section: string; data: WorkDesk
         <span><ClockCircleOutlined aria-hidden="true" /> {tr("savedAt")} · {formatTimestamp(selected!.checkpoint.created_at) || tr("noItems")}</span>
       </div>
       <OverviewPanel
+        contextId={contextId!}
         background={selected!.background}
         goal={selected!.goal}
         checkpoint={selected!.checkpoint}

@@ -629,6 +629,10 @@
 .wd-rail-empty { display: flex; flex-direction: column; gap: 10px; align-items: center; padding: 18px 12px; text-align: center; }
 .wd-rail-store { font-size: 12px; margin: 0; }
 
+.wd-event-open { display: block; max-width: 100%; padding: 0; border: 0; background: transparent; color: var(--godex-accent); font: inherit; font-weight: 600; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.wd-event-open:hover { text-decoration: underline; }
+.wd-event-open:focus-visible { outline: 2px solid var(--godex-accent); outline-offset: 3px; }
+
 /* Right dock: the desktop's boards, one at a time, under a compact section switch. */
 .wd-dock { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .wd-dock-head { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--godex-border); }

@@ -38,6 +38,15 @@ func (s *Store) AddResource(ctx context.Context, scope Scope, contextID string, 
 	}
 	now := nowRFC3339()
 	resourceID := strings.TrimSpace(input.ID)
+	// Repeated mentions reuse curated metadata; an explicit ID is the edit path.
+	preserve := false
+	if resourceID == "" && strings.TrimSpace(input.Locator) != "" {
+		err := tx.QueryRowContext(ctx, `SELECT id FROM wc_resources WHERE tenant_id=? AND owner_id=? AND kind=? AND locator=? AND node_id=? ORDER BY id LIMIT 1`, tenantID, ownerID, input.Kind, input.Locator, input.NodeID).Scan(&resourceID)
+		if err != nil && err != sql.ErrNoRows {
+			return Resource{}, err
+		}
+		preserve = err == nil
+	}
 	if resourceID == "" {
 		resourceID = newID()
 	}
@@ -46,6 +55,8 @@ func (s *Store) AddResource(ctx context.Context, scope Scope, contextID string, 
 		SELECT id FROM wc_resources WHERE tenant_id=? AND id=? AND owner_id=?`,
 		tenantID, resourceID, ownerID).Scan(&existingID)
 	switch {
+	case err == nil && preserve:
+		// Do not overwrite a user's title/purpose on an automatic mention.
 	case err == nil:
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE wc_resources SET kind=?, title=?, locator=?, node_id=?, purpose=?, updated_at=?
@@ -56,14 +67,25 @@ func (s *Store) AddResource(ctx context.Context, scope Scope, contextID string, 
 		}
 	case err == sql.ErrNoRows:
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO wc_resources(tenant_id, id, owner_id, kind, title, locator, node_id, purpose, created_at, updated_at)
-			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			INSERT INTO wc_resources(tenant_id, id, owner_id, kind, title, locator, node_id, purpose, created_at, updated_at, source)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			tenantID, resourceID, ownerID, input.Kind, strings.TrimSpace(input.Title), input.Locator,
-			input.NodeID, input.Purpose, now, now); err != nil {
+			input.NodeID, input.Purpose, now, now, input.Source); err != nil {
 			return Resource{}, err
 		}
 	default:
 		return Resource{}, err
+	}
+	var alreadyLinked int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM wc_context_resources WHERE tenant_id=? AND context_id=? AND resource_id=?`, tenantID, contextID, resourceID).Scan(&alreadyLinked); err != nil {
+		return Resource{}, err
+	}
+	if preserve && alreadyLinked > 0 {
+		resource, err := getResourceTx(ctx, tx, tenantID, ownerID, resourceID)
+		if err != nil {
+			return Resource{}, err
+		}
+		return resource, tx.Commit()
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO wc_context_resources(tenant_id, context_id, resource_id, purpose, created_at)
@@ -76,9 +98,11 @@ func (s *Store) AddResource(ctx context.Context, scope Scope, contextID string, 
 	if err != nil {
 		return Resource{}, err
 	}
-	if err := recordEventTx(ctx, tx, tenantID, contextID, "resource_linked",
-		"关联资源："+resource.Title, "store", "resource:"+resourceID+":"+now, now); err != nil {
-		return Resource{}, err
+	if !preserve || alreadyLinked == 0 {
+		if err := recordEventTx(ctx, tx, tenantID, contextID, "resource_linked",
+			"关联资源："+resource.Title, "resource://"+resourceID, "resource:"+resourceID+":"+now, now); err != nil {
+			return Resource{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return Resource{}, err
@@ -141,7 +165,7 @@ func (s *Store) RemoveResource(ctx context.Context, scope Scope, contextID, reso
 func (s *Store) ListResources(ctx context.Context, scope Scope) ([]Resource, error) {
 	tenantID, ownerID := scopeArgs(scope)
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, title, kind, locator, node_id, purpose, created_at
+		SELECT id, title, kind, locator, node_id, purpose, created_at, source
 		FROM wc_resources WHERE tenant_id=? AND owner_id=?
 		ORDER BY updated_at DESC, id`, tenantID, ownerID)
 	if err != nil {
@@ -150,7 +174,7 @@ func (s *Store) ListResources(ctx context.Context, scope Scope) ([]Resource, err
 	out := []Resource{}
 	for rows.Next() {
 		var item Resource
-		if err := rows.Scan(&item.ID, &item.Title, &item.Kind, &item.Locator, &item.NodeID, &item.Purpose, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Title, &item.Kind, &item.Locator, &item.NodeID, &item.Purpose, &item.CreatedAt, &item.Source); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -208,11 +232,11 @@ func (s *Store) LinkSession(ctx context.Context, scope Scope, contextID string, 
 		return SessionLink{}, fmt.Errorf("%w: session %s is already bound to another owner", ErrConflict, sessionID)
 	}
 	now := nowRFC3339()
-	var existingID, existingTopic, existingCreated string
+	var existingID, existingTopic, existingCreated, existingRole string
 	err = tx.QueryRowContext(ctx, `
-		SELECT id, topic, created_at FROM wc_context_sessions
+		SELECT id, topic, created_at, role FROM wc_context_sessions
 		WHERE tenant_id=? AND context_id=? AND session_id=?`,
-		tenantID, contextID, sessionID).Scan(&existingID, &existingTopic, &existingCreated)
+		tenantID, contextID, sessionID).Scan(&existingID, &existingTopic, &existingCreated, &existingRole)
 	if err == nil {
 		if topic := strings.TrimSpace(link.Topic); topic != "" && topic != existingTopic {
 			if _, err := tx.ExecContext(ctx, `UPDATE wc_context_sessions SET topic=? WHERE tenant_id=? AND id=?`,
@@ -221,26 +245,51 @@ func (s *Store) LinkSession(ctx context.Context, scope Scope, contextID string, 
 			}
 			existingTopic = topic
 		}
+		if link.Role == "worker" && existingRole != "worker" {
+			if _, err := tx.ExecContext(ctx, `UPDATE wc_context_sessions SET role='worker' WHERE tenant_id=? AND id=?`, tenantID, existingID); err != nil {
+				return SessionLink{}, err
+			}
+			existingRole = "worker"
+			if err := promoteMainSessionTx(ctx, tx, tenantID, contextID); err != nil {
+				return SessionLink{}, err
+			}
+		}
 		if err := tx.Commit(); err != nil {
 			return SessionLink{}, err
 		}
-		return SessionLink{ID: existingID, SessionID: sessionID, Topic: existingTopic, CreatedAt: existingCreated}, nil
+		return SessionLink{ID: existingID, SessionID: sessionID, Topic: existingTopic, Role: existingRole, CreatedAt: existingCreated}, nil
 	}
 	if err != sql.ErrNoRows {
 		return SessionLink{}, err
 	}
-	item := SessionLink{ID: newID(), SessionID: sessionID, Topic: link.Topic, CreatedAt: now}
+	role := "member"
+	if link.Role == "worker" {
+		role = "worker"
+	} else {
+		var leads int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM wc_context_sessions WHERE tenant_id=? AND context_id=? AND role='lead'`, tenantID, contextID).Scan(&leads); err != nil {
+			return SessionLink{}, err
+		}
+		var otherBinding int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM wc_session_bindings WHERE session_id=? AND context_id<>?`, sessionID, contextID).Scan(&otherBinding); err != nil {
+			return SessionLink{}, err
+		}
+		if leads == 0 && otherBinding == 0 {
+			role = "lead"
+		}
+	}
+	item := SessionLink{ID: newID(), SessionID: sessionID, Topic: link.Topic, Role: role, CreatedAt: now}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO wc_context_sessions(tenant_id, id, context_id, session_id, topic, created_at)
-		VALUES(?, ?, ?, ?, ?, ?)`,
-		tenantID, item.ID, contextID, item.SessionID, item.Topic, item.CreatedAt); err != nil {
+		INSERT INTO wc_context_sessions(tenant_id, id, context_id, session_id, topic, created_at, role)
+		VALUES(?, ?, ?, ?, ?, ?, ?)`,
+		tenantID, item.ID, contextID, item.SessionID, item.Topic, item.CreatedAt, item.Role); err != nil {
 		return SessionLink{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO wc_session_bindings(session_id,tenant_id,owner_id,context_id) VALUES(?,?,?,?) ON CONFLICT(session_id) DO NOTHING`, sessionID, tenantID, ownerID, contextID); err != nil {
 		return SessionLink{}, err
 	}
 	if err := recordEventTx(ctx, tx, tenantID, contextID, "session_linked",
-		"关联会话", "store", "session:"+item.ID+":"+now, now); err != nil {
+		"关联会话："+item.Topic, "session://"+sessionID, "session:"+item.ID+":"+now, now); err != nil {
 		return SessionLink{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -284,6 +333,10 @@ func (s *Store) UnlinkSession(ctx context.Context, scope Scope, contextID, sessi
 	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO wc_session_bindings(session_id,tenant_id,owner_id,context_id)
 		SELECT s.session_id,c.tenant_id,c.owner_id,c.id FROM wc_context_sessions s JOIN wc_contexts c ON c.tenant_id=s.tenant_id AND c.id=s.context_id
 		WHERE s.session_id=? AND c.tenant_id=? AND c.owner_id=? ORDER BY s.created_at,s.id LIMIT 1`, sessionID, tenantID, ownerID); err != nil {
+		return err
+	}
+	// Removing the lead promotes the oldest human conversation, never a worker.
+	if err := promoteMainSessionTx(ctx, tx, tenantID, contextID); err != nil {
 		return err
 	}
 	now := nowRFC3339()
@@ -409,10 +462,10 @@ func getResourceTx(ctx context.Context, tx *sql.Tx, tenantID, ownerID, resourceI
 	var item Resource
 	var createdAt string
 	if err := tx.QueryRowContext(ctx, `
-		SELECT id, title, kind, locator, node_id, purpose, created_at
+		SELECT id, title, kind, locator, node_id, purpose, created_at, source
 		FROM wc_resources WHERE tenant_id=? AND id=? AND owner_id=?`,
 		tenantID, resourceID, ownerID).Scan(
-		&item.ID, &item.Title, &item.Kind, &item.Locator, &item.NodeID, &item.Purpose, &createdAt); err != nil {
+		&item.ID, &item.Title, &item.Kind, &item.Locator, &item.NodeID, &item.Purpose, &createdAt, &item.Source); err != nil {
 		return Resource{}, notFound(err)
 	}
 	item.CreatedAt = createdAt
@@ -442,7 +495,7 @@ func getResourceTx(ctx context.Context, tx *sql.Tx, tenantID, ownerID, resourceI
 // listContextResources returns the resources linked to one context.
 func (s *Store) listContextResources(ctx context.Context, tenantID, contextID string) ([]Resource, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT r.id, r.title, r.kind, r.locator, r.node_id, r.purpose, r.created_at
+		SELECT r.id, r.title, r.kind, r.locator, r.node_id, r.purpose, r.created_at, r.source
 		FROM wc_resources r
 		JOIN wc_context_resources cr ON cr.tenant_id = r.tenant_id AND cr.resource_id = r.id
 		WHERE cr.tenant_id=? AND cr.context_id=?
@@ -453,7 +506,7 @@ func (s *Store) listContextResources(ctx context.Context, tenantID, contextID st
 	out := []Resource{}
 	for rows.Next() {
 		var item Resource
-		if err := rows.Scan(&item.ID, &item.Title, &item.Kind, &item.Locator, &item.NodeID, &item.Purpose, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Title, &item.Kind, &item.Locator, &item.NodeID, &item.Purpose, &item.CreatedAt, &item.Source); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -498,7 +551,7 @@ func (s *Store) resourceContextIDs(ctx context.Context, tenantID, resourceID str
 // listSessions returns the session links for a context.
 func (s *Store) listSessions(ctx context.Context, tenantID, contextID string) ([]SessionLink, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, session_id, topic, created_at FROM wc_context_sessions
+		SELECT id, session_id, topic, created_at, role FROM wc_context_sessions
 		WHERE tenant_id=? AND context_id=? ORDER BY created_at, id`, tenantID, contextID)
 	if err != nil {
 		return nil, err
@@ -507,7 +560,7 @@ func (s *Store) listSessions(ctx context.Context, tenantID, contextID string) ([
 	out := []SessionLink{}
 	for rows.Next() {
 		var item SessionLink
-		if err := rows.Scan(&item.ID, &item.SessionID, &item.Topic, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.SessionID, &item.Topic, &item.CreatedAt, &item.Role); err != nil {
 			return nil, err
 		}
 		out = append(out, item)

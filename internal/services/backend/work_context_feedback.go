@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/platform/retrieval"
 	"github.com/tim5wang/godex/internal/platform/textutil"
@@ -40,6 +41,7 @@ func (s *Service) refreshWorkContextFeedback(session *sessionState, queries ...s
 		}
 	}
 	s.configureSessionMemory(session, store, binding)
+	s.refreshWorkCollaboration(session, store, binding)
 	session.mu.Lock()
 	session.workContextScope = binding.Scope
 	session.workContextID = binding.ContextID
@@ -106,11 +108,31 @@ func (s *Service) recordWorkContextSessionTurn(session *sessionState, turnID, st
 	if title == "" {
 		title = session.id
 	}
+	details := workcontext.EventDetail{SessionID: session.id, TurnID: turnID, Status: status}
+	if record, err := session.getTurnRecord(turnID); err == nil {
+		details.Request = textutil.TruncateRunes(record.Summary, 800)
+		if details.Request != "" {
+			title = textutil.TruncateRunes(strings.Join(strings.Fields(details.Request), " "), 100)
+		}
+		if record.Error != "" {
+			details.Result = textutil.TruncateRunes(record.Error, 1600)
+		}
+		if session.agent != nil && details.Result == "" {
+			messages := session.agent.GetMessages()
+			for i := len(messages) - 1; i >= max(0, record.PriorMessageCount); i-- {
+				m := messages[i]
+				if m.Role == protocol.RoleAssistant && (m.Metadata == nil || !m.Metadata.Ephemeral) && strings.TrimSpace(protocol.MessageText(m)) != "" {
+					details.Result = textutil.TruncateRunes(protocol.MessageText(m), 1600)
+					break
+				}
+			}
+		}
+	}
 	// Dedup on the turn id: one turn, one event. A retried or recovered turn keeps its
 	// id, so replaying history cannot stack duplicate "it moved" rows.
 	_, _ = store.RecordEventIfNew(ctx, scope, contextID, workcontext.SessionTurnEventKind,
 		title+" · "+status, "session://"+session.id,
-		fmt.Sprintf("session:%s:turn:%s", session.id, turnID))
+		fmt.Sprintf("session:%s:turn:%s", session.id, turnID), details)
 }
 
 // sessionDisplayTitle reads a session's title under its own lock, so recording a turn

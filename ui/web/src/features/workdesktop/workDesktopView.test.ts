@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   acceptancePackage,
   delegationState,
+  desktopEntryConversation,
   delegationsNeedingReview,
   filterContexts,
   formatTimestamp,
@@ -85,6 +86,18 @@ describe("work desktop view helpers", () => {
     expect(formatTimestamp("2026-10-30T09:20:00Z")).toBe("2026-10-30 09:20:00 UTC");
     expect(formatTimestamp("")).toBe("");
     expect(formatTimestamp(undefined)).toBe("");
+  });
+});
+
+describe("desktop entry conversation", () => {
+  it("prefers the explicit lead over a busy worker or newer conversation", () => {
+    const links: WorkSessionLink[] = [
+      { id: "l1", session_id: "leader", topic: "main", role: "lead", created_at: "" },
+      { id: "l2", session_id: "worker", topic: "task", role: "worker", created_at: "" },
+    ];
+    expect(desktopEntryConversation(links, { leader: "2026-01-01", worker: "2026-11-15" })?.session_id).toBe("leader");
+    expect(desktopEntryConversation(links.map((link) => ({ ...link, role: "member" })), { leader: "2026-01-01", worker: "2026-11-15" })?.session_id).toBe("worker");
+    expect(desktopEntryConversation([], {})).toBeUndefined();
   });
 });
 

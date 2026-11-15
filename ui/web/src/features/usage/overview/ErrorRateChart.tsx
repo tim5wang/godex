@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { godexPalette } from "../../../theme/palette";
 import { Card } from "antd";
 import {
   ComposedChart,
@@ -62,7 +63,7 @@ export function ErrorRateChart({ data, loading }: ErrorRateChartProps) {
               yAxisId="left"
               dataKey="calls"
               name={t("usage.errorChart.callCount")}
-              fill="#1677ff"
+              fill={godexPalette.info}
               radius={[2, 2, 0, 0]}
               isAnimationActive={false}
             />
@@ -71,9 +72,9 @@ export function ErrorRateChart({ data, loading }: ErrorRateChartProps) {
               type="monotone"
               dataKey="errorRate"
               name={t("usage.errorChart.errorRate")}
-              stroke="#ff4d4f"
+              stroke={godexPalette.danger}
               strokeWidth={2}
-              dot={{ r: 3, fill: "#ff4d4f" }}
+              dot={{ r: 3, fill: godexPalette.danger }}
               isAnimationActive={false}
             />
           </ComposedChart>

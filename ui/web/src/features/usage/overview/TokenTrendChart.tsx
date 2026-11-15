@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { godexPalette } from "../../../theme/palette";
 import { Card } from "antd";
 import {
   AreaChart,
@@ -54,8 +55,8 @@ export function TokenTrendChart({ data, loading }: TokenTrendChartProps) {
               dataKey="input"
               name={t("usage.tokenChart.inputTokens")}
               stackId="billed"
-              fill="#1677ff"
-              stroke="#1677ff"
+              fill={godexPalette.info}
+              stroke={godexPalette.info}
               fillOpacity={0.3}
               isAnimationActive={false}
             />
@@ -64,8 +65,8 @@ export function TokenTrendChart({ data, loading }: TokenTrendChartProps) {
               dataKey="output"
               name={t("usage.tokenChart.outputTokens")}
               stackId="billed"
-              fill="#52c41a"
-              stroke="#52c41a"
+              fill={godexPalette.success}
+              stroke={godexPalette.success}
               fillOpacity={0.3}
               isAnimationActive={false}
             />
@@ -74,8 +75,8 @@ export function TokenTrendChart({ data, loading }: TokenTrendChartProps) {
               dataKey="cacheRead"
               name={t("usage.tokenChart.cacheRead")}
               stackId="saved"
-              fill="#722ed1"
-              stroke="#722ed1"
+              fill={godexPalette.purple}
+              stroke={godexPalette.purple}
               fillOpacity={0.15}
               strokeDasharray="4 3"
               isAnimationActive={false}

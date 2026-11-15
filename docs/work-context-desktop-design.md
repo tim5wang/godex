@@ -1,11 +1,24 @@
 # 工作桌面与工作委派设计（Work Context Desktop）
 
 > 状态：Implemented（WD1–WD3 已落地：个人 SQLite 持久化 + 真实委派/知识回流联动；团队共享与 PG 迁移仍为 WD4 待评估）。
-> 日期：2026-10-29（WD0 草案）/ 2026-10-30（WD1–WD3 实现）/ 2026-11-12（桌面记忆边界与 Dream）
+> 日期：2026-10-29（WD0 草案）/ 2026-10-30（WD1–WD3 实现）/ 2026-11-15（主对话、执行会话绑定、资源维护与事件下钻）
 > 关联：[taskboard-plugin-design.md](./taskboard-plugin-design.md)、[taskboard-collaboration-design.md](./taskboard-collaboration-design.md)、[memory-design-principles.md](./memory-design-principles.md)、[scope-isolation-design.md](./scope-isolation-design.md)
 > 定位：长期工作主线是对象，工作桌面是视图，任务看板是委派执行器，记忆是可治理的知识，不引入第二套 Agent Runtime。
 
 当前记忆归属、有效性、迁移和 Dream 接口以 [Memory Design Principles](./memory-design-principles.md) 的 2026-11-12 章节为准；下文 WD0/WD1 历史实现记录不覆盖该契约。
+
+## 2026-11-15 协作闭环（Implemented）
+
+本节是主对话与委派的当前契约；下文 WD0–WD3 历史记录不覆盖它。参考 [You don't need long context, v1](https://arxiv.org/abs/2611.05306v1)：借鉴短上下文、持久状态与选择性读取，不声称论文证明了多 Agent 协作优于单 Agent，也不强制每步清空上下文。
+
+- **两个独立方向**：`wc_session_bindings` 表达会话主要属于哪个桌面；`wc_context_sessions.role` 表达会话在桌面的角色（`lead/member/worker`）。每桌面最多一个 lead（SQLite 部分唯一索引）。首个普通对话自动为 lead，后续可通过 `POST /v1/work-contexts/{id}/sessions/{sessionID}/main` 更换；移除主对话时顺延最早的普通对话，执行 Agent 不自动晋升。仅作为其它桌面引用的会话不能成为此桌面的 lead。
+- **执行会话真正绑定**：`TaskboardExecutor` 根据持久委派关系反查 `(tenant, owner, context)`，核对 card 的创建归属，在首轮任务开始前将专属会话关联为 worker。保留原模板、工作目录和任务卡执行/人工验收协议，不改 locator 身份。绑定失败不投递任务，重启可恢复。
+- **主 Agent 是协调者**：按持久角色在回合边界注入简短协作策略。主对话优先辅助用户决策、拆解、委派复杂长任务；小问题直接回答，用户可明确要求亲自做。worker 不得通过 `work_context` 再委派或覆盖全局检查点。委派和执行仍须用户授权，完成后提交 `in_review` 而非自行验收。
+- **少量指示 + 状态引用**：派工只传任务目标、验收、桌面 ID/版本与短检查点摘要，不复制全量知识/资源/聊天历史。冻结包保留作审计；执行者用 `brief/resources/recall` 按需读取。`delegations` 返回简要状态、验收证据与结果摘要；只有查看指定 `delegation` 才读取其完整卡和冻结包。产物留在工作目录，任务卡保存执行证据，桌面维护可恢复状态，不引入第二个 Runtime/消息总线/自动轮询者。
+- **Agent 入口**：`work_context delegation_options` 列出现有项目与模板；`delegate` 创建幂等任务卡（必填稳定 `request_id`），`dispatch` 启动本桌面的一条委派；仅主对话可调用这两个写动作。新建卡本身不自动执行。现有桌面按钮仍可手动派发/验收。
+- **事件下钻**：`GET /v1/work-contexts/{id}/events/{eventID}` 按 owner 隔离。检查点从事件 dedup key 取准确 revision，读取不可变历史，不拿当前检查点冒充旧记录。新对话事件保存有界的任务、Agent 回报摘要和 turn/session 引用，回报不等于验收。旧事件无正文则明确显示未留快照，仍可打开关联对话/委派/资源。列表不加载完整事件详情，只有点击时读取，概览与时间线复用同一入口。
+- **主动资源维护**：实际用户消息中的普通 HTTP(S) 链接自动登记（每轮上限 8 条，不抓取），保存来源 session/turn；不是对其内容的核实。明确选择的新对话工作目录登记为当前节点目录资源。文章名称、目录节点、用途及产物由 Agent 用 `resource_put` 语义维护，可用 `resources/resource_remove` 查看/取消引用；不会猜任意路径的节点。相同 owner、kind、locator、node 的重复提及复用资源且不覆盖人工元数据、不制造重复事件；显式 ID 才编辑。含 URL 凭据/敏感签名参数和云元数据端点继续被拒绝，后台/工具输出不当作用户资源输入。
+- **迁移/边界**：有序迁移 12 新增角色、资源来源及事件正文列，旧桌面选择最早普通会话为默认 lead。角色和资源不扩大工具、节点、跨桌面记忆或生产权限；现有运行服务须加载新版本才生效，本节不表示已部署。
 
 ## 1. 需求与已确认约束
 

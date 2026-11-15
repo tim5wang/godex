@@ -1,11 +1,11 @@
 import { useEffect, type ReactNode } from "react";
 import { App as AntApp, Badge, Button, Empty, Input, Popconfirm, Skeleton, Space, Tag, Tooltip, Typography } from "antd";
-import { CommentOutlined, DeleteOutlined, LinkOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, VerticalRightOutlined } from "@ant-design/icons";
+import { CommentOutlined, DeleteOutlined, LinkOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, StarFilled, StarOutlined, VerticalRightOutlined } from "@ant-design/icons";
 import { useWorkDesktopStore } from "./workDesktopStore";
 import { useConversationLayoutStore } from "../chat/layout/layoutStore";
 import { WorkDesktopEditorModal } from "./WorkDesktopEditorModal";
 import { useOpenWorkConversation, useWorkDesktopData } from "./useWorkDesktopData";
-import { mostRecentlyUsedConversation, railAggregates, railStatus } from "./workDesktopView";
+import { desktopEntryConversation, railAggregates, railStatus } from "./workDesktopView";
 import { ensurePushSubscriptionSilent } from "../../lib/push";
 import { useSettingsStore } from "../../store/settings";
 import "./workDesktop.css";
@@ -79,7 +79,7 @@ export function WorkDesktopRail(props: { collapsed: boolean; viewSwitcher: React
   // show and a blank chat would look like work was lost.
   const selectDesktop = (id: string) => {
     setContextId(id);
-    const target = mostRecentlyUsedConversation(sessionsByContext[id] ?? [], activityBySessionId);
+    const target = desktopEntryConversation(sessionsByContext[id] ?? [], activityBySessionId);
     if (target) void openConversation(target.session_id);
   };
 
@@ -277,10 +277,13 @@ export function WorkDesktopRail(props: { collapsed: boolean; viewSwitcher: React
                               aria-label={`${tr("openConversation")}: ${link.topic || tr("topicName")}`}
                               onClick={() => void openConversation(link.session_id)}
                             >
-                              <CommentOutlined aria-hidden="true" />
+                              {link.role === "lead" ? <StarFilled aria-hidden="true" /> : <CommentOutlined aria-hidden="true" />}
                               <span className="wd-rail-linked-label">{link.topic || tr("topicName")}</span>
+                              {link.role === "lead" && <Tag color="blue">{tr("mainConversation")}</Tag>}
+                              {link.role === "worker" && <Tag>{tr("workerConversation")}</Tag>}
                             </button>
                           </Tooltip>
+                          {!readOnly && link.role !== "worker" && link.role !== "lead" && <Tooltip title={tr("setMainConversation")}><Button type="text" size="small" icon={<StarOutlined />} aria-label={`${tr("setMainConversation")}: ${link.topic}`} loading={data.mainSessionMutation.isPending} onClick={() => data.mainSessionMutation.mutate(link.session_id)} /></Tooltip>}
                           {!readOnly && (
                             <Popconfirm title={tr("unlinkConfirm")} onConfirm={() => unlinkSessionMutation.mutate(link.session_id)}>
                               <Button type="text" size="small" danger icon={<DeleteOutlined />} aria-label={tr("unlinkSession")} />

@@ -35,6 +35,7 @@ import {
   removeWorkResource,
   reviewWorkFact,
   saveCheckpoint,
+  setWorkMainSession,
   undoWorkAttentionAction,
   unlinkWorkSession,
   workContextQueryKey,
@@ -226,6 +227,12 @@ export function useWorkDesktopData() {
     onError: (error) => fail(error, "saveFailed"),
   });
 
+  const mainSessionMutation = useMutation({
+    mutationFn: (sessionId: string) => setWorkMainSession(token || null, contextId!, sessionId),
+    onSuccess: () => { invalidateDetail(); void message.success(tr("mainSessionSet")); },
+    onError: (error) => fail(error, "saveFailed"),
+  });
+
   const resourceMutation = useMutation({
     mutationFn: (values: EditorValues) => addWorkResource(token || null, contextId!, { title: values.title!.trim(), kind: values.resourceKind!.trim(), locator: values.locator!.trim(), node_id: values.node?.trim() ?? "", purpose: values.purpose?.trim() ?? "" }),
     onSuccess: () => { invalidateAll(); useWorkDesktopStore.getState().closeEditor(); void message.success(tr("resourceCreated")); },
@@ -318,6 +325,7 @@ export function useWorkDesktopData() {
         kind: input.patch.kind ?? input.resource.kind,
         locator: input.patch.locator ?? input.resource.locator,
         purpose: input.patch.purpose ?? input.resource.purpose,
+        node_id: input.resource.node_id,
       }),
     onSuccess: () => { invalidateAll(); },
     onError: (error) => fail(error, "saveFailed"),
@@ -476,7 +484,7 @@ export function useWorkDesktopData() {
     // query state (for loading/error surfaces)
     contextsQuery, detailQuery, attentionQuery, recallResult, briefQuery, focusQuery, projectsQuery, templatesQuery, sessionIndexQuery,
     // mutations
-    createMutation, patchContextMutation, checkpointMutation, topicMutation,
+    createMutation, patchContextMutation, checkpointMutation, topicMutation, mainSessionMutation,
     resourceMutation, removeResourceMutation, resourceUpdateMutation,
     relationMutation, removeRelationMutation, factMutation, reviewMutation, promoteMutation,
     organizeMutation, todoCreateMutation, todoPatchMutation, todoDeleteMutation,

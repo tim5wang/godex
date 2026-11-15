@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { godexPalette } from "../../theme/palette";
 import { Button, Empty, Space, Spin, Tooltip, Typography } from "antd";
 import {
   PushpinOutlined,
@@ -214,7 +215,7 @@ export function BrowserPanel({ sessionId, token, workspaceDir }: BrowserPanelPro
               <Button
                 type="text"
                 size="small"
-                icon={follow ? <PushpinFilled style={{ color: "#1677ff" }} /> : <PushpinOutlined />}
+                icon={follow ? <PushpinFilled style={{ color: godexPalette.info }} /> : <PushpinOutlined />}
                 aria-label="Toggle auto-follow"
                 data-testid="browser-follow-toggle"
                 onClick={() => setFollow(!follow)}

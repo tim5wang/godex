@@ -16,7 +16,7 @@ type Ctx = {
 type Res = { id: string; title: string; kind: string; locator: string; node_id: string; purpose: string; context_ids: string[]; created_at: string };
 type Rel = { id: string; from_id: string; to_id: string; kind: string; condition: string; created_at: string };
 type Fact = { id: string; context_id: string; title: string; content: string; kind: string; status: string; scope: string; subject: string; predicate: string; source: string; source_excerpt: string; source_revision: string; observed_at: string; verified_at: string; provenance: string; supersedes_id: string; version: number; created_at: string; memory_candidate_id: string };
-type Link = { id: string; session_id: string; topic: string; created_at: string };
+type Link = { id: string; session_id: string; topic: string; role?: "lead" | "member" | "worker"; created_at: string };
 type Card = {
   id: string; project_id: string; title: string; status: string; urgency: string; version: number;
   checklist: { text: string; done: boolean; evidence?: string }[]; created_at: string;
@@ -64,6 +64,7 @@ type Store = {
   // ("{kind}:{context_id}") exactly like the server. Modelling the key here rather
   // than an index matters: the UI must act on the row it renders.
   attentionActions: Record<string, { context_id: string; kind: string; verb: string; until_at: string; reason: string; actor_id: string; created_at: string; updated_at: string }>;
+  eventDetails?: Record<string, Record<string, unknown>>;
   checkpointHistory: Record<string, unknown[]>;
   writes: string[];
   failNextPatch: boolean;
@@ -466,6 +467,11 @@ function handleWorkContext(store: Store) {
         store.events[ctx.id] = [{ id: `e-${Date.now()}`, context_id: ctx.id, kind: "status", title: `status → ${ctx.status}`, source: "desktop", created_at: NOW }, ...(store.events[ctx.id] ?? [])];
         return json(ctx);
       }
+      const eventMatch = sub.match(/^\/events\/([^/]+)$/);
+      if (eventMatch && method === "GET") {
+        const event = (store.events[ctx.id] ?? []).find((item) => item.id === decodeURIComponent(eventMatch[1]!));
+        return event ? json({ ...event, ...(store.eventDetails?.[event.id] ?? {}) }) : json({ error: "not found" }, 404);
+      }
       if (sub === "/checkpoints" && method === "GET") return json(store.checkpointHistory[ctx.id] ?? []);
       if (sub === "/checkpoints" && method === "POST") {
         const input = body();
@@ -619,9 +625,18 @@ function handleWorkContext(store: Store) {
       }
       if (sub === "/sessions" && method === "POST") {
         const input = body();
-        const link: Link = { id: `link-${(store.sessions[ctx.id] ?? []).length + 1}`, session_id: String(input.session_id || `wc-session-${(store.sessions[ctx.id] ?? []).length + 1}`), topic: String(input.topic ?? ""), created_at: NOW };
+        const link: Link = { id: `link-${(store.sessions[ctx.id] ?? []).length + 1}`, session_id: String(input.session_id || `wc-session-${(store.sessions[ctx.id] ?? []).length + 1}`), topic: String(input.topic ?? ""), role: (store.sessions[ctx.id] ?? []).some((link) => link.role === "lead") ? "member" : "lead", created_at: NOW };
         (store.sessions[ctx.id] ??= []).push(link);
         return json(link, 201);
+      }
+      const mainMatch = sub.match(/^\/sessions\/([^/]+)\/main$/);
+      if (mainMatch && method === "POST") {
+        const links = store.sessions[ctx.id] ?? [];
+        const target = links.find((item) => item.session_id === decodeURIComponent(mainMatch[1]!));
+        if (!target || target.role === "worker") return json({ error: "not eligible" }, 400);
+        for (const link of links) { if (link.role === "lead") link.role = "member"; }
+        target.role = "lead";
+        return json(target);
       }
       const sesMatch = sub.match(/^\/sessions\/([^/]+)$/);
       if (sesMatch && method === "DELETE") {
@@ -959,7 +974,7 @@ test("opens a linked conversation in the centre chat column", async ({ page }) =
   // The active desktop expands in place to show its linked conversations.
   const linked = page.locator('[data-testid="chat-v2-workdesk-linked"]');
   await expect(linked).toBeVisible();
-  await linked.getByRole("button", { name: /短句回归排查/ }).click();
+  await linked.getByRole("button", { name: "打开对话: 短句回归排查", exact: true }).click();
 
   // It navigates to that conversation's chat route, carrying the FULL locator
   // (the stored id alone would re-hash into a different, empty session).
@@ -2035,4 +2050,59 @@ test("resolves one memory conflict group and keeps archived evidence accessible"
   await card.locator(".wd-knowledge-head").click();
   await card.getByRole("button", { name: "归档记录", exact: true }).click();
   await expect(card.getByText("已归档", { exact: true })).toBeVisible();
+});
+
+test("desktop leadership can be reassigned without promoting execution Agents", async ({ page }) => {
+  const seed = seededStore();
+  seed.sessions = { "ctx-1": [
+    { id: "l1", session_id: "wc-session-1", topic: "主协调对话", role: "lead", created_at: NOW },
+    { id: "l2", session_id: "wc-session-2", topic: "新的协调对话", role: "member", created_at: NOW },
+    { id: "l3", session_id: "wc-worker", topic: "执行排查", role: "worker", created_at: NOW },
+  ] };
+  const store = await install(page, seed);
+  await openSection(page, "主题");
+  const member = boards(page).locator(".wd-session-row").filter({ hasText: "新的协调对话" });
+  await expect(member.getByRole("button", { name: "设为主对话", exact: true })).toBeVisible();
+  const worker = boards(page).locator(".wd-session-row").filter({ hasText: "执行排查" });
+  await expect(worker.getByText("执行 Agent", { exact: true })).toBeVisible();
+  await expect(worker.getByRole("button", { name: "设为主对话", exact: true })).toHaveCount(0);
+  await member.getByRole("button", { name: "设为主对话", exact: true }).click();
+  await expect(member.getByText("主对话", { exact: true })).toBeVisible();
+  expect(store.writes).toContain("POST /v1/work-contexts/ctx-1/sessions/wc-session-2/main");
+  expect(store.sessions["ctx-1"]!.filter((link) => link.role === "lead").map((link) => link.session_id)).toEqual(["wc-session-2"]);
+  await openSection(page, "主题");
+  await expect(boards(page).locator(".wd-session-row").filter({ hasText: "新的协调对话" }).getByText("主对话", { exact: true })).toBeVisible();
+});
+
+test("desktop timeline drills into original checkpoints and reported turn results on demand", async ({ page }) => {
+  const seed = seededStore();
+  const original = { ...seed.contexts![0]!.checkpoint, revision: 1, summary: "第一版的真实历史，不是当前检查点", evidence_refs: ["report://historical-check"] };
+  seed.events = { "ctx-1": [
+    { id: "old-cp", context_id: "ctx-1", kind: "checkpoint_saved", title: "保存检查点 r1", source: "store", created_at: NOW },
+    { id: "turn-result", context_id: "ctx-1", kind: "session_turn", title: "proposal · completed", source: "session://wc-session-1", created_at: NOW },
+  ] };
+  seed.eventDetails = {
+    "old-cp": { checkpoint: original },
+    "turn-result": { request: "排查资源绑定", result: "已定位入口；证据见 report.txt", session_id: "wc-session-1", turn_id: "turn-7", status: "completed" },
+  };
+  await install(page, seed);
+  const reads: string[] = [];
+  page.on("request", (request) => { if (/\/events\/[^/]+$/.test(new URL(request.url()).pathname)) reads.push(request.url()); });
+  await openSection(page, "时间线");
+  expect(reads).toHaveLength(0);
+  await boards(page).getByRole("button", { name: "查看事件详情: 保存检查点 r1", exact: true }).click();
+  const drawer = page.getByRole("dialog", { name: "查看事件详情", exact: true });
+  await expect(drawer.getByText(original.summary, { exact: true })).toBeVisible();
+  await expect(drawer.getByText("report://historical-check", { exact: true })).toBeVisible();
+  await expect(drawer.getByText("已完成离线评测", { exact: true })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(drawer).toBeHidden();
+  await boards(page).getByRole("button", { name: "查看事件详情: proposal · completed", exact: true }).click();
+  await expect(page.getByText("排查资源绑定", { exact: true })).toBeVisible();
+  await expect(page.getByText("已定位入口；证据见 report.txt", { exact: true })).toBeVisible();
+  await expect(page.getByText("Agent 回报摘要（不代表已验收）", { exact: true })).toBeVisible();
+  await expect(drawer.getByRole("button", { name: "打开对话", exact: true })).toBeVisible();
+  await drawer.getByRole("button", { name: "打开对话", exact: true }).click();
+  await expect(page).toHaveURL(/\/chat\/web\/wc-topic-1/);
+  expect(reads).toHaveLength(2);
 });

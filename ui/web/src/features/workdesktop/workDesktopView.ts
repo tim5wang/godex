@@ -199,6 +199,10 @@ export function railAggregates(input: {
 }
 
 /** The conversation a stream should open when it is selected in the rail. */
+export function desktopEntryConversation(links: WorkSessionLink[], activity: Record<string, string>) {
+  return links.find((link) => link.role === "lead") ?? mostRecentlyUsedConversation(links, activity);
+}
+
 export function mostRecentlyUsedConversation(
   sessions: WorkSessionLink[],
   activityBySessionId: Record<string, string>,

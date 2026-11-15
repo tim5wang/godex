@@ -19,7 +19,7 @@ import (
 )
 
 // schemaVersion is the current ordered migration version.
-const schemaVersion = 11
+const schemaVersion = 12
 
 // statusArkid is the terminal read-only status.
 const statusArchived = "archived"
@@ -821,7 +821,10 @@ func validateLocator(locator string) error {
 			if err != nil {
 				return fmt.Errorf("%w: locator is not a valid URL", ErrInvalid)
 			}
-			if host := strings.ToLower(parsed.Hostname()); host != "" && isBlockedHost(host) {
+			if parsed.Hostname() == "" || parsed.User != nil {
+				return fmt.Errorf("%w: locator must have a host and must not embed credentials", ErrInvalid)
+			}
+			if host := strings.ToLower(parsed.Hostname()); isBlockedHost(host) {
 				return fmt.Errorf("%w: locator host %q is a metadata endpoint and is not allowed", ErrInvalid, host)
 			}
 			for key := range parsed.Query() {

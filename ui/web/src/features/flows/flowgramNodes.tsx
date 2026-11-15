@@ -1,4 +1,5 @@
 import React from "react";
+import { godexPalette } from "../../theme/palette";
 import {
   Field,
   type FieldRenderProps,
@@ -36,12 +37,12 @@ import { FunctionFields, ServiceFields } from "./flowgramServiceFields";
 // ---------------------------------------------------------------------------
 
 export const KIND_COLOR: Record<string, string> = {
-  step: "#1677ff",
-  llm: "#722ed1",
-  decision: "#fa8c16",
+  step: godexPalette.info,
+  llm: godexPalette.purple,
+  decision: godexPalette.warning,
   human: "#13c2c2",
   branch: "#eb2f96",
-  loop: "#52c41a",
+  loop: godexPalette.success,
   function: "#2f54eb",
   service: "#389e0d",
 };
@@ -53,10 +54,10 @@ export const KIND_COLOR: Record<string, string> = {
 
 export const RUN_STATUS_BORDER: Record<string, string> = {
   pending: "rgba(6,7,9,0.15)",
-  running: "#1677ff",
-  completed: "#52c41a",
-  failed: "#ff4d4f",
-  waiting_human: "#fa8c16",
+  running: godexPalette.info,
+  completed: godexPalette.success,
+  failed: godexPalette.danger,
+  waiting_human: godexPalette.warning,
 };
 
 const RunStatusContext = React.createContext<

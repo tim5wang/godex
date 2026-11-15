@@ -1,4 +1,5 @@
 import { memo } from "react";
+import { godexPalette } from "../../../theme/palette";
 import { Tooltip } from "antd";
 import type { SessionTimelineEntry } from "../../../lib/types";
 import { useI18n } from "../../../i18n";
@@ -69,7 +70,7 @@ export const TimelineOverview = memo(function TimelineOverview({
                 height: "100%",
                 background: LANE_COLORS[lane],
                 opacity: selected ? 1 : 0.72,
-                outline: selected ? "1.5px solid #1677ff" : "none",
+                outline: selected ? `1.5px solid ${godexPalette.info}` : "none",
                 outlineOffset: selected ? -1 : 0,
                 cursor: "pointer",
                 boxSizing: "border-box",

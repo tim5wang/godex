@@ -22,6 +22,8 @@ export interface ComposerHandle {
 
 interface ComposerProps {
   disabled?: boolean;
+  allowAttachments?: boolean;
+  placeholder?: string;
   uploading?: boolean;
   uploadProgress?: number | null;
   builtinCommands?: CommandMetadata[];
@@ -37,7 +39,7 @@ interface ComposerProps {
   ref?: Ref<ComposerHandle>;
 }
 
-export function Composer({ disabled, uploading = false, uploadProgress = null, builtinCommands = [], packageCommands = [], slashCommandCandidates, queuedFiles = [], onQueuedFilesConsumed, draftScope = "", onSubmit, ref }: ComposerProps) {
+export function Composer({ disabled, allowAttachments = true, placeholder, uploading = false, uploadProgress = null, builtinCommands = [], packageCommands = [], slashCommandCandidates, queuedFiles = [], onQueuedFilesConsumed, draftScope = "", onSubmit, ref }: ComposerProps) {
   const { t } = useI18n();
   const [value, setValue] = useState("");
   const [files, setFiles] = useState<File[]>([]);
@@ -293,7 +295,7 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, b
           value={value}
           loading={uploading}
           disabled={submitting}
-          placeholder={t("chat.composerPlaceholder")}
+          placeholder={placeholder ?? t("chat.composerPlaceholder")}
           submitType="enter"
           autoSize={{ minRows: 2, maxRows: 8 }}
           onChange={(next) => {
@@ -321,10 +323,11 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, b
             }
           }}
           onPasteFile={(pastedFiles) => {
+            if (!allowAttachments) return;
             inputDirtyRef.current = true;
             setFiles((current) => [...current, ...Array.from(pastedFiles)]);
           }}
-          prefix={
+          prefix={allowAttachments ? (
             <Button
               type="text"
               size="small"
@@ -334,7 +337,7 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, b
               disabled={submitting}
               onClick={() => attachmentsRef.current?.select({ multiple: true })}
             />
-          }
+          ) : undefined}
           header={
             <Attachments
               ref={attachmentsRef}

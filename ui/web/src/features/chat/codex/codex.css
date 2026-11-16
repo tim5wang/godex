@@ -1,0 +1,31 @@
+.chat-source-switch { display: flex; gap: 4px; padding: 8px; flex-shrink: 0; }
+.codex-rail-header { padding: 12px 0 8px; justify-content: space-between; width: 100%; }
+.codex-sessions { min-height: 0; flex: 1; padding: 0 10px; }
+.codex-session-list { padding-top: 12px; }
+.codex-workspace-group { padding: 8px 0; }
+.codex-workspace-group > .ant-typography { display: block; padding: 4px 8px; }
+.codex-session-row { display: flex; align-items: center; gap: 4px; width: 100%; border: 0; border-radius: 7px; padding: 10px 8px; text-align: left; color: inherit; background: transparent; cursor: pointer; }
+.codex-session-row:hover, .codex-session-row[data-active="true"] { background: var(--ant-color-primary-bg, rgba(22,119,255,.09)); }
+.codex-session-row > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.codex-connection-guide { max-width: 780px; padding: 24px; overflow: auto; }
+.codex-connection-guide li { margin: 12px 0; }
+.codex-connection-guide .ant-collapse { margin-top: 20px; }
+.codex-conversation { min-height: 0; }
+.codex-conversation-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--ant-color-border-secondary, #eee); flex-shrink: 0; }
+.codex-conversation-toolbar > div:first-child { min-width: 0; overflow-wrap: anywhere; }
+.codex-alert { margin: 8px 16px; flex-shrink: 0; }
+.codex-writer-conflict { overflow-wrap: anywhere; }
+.codex-writer-conflict .ant-collapse { margin-bottom: 8px; }
+.codex-alert pre, .codex-connection-guide pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; }
+.codex-composer-mode { display: flex; justify-content: space-between; margin: 0 12px 6px; }
+.codex-composer-area { padding-bottom: env(safe-area-inset-bottom, 0px); }
+.codex-model-settings { margin: 4px 12px 8px; }
+.codex-model-settings .ant-select { width: 170px; max-width: 100%; }
+.codex-model-settings .ant-alert { margin-top: 6px; }
+@media (max-width: 767px) {
+  .codex-conversation-toolbar { align-items: flex-start; flex-direction: column; padding: 10px; }
+  .codex-alert { margin: 6px 8px; }
+  .codex-connection-guide { padding: 16px; }
+}
+.chat-v2-left-with-sources { display: flex; flex-direction: column; }
+.chat-v2-left-with-sources > .chat-v2-rail { height: auto; flex: 1; min-height: 0; }

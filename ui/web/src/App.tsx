@@ -35,6 +35,7 @@ import { useSettingsStore } from "./store/settings";
 import { useNodeContextStore } from "./store/nodeContext";
 import { useLayoutStore } from "./store/layout";
 import { DOCK_TAB_META } from "./features/chat/layout/DockRail";
+import { codexChatRoute, isCodexChatPath } from "./features/chat/sessionDriver";
 import { useConversationLayoutStore, readPersistedSnapshot, serializeSnapshot, writePersistedSnapshot } from "./features/chat/layout/layoutStore";
 import {
   LAYOUT_STORAGE_KEY,
@@ -248,6 +249,7 @@ export default function App() {
   const desktopViewOpen = activeApp.id === "chat" && chatLeftView === "desktop";
   const needsProviderSetup =
     activeApp.id !== "settings" &&
+    !isCodexChatPath(location.pathname) &&
     !desktopViewOpen &&
     providersQuery.isSuccess &&
     !providersQuery.data.providers.some((provider) => provider.has_credential || provider.token_present);
@@ -394,6 +396,7 @@ export default function App() {
                   onOpenSettings={() => navigate("/settings")}
                   onRefresh={() => void queryClient.invalidateQueries({ queryKey: ["providers", token] })}
                   onOpenDesktop={() => useConversationLayoutStore.getState().setLeftView("desktop")}
+                  onOpenCodex={() => navigate(codexChatRoute("connect", remoteNodeID))}
                 />
               ) : (
                 <Suspense fallback={<RouteLoadingFallback />}>
@@ -425,7 +428,7 @@ export default function App() {
   );
 }
 
-function FirstRunProviderGuide(props: { onOpenSettings: () => void; onRefresh: () => void; onOpenDesktop: () => void }) {
+function FirstRunProviderGuide(props: { onOpenSettings: () => void; onRefresh: () => void; onOpenDesktop: () => void; onOpenCodex: () => void }) {
   return (
     <main className="page-shell">
       <Card>
@@ -441,6 +444,7 @@ function FirstRunProviderGuide(props: { onOpenSettings: () => void; onRefresh: (
               Configure provider
             </Button>
             <Button onClick={props.onRefresh}>Recheck providers</Button>
+            <Button onClick={props.onOpenCodex}>连接 Codex 原生会话</Button>
             {/* The work desktop is readable without a credential, so a fresh install
                 keeps a way in — it is where background nudges land. */}
             <Button onClick={props.onOpenDesktop} data-testid="first-run-open-desktop">

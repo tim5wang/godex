@@ -53,8 +53,11 @@ const reasoningEffortOptions = [
 ];
 
 import type { ChatPageController } from "./ChatPage";
+import { isCodexChat } from "./sessionDriver";
+import { CodexConversationPanel } from "./codex/CodexConversationPanel";
 
 export function ChatPageView({ controller }: { controller: ChatPageController }) {
+  const codex = isCodexChat(controller.routeChannel);
   // Used by the rail's "this workspace belongs to the operator" prompt: clearing the
   // credential returns to the gate, where the shared token can be chosen instead.
   const clearToken = useSettingsStore((state) => state.clearToken);
@@ -395,7 +398,7 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
 
   return (
     <>
-        <div className="chat-v2-layout" style={{ "--chat-v2-left-width": v2LeftCollapsed ? "0px" : `${v2LeftWidth}px`, "--chat-v2-right-width": v2RightCollapsed ? "48px" : `${v2RightWidth}px` } as CSSProperties}>
+        <div className="chat-v2-layout" style={{ "--chat-v2-left-width": v2LeftCollapsed ? "0px" : `${v2LeftWidth}px`, "--chat-v2-right-width": codex ? "0px" : v2RightCollapsed ? "48px" : `${v2RightWidth}px` } as CSSProperties}>
           {/* Left rail: the conversation directory or the work desktop, in the
               SAME column — only the list changes, the centre column stays the chat. */}
           <ChatLeftRail controller={controller} />
@@ -408,11 +411,11 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
                 </Tooltip>
                 <Divider type="vertical" />
                 <Tooltip title={t("chat.copySessionInfo")}>
-                  <Typography.Text className="chat-v2-topbar-title" strong ellipsis={{ tooltip: sessionTitle }} onClick={() => void copySessionInfo()} style={{ cursor: "pointer", maxWidth: 200 }}>
-                    {sessionTitle}
+                  <Typography.Text className="chat-v2-topbar-title" strong ellipsis={{ tooltip: codex ? t("codex.title") : sessionTitle }} onClick={() => { if (codex) void writeClipboardText(window.location.href); else void copySessionInfo(); }} style={{ cursor: "pointer", maxWidth: 200 }}>
+                    {codex ? t("codex.title") : sessionTitle}
                   </Typography.Text>
                 </Tooltip>
-                {activeTemplate ? (
+                {!codex && activeTemplate ? (
                   <Tooltip title={activeTemplate.description || activeTemplate.id}>
                     <Tag style={{ marginInlineStart: 4 }}>
                       {activeTemplate.avatar?.trim() ? (
@@ -441,7 +444,7 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
                     <Button type="text" size="small" icon={<LogoutOutlined />} onClick={clearRemoteNode} aria-label={t("nodes.remoteExit")} title={t("nodes.remoteExit")} />
                   </span>
                 ) : null}
-                <div className="chat-v2-topbar-tabs">
+                {!codex && <div className="chat-v2-topbar-tabs">
                   {/* The Tasks icon is deliberately not rendered in this strip, on request.
                       It was not the only way to the task list: the same TaskCenterPanel is
                       also a tab inside the Status inspector, so nothing became unreachable.
@@ -465,10 +468,10 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
                       </Tooltip>
                     );
                   })}
-                </div>
-                <Tooltip title={v2RightCollapsed ? "Expand panel" : "Collapse panel"}>
+                </div>}
+                {!codex && <Tooltip title={v2RightCollapsed ? "Expand panel" : "Collapse panel"}>
                   <Button type="text" size="small" icon={v2RightCollapsed ? <VerticalLeftOutlined /> : <VerticalRightOutlined />} aria-label="Toggle right panel" onClick={() => v2ToggleRight()} />
-                </Tooltip>
+                </Tooltip>}
               </Space>
             </div>
             {authRequired && !token ? (
@@ -483,10 +486,12 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
                   }
                 />
               </div>
-            ) : authError ? (
+            ) : !codex && authError ? (
               <div style={{ padding: 16 }}>
                 <Alert type="error" showIcon message={authError} />
               </div>
+            ) : codex ? (
+              <CodexConversationPanel threadId={routeSessionKey} token={token || null} nodeId={remoteNodeID} boundNode={searchParams.get("codex_node")} />
             ) : (
               <div className="chat-v2-center-body">
                 <div className="chat-feed-v2-scrollport">
@@ -706,13 +711,13 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
                   queuedFiles={queuedComposerFiles}
                   onQueuedFilesConsumed={() => setQueuedComposerFiles([])}
                   draftScope={openQuery.data?.session_id ? `session:${openQuery.data.session_id}` : ""}
-                  onSubmit={onSend}
+                  onSubmit={controller.conversationDriver.submit}
                 />
               </div>
             )}
           </div>
           {/* Right dock: content pane only (tabs are in topbar) */}
-          <div className="chat-v2-right" data-collapsed={v2RightCollapsed ? "true" : "false"} data-active-tab={v2ActiveDockTab}>
+          {!codex && <div className="chat-v2-right" data-collapsed={v2RightCollapsed ? "true" : "false"} data-active-tab={v2ActiveDockTab}>
             <div className="chat-v2-right-resize" onPointerDown={beginV2RightResize} role="separator" aria-label="Resize right panel" />
             <div className="chat-v2-dock-pane">
               <div className="chat-v2-dock-pane-body" data-active-tab={v2ActiveDockTab}>
@@ -807,19 +812,19 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
                 ) : null}
               </div>
             </div>
-          </div>
+          </div>}
         </div>
       <Drawer
         title={`Subagent review${subagentReview?.job_id ? ` · ${shortTurnId(subagentReview.job_id)}` : ""}`}
         placement="right"
         width={720}
-        open={subagentReviewOpen}
+        open={!codex && subagentReviewOpen}
         onClose={() => setSubagentReviewOpen(false)}
       >
         <SubagentReviewPanel review={subagentReview} loading={reviewSubagentMutation.isPending} />
       </Drawer>
       <ReviewMergeCenterPanel
-        open={reviewMergeOpen}
+        open={!codex && reviewMergeOpen}
         summary={reviewMergeSummary}
         filter={reviewMergeFilter}
         selectedJobId={reviewMergeSelectedJobId}
@@ -841,7 +846,7 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
         onResume={(jobId) => resumeSubagentMutation.mutate(jobId)}
         onCancel={(jobId) => cancelSubagentMutation.mutate(jobId)}
       />
-      {refluxBubbles.length > 0 ? (
+      {!codex && refluxBubbles.length > 0 ? (
         <>
           {refluxBubbles.map((b, i) => (
             <LongTaskRefluxBubble

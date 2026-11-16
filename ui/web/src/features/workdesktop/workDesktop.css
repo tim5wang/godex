@@ -547,12 +547,17 @@
   text-align: left;
   color: var(--godex-text);
   cursor: pointer;
-  border: 1px solid transparent;
+  /* A faint border plus shadow so each desktop reads as its own card. With a transparent
+     border the list was one undifferentiated block: nothing said where one desktop ended
+     and the next began. Both are variables, so dark mode follows without a second rule. */
+  border: 1px solid var(--godex-border);
   border-radius: 8px;
-  background: transparent;
+  background: var(--godex-panel);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
-.wd-rail-item:hover { background: var(--godex-panel-muted); }
-.wd-rail-item-selected { background: var(--godex-panel-muted); box-shadow: inset 3px 0 0 var(--godex-accent); }
+.wd-rail-item:hover { background: var(--godex-panel-muted); border-color: var(--godex-accent); }
+.wd-rail-item:focus-visible { outline: 2px solid var(--godex-accent); outline-offset: 3px; }
+.wd-rail-item-selected { background: var(--godex-panel-muted); border-color: var(--godex-accent); box-shadow: inset 3px 0 0 var(--godex-accent); }
 .wd-rail-item-top { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
 .wd-rail-item-top strong { min-width: 0; overflow-wrap: anywhere; }
 /* The card's second line: counts of outstanding work instead of clamped prose. Chips wrap

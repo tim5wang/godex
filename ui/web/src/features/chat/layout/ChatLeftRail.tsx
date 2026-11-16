@@ -1,4 +1,4 @@
-import { Segmented } from "antd";
+import { Button, Segmented } from "antd";
 import { useI18n } from "../../../i18n";
 import { APIError, getSnapshot, openSession } from "../../../lib/api";
 import { buildChatRouteForSession } from "../../../lib/chatRoutes";
@@ -6,6 +6,8 @@ import { useSettingsStore } from "../../../store/settings";
 import { SessionsRail } from "./SessionsRail";
 import { WorkDesktopRail } from "../../workdesktop/WorkDesktopRail";
 import type { ChatPageController } from "../ChatPage";
+import { codexChatRoute, isCodexChat } from "../sessionDriver";
+import { CodexSessionsRail } from "../codex/CodexSessionsRail";
 
 /**
  * The chat page's left column, which has TWO views:
@@ -30,6 +32,7 @@ export function ChatLeftRail({ controller }: { controller: ChatPageController })
   const clearToken = useSettingsStore((state) => state.clearToken);
   const collapsed = controller.v2LeftCollapsed;
   const view = controller.v2LeftView;
+  const codex = isCodexChat(controller.routeChannel);
 
   const viewSwitcher = (
     <Segmented
@@ -45,11 +48,15 @@ export function ChatLeftRail({ controller }: { controller: ChatPageController })
   );
 
   return (
-    <div className="chat-v2-left" data-collapsed={collapsed ? "true" : "false"} data-left-view={view}>
+    <div className="chat-v2-left chat-v2-left-with-sources" data-collapsed={collapsed ? "true" : "false"} data-left-view={view}>
       {!collapsed ? (
         <div className="chat-v2-left-resize" onPointerDown={controller.beginV2LeftResize} role="separator" aria-label="Resize left panel" />
       ) : null}
-      {view === "desktop" ? (
+      <div className="chat-source-switch" aria-label={t("codex.source")}>
+        <Button size="small" type={!codex ? "primary" : "text"} onClick={() => controller.navigate("/chat")}>{collapsed ? "G" : "Godex"}</Button>
+        <Button size="small" type={codex ? "primary" : "text"} onClick={() => controller.navigate(codexChatRoute("connect", controller.remoteNodeID))}>{collapsed ? "C" : t("codex.native")}</Button>
+      </div>
+      {codex ? <CodexSessionsRail controller={controller} /> : view === "desktop" ? (
         <WorkDesktopRail collapsed={collapsed} viewSwitcher={viewSwitcher} onToggleCollapsed={() => controller.v2ToggleLeft()} />
       ) : (
         <SessionsRail

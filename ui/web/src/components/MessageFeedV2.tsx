@@ -98,6 +98,10 @@ export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote 
   const stableOnSubmitCard = useCallback((value: string) => latestCallbacks.current.onSubmitCard?.(value), []);
   const stableOnForkTurn = useCallback((item: FeedItem) => latestCallbacks.current.onForkTurn?.(item), []);
   const stableOnEditMessage = useCallback((item: FeedItem) => latestCallbacks.current.onEditMessage?.(item), []);
+  // Stable wrappers must not advertise actions absent from the session driver.
+  const hasSaveHandler = Boolean(onSaveToNote);
+  const hasForkHandler = Boolean(onForkTurn);
+  const hasEditHandler = Boolean(onEditMessage);
   const latestTurnItemID = useMemo(
     () => [...items].reverse().find((item) => Boolean(item.segments?.length) && !item.archiveOnly)?.id ?? null,
     [items],
@@ -120,15 +124,15 @@ export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote 
           onCopyItem={copyItem}
           copyLabel={t("chat.copyMessage")}
           saveLabel={hasNoteContext ? t("chat.saveToCurrentNote") : t("chat.saveAsNote")}
-          onSaveToNote={stableOnSaveToNote}
+          onSaveToNote={hasSaveHandler ? stableOnSaveToNote : undefined}
           savingToNote={savingToNote}
           workspaceDir={workspaceDir}
           token={token}
           onOpenInFiles={stableOnOpenInFiles}
           onSubmitCard={stableOnSubmitCard}
           voiceEnabled={voiceEnabled}
-          onForkTurn={stableOnForkTurn}
-          onEditMessage={stableOnEditMessage}
+          onForkTurn={hasForkHandler ? stableOnForkTurn : undefined}
+          onEditMessage={hasEditHandler ? stableOnEditMessage : undefined}
           isLatestTurn={item.id === latestTurnItemID}
           running={running}
           activeTurnId={activeTurnId}
@@ -140,7 +144,7 @@ export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote 
       variant: item.kind === "user" ? "filled" : "borderless",
       shape: "corner",
     }));
-  }, [items, stableOnToggleTool, stableOnSaveToNote, stableOnOpenInFiles, stableOnSubmitCard, stableOnForkTurn, stableOnEditMessage, copyItem, savingToNote, hasNoteContext, workspaceDir, token, voiceEnabled, running, activeTurnId, botName, botAvatar, botColor, t, latestTurnItemID]);
+  }, [items, stableOnToggleTool, stableOnSaveToNote, stableOnOpenInFiles, stableOnSubmitCard, stableOnForkTurn, stableOnEditMessage, hasSaveHandler, hasForkHandler, hasEditHandler, copyItem, savingToNote, hasNoteContext, workspaceDir, token, voiceEnabled, running, activeTurnId, botName, botAvatar, botColor, t, latestTurnItemID]);
 
   if (items.length === 0) {
     return <Empty description="No messages yet" image={Empty.PRESENTED_IMAGE_SIMPLE} />;

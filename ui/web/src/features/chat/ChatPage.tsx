@@ -55,6 +55,7 @@ const reasoningEffortOptions = [
 import { ChatPageView } from "./ChatPageView";
 import { useChatLayoutState } from "./useChatLayoutState";
 import { useChatSessionState } from "./useChatSessionState";
+import { godexSessionDriver } from "./sessionDriver";
 
 export function useChatPageController() {
   const layout = useChatLayoutState();
@@ -775,6 +776,7 @@ export function useChatPageController() {
     reviewSubagentInCenter,
     openReviewMergeCenter,
     onSend,
+    conversationDriver: godexSessionDriver(onSend, (turnId) => cancelTurnMutation.mutateAsync({ sessionId: openQuery.data!.session_id, turnId })),
     createSession,
     clearNoteContext,
     authError,

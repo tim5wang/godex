@@ -71,6 +71,13 @@ describe("apiURL: node-scoped paths still proxy", () => {
   // The counterpart assertion: tightening the blacklist must not swallow the
   // paths that remote mode exists for.
   const NODE_SCOPED = [
+    "/external/codex/status",
+    "/external/codex/threads?view=loaded&cursor=opaque",
+    "/external/codex/threads/native-thread/access",
+    "/external/codex/threads/native-thread/models",
+    "/external/codex/threads/native-thread/settings",
+    "/external/codex/threads/native-thread/events",
+    "/external/codex/threads/native-thread/messages",
     "/sessions",
     "/files/list",
     "/notes",

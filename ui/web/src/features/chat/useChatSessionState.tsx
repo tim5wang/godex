@@ -52,6 +52,7 @@ const reasoningEffortOptions = [
 ];
 
 import type { ChatLayoutState } from "./useChatLayoutState";
+import { isCodexChat } from "./sessionDriver";
 export function useChatSessionState(layout: ChatLayoutState) {
   const {
     message,
@@ -170,6 +171,7 @@ export function useChatSessionState(layout: ChatLayoutState) {
 
 
   const metaQuery = useQuery({ queryKey: ["meta"], queryFn: getMeta });
+  const nativeSessionEnabled = !isCodexChat(routeChannel);
   const authRequired = metaQuery.data?.auth_required ?? false;
   const routeUserId = searchParams.get("user_id");
   const noteContextId = searchParams.get("note_id")?.trim() || "";
@@ -206,7 +208,7 @@ export function useChatSessionState(layout: ChatLayoutState) {
 
   const openQuery = useQuery({
     queryKey: ["session-open", token, sessionLocator.channel, sessionLocator.key, sessionLocator.user_id],
-    enabled: !!sessionKey && (!authRequired || !!token),
+    enabled: nativeSessionEnabled && !!sessionKey && (!authRequired || !!token),
     queryFn: async () => openSession(token || null, sessionLocator),
     // Session identity resolves once; a short freshness window makes repeated
     // switches back to the same session (and hover-prefetched warm-ups in
@@ -219,18 +221,18 @@ export function useChatSessionState(layout: ChatLayoutState) {
   // globally, so this is independent of any session).
   const skillsCatalogQuery = useQuery({
     queryKey: ["skills-catalog", token],
-    enabled: !authRequired || !!token,
+    enabled: nativeSessionEnabled && (!authRequired || !!token),
     queryFn: () => listSkillsCatalog(token || null),
   });
   const mcpServersQuery = useQuery({
     queryKey: ["mcp-servers", token],
-    enabled: !authRequired || !!token,
+    enabled: nativeSessionEnabled && (!authRequired || !!token),
     queryFn: () => listMCPServers(token || null),
     staleTime: 60_000,
   });
   const templatesQuery = useQuery({
     queryKey: ["agent-templates", token],
-    enabled: !authRequired || !!token,
+    enabled: nativeSessionEnabled && (!authRequired || !!token),
     queryFn: () => listAgentTemplates(token || null),
   });
   // Center-reachable nodes for the new-chat "execution node" picker: selecting
@@ -238,7 +240,7 @@ export function useChatSessionState(layout: ChatLayoutState) {
   // (RemoteSandbox, docs/remote-sandbox-design.md) instead of locally.
   const nodesQuery = useQuery({
     queryKey: ["control-nodes", token],
-    enabled: !authRequired || !!token,
+    enabled: nativeSessionEnabled && (!authRequired || !!token),
     queryFn: () => listControlNodes(token || null),
   });
   // Selected agent template (talent market) for the current chat route:
@@ -406,20 +408,20 @@ export function useChatSessionState(layout: ChatLayoutState) {
 
   const packageCommandsQuery = useQuery({
     queryKey: ["package-commands", token],
-    enabled: !authRequired || !!token,
+    enabled: nativeSessionEnabled && (!authRequired || !!token),
     queryFn: async () => listPackageCommands(token || null, false),
   });
 
   const builtinCommandsQuery = useQuery({
     queryKey: ["builtin-commands", token],
-    enabled: !authRequired || !!token,
+    enabled: nativeSessionEnabled && (!authRequired || !!token),
     queryFn: async () => listCommands(token || null),
     staleTime: 5 * 60 * 1000,
   });
 
   const packageRolesQuery = useQuery({
     queryKey: ["package-roles", token],
-    enabled: !authRequired || !!token,
+    enabled: nativeSessionEnabled && (!authRequired || !!token),
     queryFn: async () => listPackageRoles(token || null, false),
   });
 
@@ -468,7 +470,7 @@ export function useChatSessionState(layout: ChatLayoutState) {
 
   const sessionsQuery = useQuery({
     queryKey: ["sessions", token, remoteNodeID],
-    enabled: !authRequired || !!token,
+    enabled: nativeSessionEnabled && (!authRequired || !!token),
     queryFn: async () => listSessions(token || null),
     // Retry twice on failure — especially important for remote nodes that
     // may be slow to become ready after a node switch or page load.
@@ -485,6 +487,7 @@ export function useChatSessionState(layout: ChatLayoutState) {
   // 仅当确实没有任何历史会话时才新建。用 buildChatRouteForSession 走完整 locator
   // 身份编码，避免「跳转开成新会话」（此前 db1e687/ad9b722 修过同类根因）。
   useEffect(() => {
+    if (!nativeSessionEnabled) return;
     if (routeSessionKey && routeChannel) {
       return;
     }
@@ -510,6 +513,7 @@ export function useChatSessionState(layout: ChatLayoutState) {
     setDefaultSessionKey(next);
     navigate(`/chat/web/${next}`, { replace: true });
   }, [
+    nativeSessionEnabled,
     authRequired,
     navigate,
     routeChannel,
@@ -567,7 +571,7 @@ export function useChatSessionState(layout: ChatLayoutState) {
   }, [openQuery.data?.session_id]);
 
   useEffect(() => {
-    if (!sessionId || (!token && authRequired)) {
+    if (!nativeSessionEnabled || !sessionId || (!token && authRequired)) {
       setStreamConnected(false);
       return;
     }
@@ -681,7 +685,7 @@ export function useChatSessionState(layout: ChatLayoutState) {
       }
       setStreamConnected(false);
     };
-  }, [authRequired, handleEvent, queryClient, remoteNodeID, sessionId, setStreamConnected, token]);
+  }, [nativeSessionEnabled, authRequired, handleEvent, queryClient, remoteNodeID, sessionId, setStreamConnected, token]);
   return {
     metaQuery,
     authRequired,

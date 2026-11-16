@@ -18,6 +18,7 @@ import (
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/services/accounts"
 	"github.com/tim5wang/godex/internal/services/backend"
+	"github.com/tim5wang/godex/internal/services/codexnative"
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/services/metering"
 	"github.com/tim5wang/godex/internal/services/noderegistry"
@@ -31,6 +32,9 @@ import (
 // Route packages still receive their narrow provider interfaces; this object
 // prevents the process entrypoint from depending on constructor argument order.
 type Dependencies struct {
+	// CodexNative connects only to an existing, node-local shared runtime.
+	// Injectable so tests never start a real Codex daemon or model request.
+	CodexNative     *codexnative.Service
 	Config          *config.Manager
 	Backend         *backend.Service
 	Channels        statusProvider
@@ -275,6 +279,11 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	registerWorkflowRoutes(mux, service, protected)
 	registerAgentTemplateRoutes(mux, service, centerLocal)
 	registerACPAgentRoutes(mux, service, centerLocal)
+	codexConnector := deps.CodexNative
+	if codexConnector == nil {
+		codexConnector = codexnative.New(codexnative.Options{WorkspaceRoots: []string{manager.Current().WorkspaceDir}})
+	}
+	registerCodexNativeRoutes(mux, codexConnector, centerLocal)
 	registerSkillRoutes(mux, service, centerLocal)
 	registerTurnRoutes(mux, manager, service, protected)
 	registerUsageRoutes(mux, protected, usageService, manager)
